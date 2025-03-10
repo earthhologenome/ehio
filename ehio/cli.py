@@ -10,7 +10,7 @@ from pathlib import Path
 from ehio.utils import *
 
 ## setup paths (hardcoded)
-EHIO_PATH = "/projects/ehi/data/0_Environments/EHIO"
+EHIO_PATH = "/projects/ehi/data/0_Environments/EHIO/ehio"
 EHI_SOFTWARE_PATH = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1"
 
 
