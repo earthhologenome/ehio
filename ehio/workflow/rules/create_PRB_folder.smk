@@ -11,7 +11,6 @@ rule create_PRB_folder:
     threads:
         1
     resources:
-        load=1,
         mem_gb=8,
         time='00:03:00'
     message:

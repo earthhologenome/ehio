@@ -8,11 +8,11 @@ from pathlib import Path
 from collections import defaultdict
 
 
-def run_preprocessing(input, output, batch):
+def run_preprocessing(batch):
     pring("Preprocessing is running")
 
-def run_cataloging(input, output, batch):
+def run_cataloging(batch):
     pring("Cataloging is running")
 
-def run_profiling(input, output, batch):
+def run_profiling(batch):
     pring("Profiling is running")

@@ -36,7 +36,7 @@ rule upload_to_ERDA:
     threads:
         1
     resources:
-        load=8,
+        load=1,
         mem_gb=16,
         time=estimate_time_download
     log:

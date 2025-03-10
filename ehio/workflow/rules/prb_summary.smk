@@ -74,7 +74,6 @@ rule report:
     threads:
         1
     resources:
-        load=1,
         mem_gb=24,
         time='00:20:00'
     message:

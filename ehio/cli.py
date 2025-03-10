@@ -9,7 +9,8 @@ import pandas as pd
 from pathlib import Path
 from ehio.utils import *
 
-## setup variables
+## setup paths (hardcoded)
+EHIO_PATH = "/projects/ehi/data/0_Environments/EHIO"
 EHI_SOFTWARE_PATH = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1"
 
 
@@ -37,29 +38,28 @@ def run_fetch_input_ppr(batch):
 
     """ Fetching EHI PPR input """
 
-    mkdir -p "/projects/ehi/data/RUN/"{args.BATCH} 
+    Path(f"/projects/ehi/data/RUN/{BATCH}").mkdir(exist_ok=True)
+    Path(f"/projects/ehi/data/RUN/{BATCH}/logs").mkdir(exist_ok=True)
 
-    mkdir -p "/projects/ehi/data/RUN/"{args.BATCH}"/logs"
-
-    cd "/projects/ehi/data/RUN/"{args.BATCH}
+    os.chdir(f"/projects/ehi/data/RUN/{BATCH}")
 
     subprocess.run([
         "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_preprocessing_input.py", 
-        "--prb=", {args.BATCH}
+        "--prb=", {BATCH}
     ]) 
     ## output is 'prb_input.tsv', line separated file with EHI numbers of input samples
 
     subprocess.run([
         "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_host_genome_id.py", 
-        "--prb=", {args.BATCH}
+        "--prb=", {BATCH}
     ]) 
     ## output is 'host_genome.tsv', containing a single line with EHI host genome code (e.g. G0001)
 
     ##setup variables for snakefile
     CODEDIR = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1/workflow/"
-    WORKDIR = "/projects/ehi/data/PPR/{args.batch}"
-    LOGDIR = "/projects/ehi/data/RUN/{args.batch}/logs"
-    with open("/projects/ehi/data/RUN/host_genome.tsv", "r") as f:
+    WORKDIR = f"/projects/ehi/data/PPR/{BATCH}"
+    LOGDIR = f"/projects/ehi/data/RUN/{BATCH}/logs"
+    with open(f"/projects/ehi/data/RUN/{BATCH}host_genome.tsv", "r") as f:
         HOST_GENOME = [line.strip() for line in f]
 
     subprocess.run([
@@ -67,8 +67,8 @@ def run_fetch_input_ppr(batch):
         "--code=", {HOST_GENOME}
     ]) 
     ## output is 'host_genome_url.tsv', containing a single line with the URL to the host genome fasta
-    
-    with open("/projects/ehi/data/RUN/host_genome_url.tsv", "r") as f:
+
+    with open(f"/projects/ehi/data/RUN/{BATCH}/host_genome_url.tsv", "r") as f:
         HOST_GENOME_URL = [line.strip() for line in f]
     BATCH = {args.batch}
 
@@ -78,11 +78,12 @@ def run_preprocessing(batch):
 
     snakemake_command = [
         "/bin/bash", "-c",  # Ensures the module system works properly
-        f"module load {config_vars['SNAKEMAKE_MODULE']} && "
+        f"module load snakemake/8.16.0 && "
         "snakemake "
-        f"-s {PACKAGE_DIR / 'workflow' / 'preprocessing.smk'} "
+        f"--workflow-profile {PACKAGE_DIR / 'profile' / 'slurm'} "
+        "--resources load=7 " # for rules that create an ERDA connection, I've added a load of 1 to prevent exceeding the ERDA limit (~15) [download_raw.smk, get_filesize_erda.smk, upload_prb.smk]
+        f"-s {EHIO_PATH / 'workflow' / 'preprocessing.smk'} "
         f"--config", f"codedir={CODEDIR}", f"workdir={WORKDIR}", f"logdir={LOGDIR}", f"host_genome={HOST_GENOME}", f"host_genome_url={HOST_GENOME_URL}", f"batch={BATCH} "
-        f"--directory {output_dir} "
     ]
 
     try:
@@ -95,7 +96,6 @@ def run_preprocessing(batch):
             print(f"\nERROR: Snakemake failed with exit code {e.returncode}!", file=sys.stderr)
             print(f"ERROR: Check the Snakemake logs for more details.", file=sys.stderr)
             sys.exit(1)
-
 
 
 
