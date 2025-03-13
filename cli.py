@@ -13,24 +13,6 @@ from pathlib import Path
 EHIO_PATH = "/projects/ehi/data/0_Environments/ehio"
 EHI_SOFTWARE_PATH = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1"
 
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="EHio: Input-output of EHI data between ERDA, Mjolnir and Airtable.",
-        formatter_class=argparse.RawTextHelpFormatter
-    )
-    subparsers = parser.add_subparsers(dest="command", help="Available workflows")
-
-    # Define subcommands for each workflow
-    subparser_preprocessing = subparsers.add_parser("preprocessing", help="Process preprocessing data")
-    subparser_preprocessing.add_argument("-b", "--batch", required=False, help="EHI preprocessing batch")
-
-    subparser_cataloging = subparsers.add_parser("cataloging", help="Process cataloging data")
-    subparser_cataloging.add_argument("-b", "--batch", required=False, help="EHI assembly+binning batch")
-
-    subparser_profiling = subparsers.add_parser("profiling", help="Process profiling data")
-    subparser_profiling.add_argument("-b", "--batch", required=False, help="EHI assembly+binning batch")
-
     
     # Define workflow launching functions
 
@@ -70,7 +52,6 @@ def run_fetch_input_ppr(batch):
 
     with open(f"/projects/ehi/data/RUN/{BATCH}/host_genome_url.tsv", "r") as f:
         HOST_GENOME_URL = [line.strip() for line in f]
-    BATCH = {args.batch}
 
 def run_preprocessing(batch):
 
@@ -98,6 +79,22 @@ def run_preprocessing(batch):
             sys.exit(1)
 
 
+def main():
+    parser = argparse.ArgumentParser(
+        description="EHio: Input-output of EHI data between ERDA, Mjolnir and Airtable.",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available workflows")
+
+    # Define subcommands for each workflow
+    subparser_preprocessing = subparsers.add_parser("preprocessing", help="Process preprocessing data")
+    subparser_preprocessing.add_argument("-b", "--batch", required=False, help="EHI preprocessing batch")
+
+    subparser_cataloging = subparsers.add_parser("cataloging", help="Process cataloging data")
+    subparser_cataloging.add_argument("-b", "--batch", required=False, help="EHI assembly+binning batch")
+
+    subparser_profiling = subparsers.add_parser("profiling", help="Process profiling data")
+    subparser_profiling.add_argument("-b", "--batch", required=False, help="EHI assembly+binning batch")
 
 
     args = parser.parse_args()
