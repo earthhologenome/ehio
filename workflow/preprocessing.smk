@@ -38,6 +38,10 @@ def estimate_time_download(wildcards, attempt):
 
 ################################################################################
 ### Setup the desired outputs
+#sets drakkar to be run locally
+localrules: drakkar_preprocess
+
+
 rule all:
     input:
         expand("/projects/ehi/data/REP/{[config]batch}.tsv",
