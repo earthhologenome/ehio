@@ -46,7 +46,7 @@ def run_fetch_input_ppr(batch):
 
     subprocess.run([
         "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_host_genome_id.py", 
-        "--code="{HOST_GENOME}
+        "--code=", {HOST_GENOME}
     ]) 
     ## output is 'host_genome_url.tsv', containing a single line with the URL to the host genome fasta
 
