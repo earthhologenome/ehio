@@ -38,11 +38,11 @@ def run_fetch_input_ppr(batch):
     ## output is 'host_genome.tsv', containing a single line with EHI host genome code (e.g. G0001)
 
     with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
-        HOST_GENOME = f.readline().strip()
+        HOSTGENOME = f.readline().strip()
 
     subprocess.run([
         "python", f"{EHI_CODE_DIR}/airtable/get_host_genome_url.py", 
-        f"--code={HOST_GENOME}"
+        f"--code={HOSTGENOME}"
     ]) 
     ## output is 'host_genome_url.tsv', containing a single line with the URL to the host genome fasta
 
@@ -53,7 +53,7 @@ def run_preprocessing(batch):
     WORKDIR = f"/projects/ehi/data/PPR/{batch}"
     LOGDIR = f"/projects/ehi/data/RUN/{batch}/logs"
     with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
-        HOST_GENOME = f.readline().strip()
+        HOSTGENOME = f.readline().strip()
     with open(f"/projects/ehi/data/RUN/{batch}/host_genome_url.tsv", "r") as f:
         HOST_GENOME_URL = f.readline().strip()
 
@@ -66,7 +66,7 @@ def run_preprocessing(batch):
         f"--workflow-profile {EHIO_PATH}/profile/local/ "
         "--resources load=7 " # for rules that create an ERDA connection, I've added a load of 1 to prevent exceeding the ERDA limit (~15) [download_raw.smk, get_filesize_erda.smk, upload_prb.smk]
         f"-s {EHIO_PATH}/workflow/preprocessing.smk "
-        f"--config codedir={CODEDIR} workdir={WORKDIR} logdir={LOGDIR} host_genome={HOST_GENOME} host_genome_url={HOST_GENOME_URL} ehi_code_dir={EHI_CODE_DIR} batch={batch} "
+        f"--config codedir={CODEDIR} workdir={WORKDIR} logdir={LOGDIR} hostgenome={HOSTGENOME} host_genome_url={HOST_GENOME_URL} ehi_code_dir={EHI_CODE_DIR} batch={batch} "
     ]
 
     try:
