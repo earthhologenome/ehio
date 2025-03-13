@@ -20,8 +20,8 @@ def run_fetch_input_ppr(batch):
 
     """ Fetching EHI PPR input """
 
-    Path(f"/projects/ehi/data/RUN/{BATCH}").mkdir(exist_ok=True)
-    Path(f"/projects/ehi/data/RUN/{BATCH}/logs").mkdir(exist_ok=True)
+    Path(f"/projects/ehi/data/RUN/'batch'").mkdir(exist_ok=True)
+    Path(f"/projects/ehi/data/RUN/'batch'/logs").mkdir(exist_ok=True)
 
     os.chdir(f"/projects/ehi/data/RUN/{BATCH}")
 
