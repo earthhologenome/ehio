@@ -37,10 +37,6 @@ def run_fetch_input_ppr(batch):
     ]) 
     ## output is 'host_genome.tsv', containing a single line with EHI host genome code (e.g. G0001)
 
-    ##setup variables for snakefile
-    CODEDIR = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1/workflow/"
-    WORKDIR = f"/projects/ehi/data/PPR/{batch}"
-    LOGDIR = f"/projects/ehi/data/RUN/{batch}/logs"
     with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
         HOST_GENOME = f.readline().strip()
 
@@ -50,10 +46,16 @@ def run_fetch_input_ppr(batch):
     ]) 
     ## output is 'host_genome_url.tsv', containing a single line with the URL to the host genome fasta
 
+def run_preprocessing(batch):
+
+    ## declare variables for config
+    CODEDIR = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1/workflow/"
+    WORKDIR = f"/projects/ehi/data/PPR/{batch}"
+    LOGDIR = f"/projects/ehi/data/RUN/{batch}/logs"
+    with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
+        HOST_GENOME = f.readline().strip()
     with open(f"/projects/ehi/data/RUN/{batch}/host_genome_url.tsv", "r") as f:
         HOST_GENOME_URL = [line.strip() for line in f]
-
-def run_preprocessing(batch):
 
     """ Run the preprocessing workflow """
 
