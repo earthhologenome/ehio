@@ -41,7 +41,7 @@ def run_fetch_input_ppr(batch):
     CODEDIR = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1/workflow/"
     WORKDIR = f"/projects/ehi/data/PPR/{batch}"
     LOGDIR = f"/projects/ehi/data/RUN/{batch}/logs"
-    with open(f"/projects/ehi/data/RUN/{batch}host_genome.tsv", "r") as f:
+    with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
         HOST_GENOME = [line.strip() for line in f]
 
     subprocess.run([
