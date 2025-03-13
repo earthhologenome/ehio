@@ -17,7 +17,7 @@
 
 ################################################################################
 ### Setup input (from get_preprocessing_input.py)
-with open(f"/projects/ehi/data/RUN/{[config]batch}/prb_input.tsv", "r") as f:
+with open("/projects/ehi/data/RUN/{config['batch']}/prb_input.tsv", "r") as f:
     SAMPLE = [line.strip() for line in f]
 
 print("Detected these samples")
@@ -44,8 +44,8 @@ localrules: drakkar_preprocess
 
 rule all:
     input:
-        expand("/projects/ehi/data/REP/{[config]batch}.tsv",
-                prb=config["batch"]
+        expand("/projects/ehi/data/REP/{batch}.tsv",
+                batch=config["batch"]
         )
 
 
