@@ -42,7 +42,7 @@ def run_fetch_input_ppr(batch):
     WORKDIR = f"/projects/ehi/data/PPR/{batch}"
     LOGDIR = f"/projects/ehi/data/RUN/{batch}/logs"
     with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
-        HOST_GENOME = [line.strip() for line in f]
+        HOST_GENOME = f.readline().strip()
 
     subprocess.run([
         "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_host_genome_url.py", 
