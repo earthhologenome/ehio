@@ -27,13 +27,13 @@ def run_fetch_input_ppr(batch):
 
     subprocess.run([
         "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_preprocessing_input.py", 
-        "--prb=", {batch}
+        f"--prb={batch}"
     ]) 
     ## output is 'prb_input.tsv', line separated file with EHI numbers of input samples
 
     subprocess.run([
         "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_host_genome_id.py", 
-        "--prb=", {batch}
+        f"--prb={batch}"
     ]) 
     ## output is 'host_genome.tsv', containing a single line with EHI host genome code (e.g. G0001)
 
@@ -46,7 +46,7 @@ def run_fetch_input_ppr(batch):
 
     subprocess.run([
         "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_host_genome_id.py", 
-        "--code=", {HOST_GENOME}
+        "--code="{HOST_GENOME}
     ]) 
     ## output is 'host_genome_url.tsv', containing a single line with the URL to the host genome fasta
 
