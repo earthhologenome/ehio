@@ -55,15 +55,15 @@ def run_preprocessing(batch):
     with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
         HOST_GENOME = f.readline().strip()
     with open(f"/projects/ehi/data/RUN/{batch}/host_genome_url.tsv", "r") as f:
-        HOST_GENOME_URL = [line.strip() for line in f]
+        HOST_GENOME_URL = f.readline().strip()
 
     """ Run the preprocessing workflow """
 
     snakemake_command = [
         "/bin/bash", "-c",  # Ensures the module system works properly
-        f"module load snakemake/8.16.0 && "
+        f"module load snakemake/8.25.5 && "
         "snakemake "
-        f"--workflow-profile {EHIO_PATH}/profile/local/config.yaml"
+        f"--workflow-profile {EHIO_PATH}/profile/local/config.yaml "
         "--resources load=7 " # for rules that create an ERDA connection, I've added a load of 1 to prevent exceeding the ERDA limit (~15) [download_raw.smk, get_filesize_erda.smk, upload_prb.smk]
         f"-s {EHIO_PATH}/workflow/preprocessing.smk "
         f"--config", f"codedir={CODEDIR}", f"workdir={WORKDIR}", f"logdir={LOGDIR}", f"host_genome={HOST_GENOME}", f"host_genome_url={HOST_GENOME_URL}", f"batch={batch} "
