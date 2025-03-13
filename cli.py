@@ -63,7 +63,7 @@ def run_preprocessing(batch):
         "/bin/bash", "-c",  # Ensures the module system works properly
         f"module load snakemake/8.25.5 && "
         "snakemake "
-        f"--workflow-profile {EHIO_PATH}/profile/local/config.yaml "
+        f"--workflow-profile {EHIO_PATH}/profile/local/ "
         "--resources load=7 " # for rules that create an ERDA connection, I've added a load of 1 to prevent exceeding the ERDA limit (~15) [download_raw.smk, get_filesize_erda.smk, upload_prb.smk]
         f"-s {EHIO_PATH}/workflow/preprocessing.smk "
         f"--config", f"codedir={CODEDIR}", f"workdir={WORKDIR}", f"logdir={LOGDIR}", f"host_genome={HOST_GENOME}", f"host_genome_url={HOST_GENOME_URL}", f"batch={batch} "
