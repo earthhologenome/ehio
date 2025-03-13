@@ -65,6 +65,7 @@ def run_preprocessing(batch):
         "snakemake "
         f"--workflow-profile {EHIO_PATH}/profile/local/ "
         "--resources load=7 " # for rules that create an ERDA connection, I've added a load of 1 to prevent exceeding the ERDA limit (~15) [download_raw.smk, get_filesize_erda.smk, upload_prb.smk]
+        "--conda-prefix /projects/ehi/data/0_Environments/conda "
         f"-s {EHIO_PATH}/workflow/preprocessing.smk "
         f"--config codedir={CODEDIR} workdir={WORKDIR} logdir={LOGDIR} hostgenome={HOSTGENOME} host_genome_url={HOST_GENOME_URL} ehi_code_dir={EHI_CODE_DIR} batch={batch} "
     ]
