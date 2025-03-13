@@ -17,7 +17,7 @@
 
 ################################################################################
 ### Setup input (from get_preprocessing_input.py)
-with open("/projects/ehi/data/RUN/{config['batch']}/prb_input.tsv", "r") as f:
+with open(f"/projects/ehi/data/RUN/{config['batch']}/prb_input.tsv", "r") as f:
     SAMPLE = [line.strip() for line in f]
 
 print("Detected these samples")
