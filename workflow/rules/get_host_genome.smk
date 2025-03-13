@@ -18,7 +18,7 @@ rule fetch_host_genome:
             config["hostgenome"] + "_RN.fna.gz"
         )
     conda:
-        f"{config['codedir']}/conda_envs/1_Preprocess_QC.yaml"
+        f"{config['ehi_code_dir']}/conda_envs/1_Preprocess_QC.yaml"
     threads:
         16
     resources:
@@ -68,7 +68,7 @@ rule fetch_host_genome:
                 cd {config[workdir]}
 
                 # Log AirTable that a new genome has been indexed and uploaded to ERDA
-                python {config[codedir]}/airtable/log_genome_airtable.py --code={config[hostgenome]}
+                python {config[ehi_code_dir]}/airtable/log_genome_airtable.py --code={config[hostgenome]}
 
             else 
                 echo "Indexed genome exists on erda, unpacking."

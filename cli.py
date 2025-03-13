@@ -11,7 +11,7 @@ from pathlib import Path
 
 ## setup paths (hardcoded)
 EHIO_PATH = "/projects/ehi/data/0_Environments/ehio"
-EHI_SOFTWARE_PATH = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1"
+EHI_CODE_DIR = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1/workflow"
 
     
     # Define workflow launching functions
@@ -26,13 +26,13 @@ def run_fetch_input_ppr(batch):
     os.chdir(f"/projects/ehi/data/RUN/{batch}")
 
     subprocess.run([
-        "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_preprocessing_input.py", 
+        "python", f"{EHI_CODE_DIR}/airtable/get_preprocessing_input.py", 
         f"--prb={batch}"
     ]) 
     ## output is 'prb_input.tsv', line separated file with EHI numbers of input samples
 
     subprocess.run([
-        "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_host_genome_id.py", 
+        "python", f"{EHI_CODE_DIR}/airtable/get_host_genome_id.py", 
         f"--prb={batch}"
     ]) 
     ## output is 'host_genome.tsv', containing a single line with EHI host genome code (e.g. G0001)
@@ -41,7 +41,7 @@ def run_fetch_input_ppr(batch):
         HOST_GENOME = f.readline().strip()
 
     subprocess.run([
-        "python", f"{EHI_SOFTWARE_PATH}/workflow/airtable/get_host_genome_url.py", 
+        "python", f"{EHI_CODE_DIR}/airtable/get_host_genome_url.py", 
         f"--code={HOST_GENOME}"
     ]) 
     ## output is 'host_genome_url.tsv', containing a single line with the URL to the host genome fasta
@@ -49,7 +49,7 @@ def run_fetch_input_ppr(batch):
 def run_preprocessing(batch):
 
     ## declare variables for config
-    CODEDIR = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1/workflow/"
+    CODEDIR = "/projects/ehi/data/0_Environments/ehio/workflow"
     WORKDIR = f"/projects/ehi/data/PPR/{batch}"
     LOGDIR = f"/projects/ehi/data/RUN/{batch}/logs"
     with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
@@ -66,7 +66,7 @@ def run_preprocessing(batch):
         f"--workflow-profile {EHIO_PATH}/profile/local/ "
         "--resources load=7 " # for rules that create an ERDA connection, I've added a load of 1 to prevent exceeding the ERDA limit (~15) [download_raw.smk, get_filesize_erda.smk, upload_prb.smk]
         f"-s {EHIO_PATH}/workflow/preprocessing.smk "
-        f"--config codedir={CODEDIR} workdir={WORKDIR} logdir={LOGDIR} host_genome={HOST_GENOME} host_genome_url={HOST_GENOME_URL} batch={batch} "
+        f"--config codedir={CODEDIR} workdir={WORKDIR} logdir={LOGDIR} host_genome={HOST_GENOME} host_genome_url={HOST_GENOME_URL} ehi_code_dir={EHI_CODE_DIR} batch={batch} "
     ]
 
     try:

@@ -32,7 +32,7 @@ rule upload_to_ERDA:
             "misc/{sample}_uploaded"
         )
     conda:
-        f"{config['codedir']}/conda_envs/lftp.yaml"
+        f"{config['ehi_code_dir']}/conda_envs/lftp.yaml"
     threads:
         1
     resources:
@@ -46,11 +46,11 @@ rule upload_to_ERDA:
     shell:
         """
         #Upload preprocessed reads to ERDA for storage
-        lftp sftp://erda -e "put {input.non_host_r1} -o /EarthHologenomeInitiative/Data/PPR/{config[prb]}/; bye"
+        lftp sftp://erda -e "put {input.non_host_r1} -o /EarthHologenomeInitiative/Data/PPR/{config[batch]}/; bye"
         sleep 5
-        lftp sftp://erda -e "put {input.non_host_r2} -o /EarthHologenomeInitiative/Data/PPR/{config[prb]}/; bye"
+        lftp sftp://erda -e "put {input.non_host_r2} -o /EarthHologenomeInitiative/Data/PPR/{config[batch]}/; bye"
         sleep 5
-        lftp sftp://erda -e "put {input.host_bam} -o /EarthHologenomeInitiative/Data/PPR/{config[prb]}/; bye"
+        lftp sftp://erda -e "put {input.host_bam} -o /EarthHologenomeInitiative/Data/PPR/{config[batch]}/; bye"
         
         touch {output}
         """

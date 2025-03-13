@@ -7,7 +7,7 @@ rule create_PRB_folder:
             "ERDA_folder_created"
             )
     conda:
-        f"{config['codedir']}/conda_envs/lftp.yaml"
+        f"{config['ehi_code_dir']}/conda_envs/lftp.yaml"
     threads:
         1
     resources:
@@ -22,6 +22,6 @@ rule create_PRB_folder:
         touch {output}
 
         #Also, log the AirTable that the PRB is running!
-        python config[codedir]/airtable/log_prb_start_airtable.py --code=config[batch]
+        python config[ehi_code_dir]/airtable/log_prb_start_airtable.py --code=config[batch]
 
         """

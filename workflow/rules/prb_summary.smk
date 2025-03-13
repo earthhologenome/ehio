@@ -47,11 +47,11 @@ rule report:
     output:
         report=os.path.join(
             "/projects/ehi/data/REP/",
-            config["prb"] + ".tsv"
+            config["batch"] + ".tsv"
         ),
         npar_metadata=os.path.join(
             config["workdir"],
-            config["prb"] + "_nonpareil_metadata.tsv"
+            config["batch"] + "_nonpareil_metadata.tsv"
         )
     params:
         tmpdir=os.path.join(
@@ -70,7 +70,7 @@ rule report:
             "misc/"
         )
     conda:
-        f"{config['codedir']}/conda_envs/lftp.yaml"
+        f"{config['ehi_code_dir']}/conda_envs/lftp.yaml"
     threads:
         1
     resources:
@@ -118,21 +118,21 @@ rule report:
 
         cp {output.report} {params.misc_dir}
         cp {output.npar_metadata} {params.misc_dir}
-        tar -czf {config[workdir]}/{config[prb]}_stats.tar.gz {params.misc_dir}
+        tar -czf {config[workdir]}/{config[batch]}_stats.tar.gz {params.misc_dir}
 
         #Upload stats and report to ERDA for storage
-        lftp sftp://erda -e "put {config[workdir]}/{config[prb]}_stats.tar.gz -o /EarthHologenomeInitiative/Data/PPR/{config[prb]}/; bye"
+        lftp sftp://erda -e "put {config[workdir]}/{config[batch]}_stats.tar.gz -o /EarthHologenomeInitiative/Data/PPR/{config[batch]}/; bye"
         sleep 10
         lftp sftp://erda -e "put {output.report} -o /EarthHologenomeInitiative/Data/REP/; bye"
 
         #Automatically update the AirTable with the preprocessing stats
-        python {config[codedir]}/airtable/add_prb_stats_airtable.py --report={output.report} --prb={config[prb]} 
+        python {config[ehi_code_dir]}/airtable/add_prb_stats_airtable.py --report={output.report} --prb={config[batch]} 
 
         #Indicate that the PRB is done in AirTable
-        python {config[codedir]}/airtable/log_prb_done_airtable.py --code={config[prb]}
+        python {config[ehi_code_dir]}/airtable/log_prb_done_airtable.py --code={config[batch]}
        
         #Clean up the files/directories
-        rm {config[workdir]}/{config[prb]}_stats.tar.gz
+        rm {config[workdir]}/{config[batch]}_stats.tar.gz
         rm -r {config[workdir]}/{config[hostgenome]}/
         rm -r {params.misc_dir}
         rm -r {params.tmpdir}

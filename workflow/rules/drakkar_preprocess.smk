@@ -16,28 +16,41 @@ rule drakkar_preprocess:
             config["hostgenome"],
             config["hostgenome"] + "_RN.fna.gz"
         ),
-        reads=
+        r1=expand(
+            os.path.join(
+                config["workdir"],
+                "{sample}_raw_1.fq.gz"
+            ),
+            sample=SAMPLE
+        ),
+        r2=expand(
+            os.path.join(
+                config["workdir"],
+                "{sample}_raw_2.fq.gz"
+            ),
+            sample=SAMPLE
+        ),
     output:
         drakkar_out=os.path.join(
-            config["workdir"],
-            "{sample}_raw_1.fq.gz"
+            "/projects/ehi/data/REP/",
+            config["batch"] + ".tsv"
         )
     conda:
-        f"{config['codedir']}/conda_envs/lftp.yaml"
+        f"{config['ehi_code_dir']}/conda_envs/lftp.yaml"
     threads:
         1
     resources:
         mem_gb=8,
         time='24:00:00'
     message:
-        "Running drakkar {process}"
+        "Running drakkar preprocess"
     shell:
         """
 
-        module load drakkar/1.0.0
+        #module load drakkar/1.0.0
 
         drakkar preprocess \
-            -f {} \
+            -i {} \
             -g {input.rn_catted_ref} \
             -o {}
 
