@@ -35,8 +35,6 @@ rule drakkar_preprocess:
             "/projects/ehi/data/REP/",
             config["batch"] + ".tsv"
         )
-    conda:
-        f"{config['ehi_code_dir']}/conda_envs/lftp.yaml"
     threads:
         1
     resources:

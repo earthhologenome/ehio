@@ -72,6 +72,7 @@ rule fetch_host_genome:
 
             else 
                 echo "Indexed genome exists on erda, unpacking."
+                mkdir -p {config[workdir]}/{config[hostgenome]}/
                 tar -xvzf {config[hostgenome]}.tar.gz --directory {config[workdir]}/{config[hostgenome]}/
                 rm {config[hostgenome]}.tar.gz
 

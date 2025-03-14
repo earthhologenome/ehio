@@ -24,7 +24,7 @@ rule download_from_ERDA:
             )
         )
     conda:
-        f"{config['codedir']}/conda_envs/lftp.yaml"
+        f"{config['ehi_code_dir']}/conda_envs/lftp.yaml"
     threads:
         1
     resources:
