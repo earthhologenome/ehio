@@ -6,15 +6,10 @@ rule drakkar_preprocess:
             config["workdir"], 
             "ERDA_folder_created"
         ),
-        bt2_index=os.path.join(
+        ref=os.path.join(
             config["workdir"],
             config["hostgenome"],
-            config["hostgenome"] + "_RN.fna.gz.rev.2.bt2l",
-        ),
-        rn_catted_ref=os.path.join(
-            config["workdir"],
-            config["hostgenome"],
-            config["hostgenome"] + "_RN.fna.gz"
+            config["hostgenome"] + ".fna.gz"
         ),
         r1=expand(
             os.path.join(
@@ -31,14 +26,19 @@ rule drakkar_preprocess:
             sample=SAMPLE
         ),
     output:
+        r1=os.path.join(
+            config["workdir"],
+            "preprocessing",
+            "{sample}_raw_2.fq.gz"
+        ),
         drakkar_out=os.path.join(
-            "/projects/ehi/data/REP/",
-            config["batch"] + ".tsv"
+            config["workdir"],
+            "preprocessing.tsv"
         )
     threads:
-        1
+        2
     resources:
-        mem_gb=8,
+        mem_gb=16,
         time='24:00:00'
     message:
         "Running drakkar preprocess"
@@ -47,9 +47,11 @@ rule drakkar_preprocess:
 
         #module load drakkar/1.0.0
 
+        drakkar unlock \
+            -i {config[workdir]}
+
         drakkar preprocess \
-            -i {} \
-            -g {input.rn_catted_ref} \
-            -o {}
+            -i {config[workdir]} \
+            -r {input.ref} 
 
         """
