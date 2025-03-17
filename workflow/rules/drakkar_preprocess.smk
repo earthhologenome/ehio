@@ -26,11 +26,6 @@ rule drakkar_preprocess:
             sample=SAMPLE
         ),
     output:
-        r1=os.path.join(
-            config["workdir"],
-            "preprocessing",
-            "{sample}_raw_2.fq.gz"
-        ),
         drakkar_out=os.path.join(
             config["workdir"],
             "preprocessing.tsv"
