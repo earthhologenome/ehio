@@ -1,57 +1,15 @@
 ################################################################################
 ### Create summary table from outputs
-rule report:
+rule update_airtable:
     input:
-        coverm=expand(
-            os.path.join(
-                config["workdir"],
-                "misc/{sample}_coverM_mapped_host.tsv"
-            ),
-            sample=SAMPLE
-        ),
-        fastp=expand(
-            os.path.join(
-                config["workdir"],
-                "misc/{sample}.json"
-            ),
-            sample=SAMPLE
-        ),
-        read_fraction=expand(
-            os.path.join(
-                config["workdir"],
-                "misc/{sample}_readfraction.tsv"
-            ),
-            sample=SAMPLE
-        ),        
-        uploaded=expand(
-            os.path.join(
-                config["workdir"],
-                "misc/{sample}_uploaded"
-            ),
-            sample=SAMPLE
-        ),
-        npstats=expand(
-            os.path.join(
-                config["workdir"],
-                "misc/{sample}_np.tsv"
-            ),
-            sample=SAMPLE
-        ),
-        dupstats=expand(
-            os.path.join(
-                config["workdir"],
-                "{sample}_markdupes.txt"
-            ),
-            sample=SAMPLE
+       drakkar_out=os.path.join(
+            config["workdir"],
+            "preprocessing.tsv"
         )
     output:
-        report=os.path.join(
-            "/projects/ehi/data/REP/",
-            config["batch"] + ".tsv"
-        ),
-        npar_metadata=os.path.join(
+       os.path.join(
             config["workdir"],
-            config["batch"] + "_nonpareil_metadata.tsv"
+            "airtable_patched"
         )
     params:
         tmpdir=os.path.join(

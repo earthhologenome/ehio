@@ -15,7 +15,14 @@ EHI_CODE_DIR = "/projects/ehi/data/0_Code/EHI_bioinformatics_1.1/workflow"
 
     
     # Define workflow launching functions
+    ## N.b. using EHI nomenclature:
+    ## ppr = preprocessing 
+    ## asb = cataloging
+    ## dmb = profiling
 
+    #############################################
+    ##########   Preprocessing   ################
+    #############################################
 def run_fetch_input_ppr(batch):
 
     """ Fetching EHI PPR input """
@@ -82,6 +89,65 @@ def run_preprocessing(batch):
             sys.exit(1)
 
 
+    #############################################
+    #############   Cataloging   ################
+    #############################################
+def run_fetch_input_asb(batch):
+
+    """ Fetching EHI ASB input """
+
+    Path(f"/projects/ehi/data/RUN/{batch}").mkdir(exist_ok=True)
+    Path(f"/projects/ehi/data/RUN/{batch}/logs").mkdir(exist_ok=True)
+
+    os.chdir(f"/projects/ehi/data/RUN/{batch}")
+
+    subprocess.run([
+        "python", f"{EHI_CODE_DIR}/airtable/get_assembly_input.py", 
+        f"--abb={batch}"
+    ]) 
+    ## output is 'asb_input.tsv', tab-separated file with (PR_batch, EHI_number, Assembly_code, metagenomic_bases, singlem_fraction, diversity, C)
+
+def run_cataloging(batch):
+
+    ## declare variables for config
+    CODEDIR = "/projects/ehi/data/0_Environments/ehio/workflow"
+    WORKDIR = f"/projects/ehi/data/PPR/{batch}"
+    LOGDIR = f"/projects/ehi/data/RUN/{batch}/logs"
+    with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
+        HOSTGENOME = f.readline().strip()
+    with open(f"/projects/ehi/data/RUN/{batch}/host_genome_url.tsv", "r") as f:
+        HOST_GENOME_URL = f.readline().strip()
+
+    """ Run the preprocessing workflow """
+
+    snakemake_command = [
+        "/bin/bash", "-c",  # Ensures the module system works properly
+        f"module load snakemake/8.25.5 && "
+        "snakemake "
+        f"--workflow-profile {EHIO_PATH}/profile/local/ "
+        "--resources load=7 " # for rules that create an ERDA connection, I've added a load of 1 to prevent exceeding the ERDA limit (~15) [download_raw.smk, get_filesize_erda.smk, upload_prb.smk]
+        "--conda-prefix /projects/ehi/data/0_Environments/conda "
+        f"-s {EHIO_PATH}/workflow/preprocessing.smk "
+        f"--config codedir={CODEDIR} workdir={WORKDIR} logdir={LOGDIR} hostgenome={HOSTGENOME} host_genome_url={HOST_GENOME_URL} ehi_code_dir={EHI_CODE_DIR} batch={batch} "
+    ]
+
+    try:
+        subprocess.run(snakemake_command, shell=False, check=True)
+    except subprocess.CalledProcessError as e:
+        error_message = e.stderr
+        if "LockException" in error_message:
+            display_unlock()
+        else:
+            print(f"\nERROR: Snakemake failed with exit code {e.returncode}!", file=sys.stderr)
+            print(f"ERROR: Check the Snakemake logs for more details.", file=sys.stderr)
+            sys.exit(1)
+
+
+    #############################################
+    ##############   Profiling   ################
+    #############################################
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="EHio: Input-output of EHI data between ERDA, Mjolnir and Airtable.",
@@ -106,8 +172,10 @@ def main():
         run_fetch_input_ppr(args.batch)
         run_preprocessing(args.batch)
     elif args.command == "cataloging":
+        run_fetch_input_asb(args.batch)
         run_cataloging(args.batch)
     elif args.command == "profiling":
+        run_fetch_input_dmb(args.batch)
         run_profiling(args.batch)
     else:
         parser.print_help()

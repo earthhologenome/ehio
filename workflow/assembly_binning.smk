@@ -1,5 +1,5 @@
 ################################################################################
-# EHI snakefile for preprocess/QC                                              #
+# EHI snakefile for assembly/binning                                              #
 # Raphael Eisenhofer 03/25                                                     #
 #         .----------------.  .----------------.  .----------------.           #
 #        | .--------------. || .--------------. || .--------------. |          #
@@ -16,9 +16,15 @@
 
 
 ################################################################################
-### Setup input (from get_preprocessing_input.py)
-with open(f"/projects/ehi/data/RUN/{config['batch']}/prb_input.tsv", "r") as f:
-    SAMPLE = [line.strip() for line in f]
+### Setup input (from get_assembly_input.py)
+df = pd.read_csv(f"/projects/ehi/data/RUN/{config['batch']}asb_input.tsv", sep="\t")
+
+# Use set to create a list of valid combinations of wildcards. Note that 'ID' = EHA number.
+valid_combinations = set(
+    (row["PR_batch"], row["EHI_number"], row["Assembly_code"], row["metagenomic_bases"], row["singlem_fraction"], row["diversity"], row["C"]) for _, row in df.iterrows()
+)
+
+SAMPLE = df["EHI_number"]
 
 print("Detected these samples")
 print(SAMPLE)
@@ -26,33 +32,49 @@ print(SAMPLE)
 
 ################################################################################
 ### Define time rule for downloading samples
-def estimate_time_download(wildcards, attempt):
-    fs_sample = f"{config['workdir']}/{wildcards.sample}_filesize.txt"
-    with open(fs_sample, 'r') as f:
-        input_size = int(f.read().strip())
+def get_row(wildcards):
+    return df[
+        (df["PR_batch"] == wildcards.PRB) &
+        (df["EHI_number"] == wildcards.EHI)
+    ].iloc[0]
+
+def calculate_input_size_gb(metagenomic_bases):
     # convert from bytes to gigabytes
-    input_size_gb = input_size / (1024 * 1024 * 1024)
-    # Multiply by 2, and set time based on 30 MB/s download speed.
-    estimate_time_download = ((input_size_gb * 3 ) + 12 ) / 1.25
+    return metagenomic_bases / (1024 * 1024 * 1024)
+
+## Rule-specific time estimations
+## This also includes retries by attempt
+def estimate_time_download(wildcards, attempt):
+    row = get_row(wildcards)
+    input_size_gb = calculate_input_size_gb(row["metagenomic_bases"])
+    estimate_time_download = (input_size_gb / 1.4)
+    estimate_time_download = max(estimate_time_download, 2)
     return attempt * int(estimate_time_download)
 
 ################################################################################
 ### Setup the desired outputs
 #sets drakkar to be run locally
-localrules: drakkar_preprocess
+localrules: drakkar_cataloging
 
 
 rule all:
     input:
+        expand(
+            os.path.join(
+            config["workdir"], 
+            "reads/", 
+            "{combo[0]}/", 
+            "{combo[1]}_M_1.fq.gz"
+        ),
+            combo=valid_combinations,
+        ),
         expand("/projects/ehi/data/REP/{batch}.tsv",
                 batch=config["batch"]
         )
 
 
-include: os.path.join(config["codedir"], "rules/prb/create_PRB_folder.smk")
-include: os.path.join(config["codedir"], "rules/prb/get_filesize_erda.smk")
-include: os.path.join(config["codedir"], "rules/prb/download_raw.smk")
-include: os.path.join(config["codedir"], "rules/prb/get_host_genome.smk")
-include: os.path.join(config["codedir"], "rules/prb/drakkar_preprocess.smk")
-include: os.path.join(config["codedir"], "rules/prb/upload_prb.smk")
-include: os.path.join(config["codedir"], "rules/prb/update_airtable.smk")
+include: os.path.join(config["codedir"], "rules/asb/create_ASB_folder.smk")
+include: os.path.join(config["codedir"], "rules/asb/download_preprocessed.smk")
+include: os.path.join(config["codedir"], "rules/asb/drakkar_cataloging.smk")
+include: os.path.join(config["codedir"], "rules/asb/assembly_summary.smk")
+include: os.path.join(config["codedir"], "rules/asb/log_ASB_finish.smk")
