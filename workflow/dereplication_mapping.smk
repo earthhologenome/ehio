@@ -1,5 +1,5 @@
 ################################################################################
-# EHI snakefile for assembly/binning                                              #
+# EHI snakefile for dereplication mapping                                              #
 # Raphael Eisenhofer 03/25                                                     #
 #         .----------------.  .----------------.  .----------------.           #
 #        | .--------------. || .--------------. || .--------------. |          #
@@ -48,7 +48,7 @@ def estimate_time_download(wildcards, attempt):
 ################################################################################
 ### Setup the desired outputs
 #sets drakkar to be run locally
-localrules: drakkar_cataloging
+localrules: drakkar_profiling
 
 
 rule all:
@@ -58,8 +58,9 @@ rule all:
         )
 
 
-include: os.path.join(config["codedir"], "rules/asb/create_ASB_folder.smk")
+include: os.path.join(config["codedir"], "rules/asb/create_DMB_folder.smk")
 include: os.path.join(config["codedir"], "rules/asb/download_preprocessed.smk")
-include: os.path.join(config["codedir"], "rules/asb/drakkar_cataloging.smk")
+include: os.path.join(config["codedir"], "rules/asb/download_mags.smk")
+include: os.path.join(config["codedir"], "rules/asb/drakkar_profiling.smk")
 include: os.path.join(config["codedir"], "rules/asb/assembly_summary.smk")
 include: os.path.join(config["codedir"], "rules/asb/log_ASB_finish.smk")

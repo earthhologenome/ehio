@@ -6,29 +6,26 @@ rule drakkar_cataloging:
             config["workdir"], 
             "ERDA_folder_created"
         ),
-        ref=os.path.join(
-            config["workdir"],
-            config["hostgenome"],
-            config["hostgenome"] + ".fna.gz"
-        ),
         r1=expand(
             os.path.join(
-                config["workdir"],
-                "{sample}_raw_1.fq.gz"
+                config["workdir"], 
+                "reads/", 
+                "{EHI}_M_1.fq.gz"
             ),
             sample=SAMPLE
         ),
         r2=expand(
             os.path.join(
-                config["workdir"],
-                "{sample}_raw_2.fq.gz"
+                config["workdir"], 
+                "reads/", 
+                "{EHI}_M_2.fq.gz"
             ),
             sample=SAMPLE
         ),
     output:
         drakkar_out=os.path.join(
             config["workdir"],
-            "preprocessing.tsv"
+            "cataloging.tsv"
         )
     threads:
         2
@@ -36,7 +33,7 @@ rule drakkar_cataloging:
         mem_gb=16,
         time='24:00:00'
     message:
-        "Running drakkar preprocess"
+        "Running drakkar cataloging"
     shell:
         """
 
@@ -45,8 +42,8 @@ rule drakkar_cataloging:
         drakkar unlock \
             -i {config[workdir]}
 
-        drakkar preprocess \
-            -i {config[workdir]} \
-            -r {input.ref} 
+        drakkar cataloging \
+            ---input {config[workdir]} \
+            --mode individual
 
         """

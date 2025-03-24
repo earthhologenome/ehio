@@ -10,13 +10,11 @@ rule download_preprocessed:
         r1=os.path.join(
             config["workdir"], 
             "reads/", 
-            "{PRB}/", 
             "{EHI}_M_1.fq.gz"
         ),
         r2=os.path.join(
             config["workdir"], 
             "reads/", 
-            "{PRB}/", 
             "{EHI}_M_2.fq.gz"
         )
     conda:
@@ -27,10 +25,16 @@ rule download_preprocessed:
         mem_gb=8,
         time=estimate_time_download
     benchmark:
-        os.path.join(config["logdir"] + "/download_preprocessed_benchmark_{PRB}_{EHI}.tsv")
+        os.path.join(config["logdir"] + "/download_preprocessed_benchmark_{EHI}.tsv")
     message:
         "Fetching metagenomics reads for {wildcards.EHI} from ERDA"
     shell:
         """
-        lftp sftp://erda -e "mirror --include-glob='{wildcards.PRB}/{wildcards.EHI}*.fq.gz' /EarthHologenomeInitiative/Data/PPR/ {config[workdir]}/reads/; bye"
+        # read1
+        wget --no-verbose `grep '{wildcards.EHI}' /projects/ehi/data/RUN/{config['batch']}/asb_input.tsv | cut -f3`
+        mv {wildcards.EHI}*_1.fq.gz {output.r1}
+
+        # read2
+        wget --no-verbose `grep '{wildcards.EHI}' /projects/ehi/data/RUN/{config['batch']}/asb_input.tsv | cut -f4`
+        mv {wildcards.EHI}*_2.fq.gz {output.r2}
         """
