@@ -17,12 +17,7 @@
 
 ################################################################################
 ### Setup input (from get_assembly_input.py)
-df = pd.read_csv(f"/projects/ehi/data/RUN/{config['batch']}asb_input.tsv", sep="\t")
-
-# Use set to create a list of valid combinations of wildcards. Note that 'ID' = EHA number.
-valid_combinations = set(
-    (row["PR_batch"], row["EHI_number"], row["Assembly_code"], row["metagenomic_bases"], row["singlem_fraction"], row["diversity"], row["C"]) for _, row in df.iterrows()
-)
+df = pd.read_csv(f"/projects/ehi/data/RUN/{config['batch']}/asb_input.tsv", sep="\t")
 
 SAMPLE = df["EHI_number"]
 
@@ -34,7 +29,6 @@ print(SAMPLE)
 ### Define time rule for downloading samples
 def get_row(wildcards):
     return df[
-        (df["PR_batch"] == wildcards.PRB) &
         (df["EHI_number"] == wildcards.EHI)
     ].iloc[0]
 
@@ -59,15 +53,6 @@ localrules: drakkar_cataloging
 
 rule all:
     input:
-        expand(
-            os.path.join(
-            config["workdir"], 
-            "reads/", 
-            "{combo[0]}/", 
-            "{combo[1]}_M_1.fq.gz"
-        ),
-            combo=valid_combinations,
-        ),
         expand("/projects/ehi/data/REP/{batch}.tsv",
                 batch=config["batch"]
         )

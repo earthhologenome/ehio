@@ -102,10 +102,10 @@ def run_fetch_input_asb(batch):
     os.chdir(f"/projects/ehi/data/RUN/{batch}")
 
     subprocess.run([
-        "python", f"{EHI_CODE_DIR}/airtable/get_assembly_input.py", 
+        "python", f"{EHI_CODE_DIR}/airtable/get_asb_input.py", 
         f"--abb={batch}"
     ]) 
-    ## output is 'asb_input.tsv', tab-separated file with (PR_batch, EHI_number, Assembly_code, metagenomic_bases, singlem_fraction, diversity, C)
+    ## output is 'asb_input.tsv', tab-separated file with (EHI_number, metagenomic_bases, r1_URL of preprocessed reads, r2_URL of preprocessed reads)
 
 def run_cataloging(batch):
 
@@ -113,12 +113,8 @@ def run_cataloging(batch):
     CODEDIR = "/projects/ehi/data/0_Environments/ehio/workflow"
     WORKDIR = f"/projects/ehi/data/PPR/{batch}"
     LOGDIR = f"/projects/ehi/data/RUN/{batch}/logs"
-    with open(f"/projects/ehi/data/RUN/{batch}/host_genome.tsv", "r") as f:
-        HOSTGENOME = f.readline().strip()
-    with open(f"/projects/ehi/data/RUN/{batch}/host_genome_url.tsv", "r") as f:
-        HOST_GENOME_URL = f.readline().strip()
 
-    """ Run the preprocessing workflow """
+    """ Run the cataloging workflow """
 
     snakemake_command = [
         "/bin/bash", "-c",  # Ensures the module system works properly
@@ -127,8 +123,8 @@ def run_cataloging(batch):
         f"--workflow-profile {EHIO_PATH}/profile/local/ "
         "--resources load=7 " # for rules that create an ERDA connection, I've added a load of 1 to prevent exceeding the ERDA limit (~15) [download_raw.smk, get_filesize_erda.smk, upload_prb.smk]
         "--conda-prefix /projects/ehi/data/0_Environments/conda "
-        f"-s {EHIO_PATH}/workflow/preprocessing.smk "
-        f"--config codedir={CODEDIR} workdir={WORKDIR} logdir={LOGDIR} hostgenome={HOSTGENOME} host_genome_url={HOST_GENOME_URL} ehi_code_dir={EHI_CODE_DIR} batch={batch} "
+        f"-s {EHIO_PATH}/workflow/assembly_binning.smk "
+        f"--config codedir={CODEDIR} workdir={WORKDIR} logdir={LOGDIR} ehi_code_dir={EHI_CODE_DIR} batch={batch} "
     ]
 
     try:
