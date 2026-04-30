@@ -595,6 +595,38 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_upd.set_defaults(func=cmd_update)
 
+    # ------------------------------------------------------------------
+    # stop
+    # ------------------------------------------------------------------
+    p_stop = sub.add_parser(
+        "stop",
+        help="Kill the screen session for a running batch.",
+        description="Sends a quit signal to the screen session named after the batch.",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    p_stop.add_argument("--batch", "-b", required=True, metavar="BATCH",
+        help="Batch code (screen session name) to stop.")
+    p_stop.set_defaults(func=cmd_stop)
+
+    # ------------------------------------------------------------------
+    # remove
+    # ------------------------------------------------------------------
+    p_rm = sub.add_parser(
+        "remove",
+        help="Delete the output directory for a batch (not the RUN directory).",
+        description=(
+            "Removes the working output directory (PPR/ASB/DMB)/{batch} for the given\n"
+            "module. The RUN/{batch} directory (scripts and logs) is not touched."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    p_rm.add_argument("--module", "-m", required=True,
+        choices=["preprocessing", "binning", "quantifying"],
+        help="Module whose output base to use.")
+    p_rm.add_argument("--batch", "-b", required=True, metavar="BATCH",
+        help="Batch code — the subdirectory to delete.")
+    p_rm.set_defaults(func=cmd_remove)
+
     return parser
 
 
@@ -651,6 +683,40 @@ def cmd_scanning(args: argparse.Namespace) -> int:
     else:
         suffix = "(dry run)" if args.dry_run else ""
         print(f"{total} batch(es) launched. {suffix}".strip())
+    return 0
+
+
+_OUTPUT_BASE_CFG = {
+    "preprocessing": "EHI_PPR_OUTPUT_BASE",
+    "binning":       "EHI_ASB_OUTPUT_BASE",
+    "quantifying":   "MAG_DMB_OUTPUT_BASE",
+}
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    import subprocess
+    session = args.batch
+    result = subprocess.run(
+        ["screen", "-S", session, "-X", "quit"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        _info(f"Screen session '{session}' terminated.")
+    else:
+        _info(f"No screen session named '{session}' found (already stopped or never started).")
+    return 0
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    import shutil
+
+    output_base = _require_cfg(_OUTPUT_BASE_CFG[args.module])
+    target = Path(output_base) / args.batch
+    if not target.exists():
+        _info(f"Output directory not found: {target}")
+        return 0
+    shutil.rmtree(target)
+    _info(f"Deleted output directory: {target}")
     return 0
 
 

@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.21] - 2026-04-30
+
+### Added
+
+- `ehio stop --batch XXXXX`: sends a quit signal to the screen session named after the batch, stopping an ongoing job.
+- `ehio remove --module MODULE --batch XXXXX`: deletes the output directory (`PPR/ASB/DMB/{batch}`) for the given module without touching the `RUN/{batch}` directory (scripts and logs).
 ## [0.1.20] - 2026-04-30
 
 ### Added
