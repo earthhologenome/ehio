@@ -230,6 +230,7 @@ def build_script_content(
         return header + (
             f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
             f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}\n"
+            f"ehio preprocessing --output -b {q(batch_name)} -l {q(output_dir)}\n"
         )
 
     if module == "binning":

@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.15] - 2026-04-30
+
+### Changed
+
+- Generated preprocessing scripts now include `ehio preprocessing --output -b {batch} -l {output_dir}` after the drakkar call, so Airtable logging and SFTP transfer run automatically. If the output step fails, resetting the batch to `Ready` and re-scanning is safe — drakkar resumes via its `.snakemake` checkpoint and completes instantly, then the output step retries.
 ## [0.1.14] - 2026-04-30
 
 ### Fixed
