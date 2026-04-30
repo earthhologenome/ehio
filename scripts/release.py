@@ -30,6 +30,7 @@ class ReleasePlan:
     run_tests: bool
     run_build: bool
     run_twine_check: bool
+    run_git: bool
     dry_run: bool
 
 
@@ -37,7 +38,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Prepare an ehio release by cutting the CHANGELOG entry from "
-            "Unreleased, updating version metadata, and running release checks."
+            "Unreleased, updating version metadata, running checks, and "
+            "committing + pushing to GitHub."
         )
     )
     parser.add_argument(
@@ -70,6 +72,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Skip twine validation of built artifacts.",
     )
+    parser.add_argument(
+        "--skip-git",
+        action="store_true",
+        help="Skip the git commit, tag, and push steps.",
+    )
     return parser.parse_args(argv)
 
 
@@ -84,6 +91,7 @@ def main() -> int:
         run_tests=not args.skip_tests,
         run_build=not args.skip_build,
         run_twine_check=not args.skip_twine_check,
+        run_git=not args.skip_git,
         dry_run=args.dry_run,
     )
 
@@ -124,14 +132,16 @@ def main() -> int:
         require_module("twine")
         run_command([sys.executable, "-m", "twine", "check", "dist/*"], shell=True)
 
-    print()
-    print("Release preparation completed.")
-    print("Next steps:")
-    print("1. Review changes: git diff")
-    print(f'2. Commit them: git commit -am "Release v{plan.version}"')
-    print(f"3. Tag the release: git tag v{plan.version}")
-    print(f"4. Push branch and tag: git push origin main && git push origin v{plan.version}")
-    print(f"5. Monitor the GitHub Actions release workflow for tag v{plan.version}")
+    if plan.run_git:
+        run_command(["git", "add"] + changed_files)
+        run_command(["git", "commit", "-m", f"Release v{plan.version}"])
+        run_command(["git", "tag", f"v{plan.version}"])
+        run_command(["git", "push", "origin", "main"])
+        run_command(["git", "push", "origin", f"v{plan.version}"])
+        print(f"\nv{plan.version} committed, tagged, and pushed to GitHub.")
+    else:
+        print("\nRelease preparation completed (git steps skipped).")
+
     return 0
 
 
@@ -247,6 +257,7 @@ def print_release_plan(plan: ReleasePlan, changed_files: list[str]) -> None:
     print(f"  run_tests: {plan.run_tests}")
     print(f"  run_build: {plan.run_build}")
     print(f"  run_twine_check: {plan.run_twine_check}")
+    print(f"  run_git: {plan.run_git}")
     print("  files_to_update:")
     if changed_files:
         for path in changed_files:
