@@ -57,8 +57,7 @@ class AirtableClient:
         if not batch_record:
             return None, []
 
-        batch_rec_id = batch_record["id"]
-        formula = f'FIND("{batch_rec_id}", ARRAYJOIN({{{entry_batch_field}}}))'
+        formula = f'FIND("{batch_code}", ARRAYJOIN({{{entry_batch_field}}}))'
         entries = self._table(entry_table).all(formula=formula)
         return batch_record, entries
 

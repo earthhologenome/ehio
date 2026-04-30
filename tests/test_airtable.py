@@ -93,8 +93,8 @@ class TestFetchBatchAndEntries:
         assert batch == BATCH_RECORD
         assert len(entries) == 2
 
-    def test_entry_formula_uses_record_id(self):
-        """The FIND+ARRAYJOIN formula must use the batch's recXXX id."""
+    def test_entry_formula_uses_batch_code(self):
+        """The FIND+ARRAYJOIN formula must use the batch code (primary field value), not the record ID."""
         client, mock_api = _make_client()
         mock_table = mock_api.table.return_value
         mock_table.all.side_effect = [[BATCH_RECORD], ENTRY_RECORDS]
@@ -108,7 +108,8 @@ class TestFetchBatchAndEntries:
         )
         calls = mock_table.all.call_args_list
         entry_call_formula = calls[1].kwargs["formula"]
-        assert "recBATCH000001" in entry_call_formula
+        assert "PPR001" in entry_call_formula
+        assert "recBATCH000001" not in entry_call_formula
         assert "FIND" in entry_call_formula
         assert "ARRAYJOIN" in entry_call_formula
         assert "fld2lF4Tj0MQ82HIg" in entry_call_formula

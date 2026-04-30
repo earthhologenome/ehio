@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.2] - 2026-04-30
+
+### Fixed
+
+- `fetch_batch_and_entries` now uses the batch code (primary field value) in the `FIND`+`ARRAYJOIN` formula instead of the internal Airtable record ID. Airtable formulas expand linked-record fields to their primary field values, so the previous `recXXX`-based formula always returned zero entries.
 ## [0.1.1] - 2026-04-29
 
 ### Added
