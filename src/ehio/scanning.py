@@ -201,7 +201,11 @@ def build_script_content(
             "fi\n"
         )
 
-    drakkar_prefix = f"conda run -n {shlex.quote(drakkar_conda_env)} " if drakkar_conda_env else ""
+    if drakkar_conda_env:
+        _flag = "-p" if drakkar_conda_env.startswith(("/", "~", ".")) else "-n"
+        drakkar_prefix = f"conda run {_flag} {shlex.quote(drakkar_conda_env)} "
+    else:
+        drakkar_prefix = ""
 
     header = (
         "#!/usr/bin/env bash\n"

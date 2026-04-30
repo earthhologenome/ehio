@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.14] - 2026-04-30
+
+### Fixed
+
+- `DRAKKAR_CONDA_ENV` paths (starting with `/`, `~`, or `.`) now use `conda run -p` instead of `conda run -n`, avoiding the `CondaValueError: Invalid environment name` error when a full path is specified.
 ## [0.1.13] - 2026-04-30
 
 ### Added
