@@ -120,31 +120,46 @@ def _run_preprocessing_input(args: argparse.Namespace) -> int:
     if not entries:
         _die(f"No entries found for batch '{args.batch}'.")
 
-    # Resolve reference genome: batch field may hold a URL directly or a linked
-    # record ID pointing to GENOME_ENTRY.  We try the field value first; if it
-    # looks like a record ID (starts with "rec") we follow the link.
-    reference: str | None = None
+    # Resolve reference genome flag for drakkar:
+    #   -x <url>  if GENOME_ENTRY_URL_INDEXED is populated  (indexed tarball)
+    #   -g <url>  if only GENOME_ENTRY_URL_RAW is populated (raw fasta)
+    #   (empty)   if no reference is configured
+    ref_flag = ""
     if batch_ref_field:
         ref_value = batch_record.get("fields", {}).get(batch_ref_field)
         if isinstance(ref_value, list):
             ref_value = ref_value[0] if ref_value else None
         if ref_value:
-            ref_str = str(ref_value).strip()
-            if ref_str.startswith("rec"):
-                # Linked record — fetch URL from GENOME_ENTRY
-                genome_table   = str(cfg.get("GENOME_ENTRY") or "").strip()
-                genome_url_fld = str(cfg.get("GENOME_ENTRY_URL_INDEXED") or "").strip()
-                if genome_table and genome_url_fld:
-                    genome_base_id = str(cfg.get("GENOME_BASE") or "").strip()
-                    if genome_base_id:
-                        genome_client = AirtableClient(api_key=token, base_id=genome_base_id)
-                        genome_rec = genome_client.fetch_record_by_id(genome_table, ref_str)
-                        if genome_rec:
-                            reference = str(
-                                genome_rec.get("fields", {}).get(genome_url_fld, "")
-                            ).strip() or None
-            else:
-                reference = ref_str or None
+            ref_rec_id = str(ref_value).strip()
+            if ref_rec_id.startswith("rec"):
+                genome_table       = str(cfg.get("GENOME_ENTRY")           or "").strip()
+                genome_indexed_fld = str(cfg.get("GENOME_ENTRY_URL_INDEXED") or "").strip()
+                genome_raw_fld     = str(cfg.get("GENOME_ENTRY_URL_RAW")    or "").strip()
+                genome_base_id     = str(cfg.get("GENOME_BASE")             or "").strip()
+                if genome_table and genome_base_id:
+                    genome_client = AirtableClient(api_key=token, base_id=genome_base_id)
+                    genome_rec = genome_client.fetch_record_by_id(genome_table, ref_rec_id)
+                    if genome_rec:
+                        genome_fields = genome_rec.get("fields", {})
+                        indexed_url = str(genome_fields.get(genome_indexed_fld, "") or "").strip()
+                        raw_url     = str(genome_fields.get(genome_raw_fld,     "") or "").strip()
+                        if indexed_url:
+                            ref_flag = f"-x {indexed_url}"
+                            _info(f"Reference genome (indexed): {indexed_url}")
+                        elif raw_url:
+                            ref_flag = f"-g {raw_url}"
+                            _info(f"Reference genome (raw): {raw_url}")
+
+    # Write the drakkar reference flag to a bash env file so the generated
+    # .sh script can source it before calling drakkar.
+    ref_flag_file = getattr(args, "ref_flag_file", None)
+    if ref_flag_file:
+        import shlex
+        Path(ref_flag_file).parent.mkdir(parents=True, exist_ok=True)
+        Path(ref_flag_file).write_text(
+            f"DRAKKAR_REF_FLAG={shlex.quote(ref_flag)}\n", encoding="utf-8"
+        )
+        _info(f"Reference flag written → {ref_flag_file}")
 
     out_path = Path(args.sample_file)
     n = write_sample_file(
@@ -153,11 +168,8 @@ def _run_preprocessing_input(args: argparse.Namespace) -> int:
         sample_field=entry_code_field,
         reads1_field=reads1_field,
         reads2_field=reads2_field,
-        reference=reference,
     )
     _info(f"Wrote {n} samples to {out_path}")
-    if reference:
-        _info(f"Reference genome: {reference}")
     return 0
 
 
@@ -445,6 +457,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_verbose(p_pre)
     p_pre.add_argument("--sample-file", "-f", default="samples.tsv", metavar="PATH",
         help="Output sample info TSV for drakkar (input mode). Default: samples.tsv.")
+    p_pre.add_argument("--ref-flag-file", metavar="PATH",
+        help="Write the resolved drakkar reference flag (DRAKKAR_REF_FLAG=...) to this bash env file (input mode).")
     _add_sftp_overrides(p_pre)
     p_pre.set_defaults(func=cmd_preprocessing)
 

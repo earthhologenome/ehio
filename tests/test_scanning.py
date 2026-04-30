@@ -107,6 +107,17 @@ class TestBuildScriptContent:
         assert "ehio preprocessing --input" in script
         assert "drakkar preprocessing" in script
 
+    def test_preprocessing_writes_ref_flag_file(self):
+        script = self._script(module="preprocessing")
+        assert "--ref-flag-file" in script
+        assert "PPR001_ref.env" in script
+
+    def test_preprocessing_sources_ref_env_and_passes_flag(self):
+        script = self._script(module="preprocessing")
+        assert "source" in script
+        assert "PPR001_ref.env" in script
+        assert "$DRAKKAR_REF_FLAG" in script
+
     def test_binning_uses_cataloging(self):
         script = build_script_content(
             "binning", "ASB001",

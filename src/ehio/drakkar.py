@@ -13,17 +13,13 @@ def write_sample_file(
     sample_field: str,
     reads1_field: str,
     reads2_field: str,
-    reference: str | None = None,
 ) -> int:
     """Write a drakkar sample info TSV (used by preprocessing and binning).
 
-    Columns: sample, rawreads1, rawreads2[, reference]
-    `reference` is a batch-level string applied to every row.
+    Columns: sample, rawreads1, rawreads2
     Returns the number of rows written.
     """
     columns = ["sample", "rawreads1", "rawreads2"]
-    if reference:
-        columns.append("reference")
 
     def _str(value: object) -> str:
         """Return a plain string from a field value that may be a list."""
@@ -34,15 +30,12 @@ def write_sample_file(
     rows = []
     for rec in records:
         fields = rec.get("fields", rec)
-        sample  = _str(fields.get(sample_field,  ""))
+        sample    = _str(fields.get(sample_field,  ""))
         rawreads1 = _str(fields.get(reads1_field, ""))
         rawreads2 = _str(fields.get(reads2_field, ""))
         if not sample or not rawreads1:
             continue
-        row: dict[str, str] = {"sample": sample, "rawreads1": rawreads1, "rawreads2": rawreads2}
-        if reference:
-            row["reference"] = reference
-        rows.append(row)
+        rows.append({"sample": sample, "rawreads1": rawreads1, "rawreads2": rawreads2})
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:

@@ -9,6 +9,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.5] - 2026-04-30
+
+### Added
+
+- `ehio preprocessing --input` now accepts `--ref-flag-file PATH` and writes a bash-sourceable env file (`DRAKKAR_REF_FLAG=...`) containing the resolved drakkar reference flag: `-x <url>` if the genome entry has an indexed tarball (`GENOME_ENTRY_URL_INDEXED`), `-g <url>` if only the raw fasta is available (`GENOME_ENTRY_URL_RAW`), or an empty string if no reference is configured.
+- Generated `{batch}.sh` preprocessing scripts now source the `{batch}_ref.env` file produced by `ehio preprocessing --input` and pass `$DRAKKAR_REF_FLAG` to `drakkar preprocessing`, enabling transparent use of both raw (`-g`) and indexed (`-x`) reference genomes.
+
+### Changed
+
+- `write_sample_file` no longer accepts a `reference` parameter or writes a `reference` column to the sample TSV. The reference genome is now communicated to drakkar via a CLI flag (`-g`/`-x`) in the generated script rather than as a per-row TSV value.
 ## [0.1.4] - 2026-04-30
 
 ### Added

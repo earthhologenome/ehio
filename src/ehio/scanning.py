@@ -117,9 +117,11 @@ def build_script_content(
     )
 
     if module == "preprocessing":
+        ref_env_file = f"{run_dir}/{batch_name}_ref.env"
         return header + (
-            f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
-            f"drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}\n"
+            f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)} --ref-flag-file {q(ref_env_file)}\n"
+            f"source {q(ref_env_file)}\n"
+            f"drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)} $DRAKKAR_REF_FLAG\n"
         )
 
     if module == "binning":

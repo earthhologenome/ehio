@@ -38,33 +38,17 @@ class TestWriteSampleFile:
         assert rows[0]["rawreads2"] == "https://example.com/EHI00001_2.fq.gz"
         assert "reference" not in rows[0]
 
-    def test_columns_with_reference(self, tmp_path: Path):
-        out = tmp_path / "samples_ref.tsv"
-        n = write_sample_file(
-            ENTRY_RECORDS, out,
-            sample_field=self.SAMPLE_FIELD,
-            reads1_field=self.READS1_FIELD,
-            reads2_field=self.READS2_FIELD,
-            reference="https://example.com/ref.fna",
-        )
-        assert n == 2
-        rows = self._read_tsv(out)
-        assert rows[0]["reference"] == "https://example.com/ref.fna"
-        assert rows[1]["reference"] == "https://example.com/ref.fna"
-
-    def test_reference_applied_to_all_rows(self, tmp_path: Path):
-        """Every row should get the same batch-level reference string."""
-        out = tmp_path / "samples_ref.tsv"
+    def test_no_reference_column(self, tmp_path: Path):
+        """Reference genome is passed as a drakkar CLI flag, not a TSV column."""
+        out = tmp_path / "samples.tsv"
         write_sample_file(
             ENTRY_RECORDS, out,
             sample_field=self.SAMPLE_FIELD,
             reads1_field=self.READS1_FIELD,
             reads2_field=self.READS2_FIELD,
-            reference="/data/host/reference.fna",
         )
         rows = self._read_tsv(out)
-        refs = {r["reference"] for r in rows}
-        assert refs == {"/data/host/reference.fna"}
+        assert "reference" not in rows[0]
 
     def test_row_without_sample_id_is_skipped(self, tmp_path: Path):
         """Records missing the sample field should be silently dropped."""
