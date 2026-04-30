@@ -57,7 +57,7 @@ BATCH_RECORD = {
     "id": "recBATCH000001",
     "fields": {
         "fldeNHpDmJDinU1Uc": "PPR001",           # EHI_PPR_BATCH_CODE
-        "fldhFIPsoslCbCyfo": "ready",              # EHI_PPR_BATCH_STATUS
+        "fldhFIPsoslCbCyfo": "Ready",              # EHI_PPR_BATCH_STATUS
         "fldPte4nQtlSfen8B": "https://example.com/ref.fna",  # EHI_PPR_BATCH_REFERENCE
     },
 }

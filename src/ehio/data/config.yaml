@@ -151,7 +151,9 @@ MAG_DMB_OUTPUT_BASE: "/projects/ehi/data/DMB"
 RUN_BASE: "/projects/ehi/data/RUN"
 
 # ---- Scanning module ------------------------------------------------------
-SCANNING_TRIGGER_STATUS: "ready"     # Batch status value that triggers a launch
-SCANNING_LAUNCHED_STATUS: "running"  # Status written back to the batch record after launching
+SCANNING_TRIGGER_STATUS: "Ready"     # Batch status value that triggers a launch
+SCANNING_LAUNCHED_STATUS: "Running"  # Status written back to the batch record after launching
+PROCESSING_DONE_STATUS: "Done"       # Status written back to the batch record after output processing completes
+PROCESSING_ERROR_STATUS: "Error"     # Status written back to the batch record if drakkar fails
 
 DRAKKAR_PROFILE: "slurm"             # Drakkar workflow profile passed to every drakkar command

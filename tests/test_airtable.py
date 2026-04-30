@@ -137,11 +137,11 @@ class TestFetchPendingBatches:
         result = client.fetch_pending_batches(
             batch_table="tblPPR_BATCH",
             batch_status_field="fldhFIPsoslCbCyfo",
-            trigger_status="ready",
+            trigger_status="Ready",
         )
         assert result == [BATCH_RECORD]
         mock_api.table.return_value.all.assert_called_once_with(
-            formula='{fldhFIPsoslCbCyfo} = "ready"'
+            formula='{fldhFIPsoslCbCyfo} = "Ready"'
         )
 
 

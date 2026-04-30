@@ -249,6 +249,15 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         verbose=getattr(args, "verbose", False),
     )
     _info("Transfer complete.")
+
+    # Mark the batch as done
+    done_status       = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    batch_status_field = _require_cfg("EHI_PPR_BATCH_STATUS")
+    client.update_records(
+        batch_table,
+        [{"id": batch_record["id"], "fields": {batch_status_field: done_status}}],
+    )
+    _info(f"Batch '{args.batch}' status → '{done_status}'.")
     return 0
 
 
@@ -524,6 +533,30 @@ def _build_parser() -> argparse.ArgumentParser:
     p_scan.set_defaults(func=cmd_scanning)
 
     # ------------------------------------------------------------------
+    # set-status
+    # ------------------------------------------------------------------
+    p_ss = sub.add_parser(
+        "set-status",
+        help="Update the status of a batch record in Airtable.",
+        description=(
+            "Directly sets the status field of a batch record.\n"
+            "Called automatically by the .sh error trap on drakkar failure;\n"
+            "can also be used manually to correct a status."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    p_ss.add_argument("--module", "-m", required=True,
+        choices=["preprocessing", "binning", "quantifying"],
+        help="Module whose batch table to update.")
+    p_ss.add_argument("--batch", "-b", required=True, metavar="BATCH",
+        help="Batch code to look up.")
+    p_ss.add_argument("--status", "-s", required=True, metavar="STATUS",
+        help="New status value to write (e.g. Error, Done, Ready).")
+    p_ss.add_argument("--airtable-token", metavar="TOKEN",
+        help="Airtable personal access token. Overrides $AIRTABLE_TOKEN.")
+    p_ss.set_defaults(func=cmd_set_status)
+
+    # ------------------------------------------------------------------
     # config
     # ------------------------------------------------------------------
     p_cfg = sub.add_parser("config", help="View or edit the ehio config file.")
@@ -533,6 +566,41 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cfg.set_defaults(func=cmd_config)
 
     return parser
+
+
+# ---------------------------------------------------------------------------
+# set-status  (called from the .sh error trap, or manually)
+# ---------------------------------------------------------------------------
+
+_SET_STATUS_CFG = {
+    "preprocessing": ("EHI_BASE", "EHI_PPR_BATCH", "EHI_PPR_BATCH_CODE", "EHI_PPR_BATCH_STATUS"),
+    "binning":       ("EHI_BASE", "EHI_ASB_BATCH", "EHI_ASB_BATCH_CODE", "EHI_ASB_BATCH_STATUS"),
+    "quantifying":   ("MAG_BASE", "MAG_DMB_BATCH", "MAG_DMB_BATCH_CODE", "MAG_DMB_BATCH_STATUS"),
+}
+
+
+def cmd_set_status(args: argparse.Namespace) -> int:
+    from ehio.airtable import AirtableClient
+
+    base_cfg, table_cfg, code_cfg, status_cfg = _SET_STATUS_CFG[args.module]
+
+    token            = _resolve_token(args)
+    base_id          = _require_cfg(base_cfg)
+    batch_table      = _require_cfg(table_cfg)
+    batch_code_field = _require_cfg(code_cfg)
+    status_field     = _require_cfg(status_cfg)
+
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    if not batch_record:
+        _die(f"Batch '{args.batch}' not found in {batch_table}.")
+
+    client.update_records(
+        batch_table,
+        [{"id": batch_record["id"], "fields": {status_field: args.status}}],
+    )
+    _info(f"Batch '{args.batch}' status → '{args.status}'.")
+    return 0
 
 
 def cmd_scanning(args: argparse.Namespace) -> int:
