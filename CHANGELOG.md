@@ -9,11 +9,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.7] - 2026-04-30
+
+### Changed
+
+- Reference genome lookup now uses `EHI_GENOME` (synced table inside `EHI_BASE`) instead of the separate `GENOME_BASE` database. Config keys updated: `GENOME_BASE`/`GENOME_ENTRY`/`GENOME_ENTRY_URL_INDEXED`/`GENOME_ENTRY_URL_RAW` → `EHI_BASE`/`EHI_GENOME`/`EHI_GENOME_URL_INDEXED`/`EHI_GENOME_URL_RAW`.
+- `ehio scanning --dry-run -v` now prints step-by-step diagnostics for reference genome resolution, with explicit warnings when the linked record ID, genome record, or URL fields cannot be resolved.
 ## [0.1.6] - 2026-04-30
 
 ### Changed
 
 - Reference genome resolution for preprocessing is now performed at scan time (when the batch record is already fetched) and the flag is hardwired directly into the generated `{batch}.sh` script as `-x <url>` (indexed tarball) or `-g <url>` (raw fasta). Removes the `{batch}_ref.env` file, the `source` call, and `$DRAKKAR_REF_FLAG` indirection introduced in 0.1.5.
+
 ## [0.1.5] - 2026-04-30
 
 ### Added
