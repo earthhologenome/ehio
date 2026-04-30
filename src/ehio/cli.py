@@ -565,6 +565,22 @@ def _build_parser() -> argparse.ArgumentParser:
     cfg_group.add_argument("--edit", action="store_true", help="Open the config file in a terminal editor.")
     p_cfg.set_defaults(func=cmd_config)
 
+    # ------------------------------------------------------------------
+    # update
+    # ------------------------------------------------------------------
+    p_upd = sub.add_parser(
+        "update",
+        help="Update ehio to the latest version from GitHub.",
+        description="Reinstalls ehio from the main branch on GitHub using pip.",
+    )
+    p_upd.add_argument(
+        "--repo",
+        default="https://github.com/earthhologenome/ehio.git",
+        metavar="URL",
+        help="Git repository URL to install from. Default: GitHub main branch.",
+    )
+    p_upd.set_defaults(func=cmd_update)
+
     return parser
 
 
@@ -628,6 +644,20 @@ def cmd_config(args: argparse.Namespace) -> int:
     if args.view:
         return cfg.view_config()
     return cfg.edit_config()
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    import subprocess
+    print(f"Current version: ehio {__version__}")
+    print(f"Installing latest from {args.repo} ...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--force-reinstall", f"git+{args.repo}"],
+        check=False,
+    )
+    if result.returncode != 0:
+        _die("Update failed. Check the output above for details.")
+    print("Update complete. Run 'ehio --version' to confirm the new version.")
+    return 0
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.4] - 2026-04-30
+
+### Added
+
+- `ehio update` command: reinstalls ehio from GitHub using `pip install --force-reinstall git+<repo>`. Accepts `--repo` to target a fork or branch.
 ## [0.1.3] - 2026-04-30
 
 ### Fixed
