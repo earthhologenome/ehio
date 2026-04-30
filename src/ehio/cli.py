@@ -139,7 +139,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         build_entry_update,
         PREPROCESSING_METRIC_KEYS,
     )
-    from ehio.transfer import upload_with_lftp
+    from ehio.transfer import SFTPTransfer
 
     token       = _resolve_token(args)
     base_id     = _require_cfg("EHI_BASE")
@@ -209,16 +209,9 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     remote_dir = f"{remote_base.rstrip('/')}/PPR/{args.batch}"
 
     _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
-    upload_with_lftp(
-        local_dir=final_dir,
-        remote_dir=remote_dir,
-        host=host,
-        user=user,
-        port=port,
-        identity=identity,
-        verbose=getattr(args, "verbose", False),
-    )
-    _info("Transfer complete.")
+    with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+        n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
+    _info(f"Transferred {n} file(s) to {remote_dir}.")
 
     # Collect version metadata for the batch record
     batch_fields: dict = {}

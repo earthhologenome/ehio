@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.18] - 2026-04-30
+
+### Changed
+
+- File transfer in `ehio preprocessing --output` now uses `paramiko` (already a declared pip dependency) instead of `lftp`, removing the requirement for lftp to be installed on the system.
+- `launch_screen` now forwards `AIRTABLE_TOKEN` into the screen session's environment when the token was supplied via `--airtable-token`, so the generated script's `ehio preprocessing --input` and `--output` calls inherit it without requiring it to be pre-exported in the shell.
 ## [0.1.17] - 2026-04-30
 
 ### Added

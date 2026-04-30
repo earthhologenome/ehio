@@ -64,9 +64,13 @@ def session_exists(name: str) -> bool:
     return bool(re.search(rf"\d+\.{re.escape(name)}(\t| )", result.stdout))
 
 
-def launch_screen(session_name: str, script_path: str) -> None:
+def launch_screen(session_name: str, script_path: str, token: str = "") -> None:
+    env = {**os.environ}
+    if token:
+        env["AIRTABLE_TOKEN"] = token
     subprocess.run(
         ["screen", "-dmS", session_name, "bash", script_path],
+        env=env,
         check=True,
     )
 
@@ -401,7 +405,7 @@ def scan_module(
         script_path.write_text(script_content, encoding="utf-8")
         script_path.chmod(0o755)
 
-        launch_screen(batch_name, str(script_path))
+        launch_screen(batch_name, str(script_path), token=token)
         client.update_records(
             batch_table,
             [{"id": record["id"], "fields": {batch_status_field: launched_status}}],
