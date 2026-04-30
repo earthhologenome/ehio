@@ -168,6 +168,7 @@ def build_script_content(
     profile: str,
     error_status: str = "Error",
     ref_flag: str = "",
+    conda_env: str = "",
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -187,6 +188,18 @@ def build_script_content(
 
     tsv_file = f"{run_dir}/{batch_name}.tsv"
 
+    out_file = f"{run_dir}/{batch_name}.out"
+    err_file = f"{run_dir}/{batch_name}.err"
+
+    conda_block = ""
+    if conda_env:
+        conda_block = (
+            'if [ -f "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh" ]; then\n'
+            '    source "$(conda info --base)/etc/profile.d/conda.sh"\n'
+            f"    conda activate {shlex.quote(conda_env)}\n"
+            "fi\n"
+        )
+
     header = (
         "#!/usr/bin/env bash\n"
         f"# ehio-generated script — batch {batch_name} ({module})\n"
@@ -194,7 +207,9 @@ def build_script_content(
         "# AIRTABLE_TOKEN must be exported in the environment before launching.\n"
         "\n"
         "set -euo pipefail\n"
+        f"exec >> {q(out_file)} 2>> {q(err_file)}\n"
         "\n"
+        + conda_block +
         "_on_error() {\n"
         f"    ehio set-status --module {module} --batch {q(batch_name)} --status {q(error_status)}\n"
         "}\n"
@@ -279,6 +294,7 @@ def scan_module(
     launched_status    = cfg.get("SCANNING_LAUNCHED_STATUS", "Running").strip()
     error_status       = cfg.get("PROCESSING_ERROR_STATUS", "Error").strip()
     profile            = cfg.get("DRAKKAR_PROFILE", "slurm").strip()
+    conda_env          = cfg.get("DRAKKAR_CONDA_ENV", "").strip()
 
     if not all([base_id, batch_table, batch_code_field, batch_status_field, output_base, run_base]):
         if verbose:
@@ -330,6 +346,7 @@ def scan_module(
 
         script_content = build_script_content(
             module, batch_name, run_dir, output_dir, profile, error_status, ref_flag,
+            conda_env=conda_env,
         )
 
         if dry_run:

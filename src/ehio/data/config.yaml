@@ -155,3 +155,4 @@ PROCESSING_DONE_STATUS: "Done"       # Status written back to the batch record a
 PROCESSING_ERROR_STATUS: "Error"     # Status written back to the batch record if drakkar fails
 
 DRAKKAR_PROFILE: "slurm"             # Drakkar workflow profile passed to every drakkar command
+DRAKKAR_CONDA_ENV: "/projects/alberdilab/data/environments/conda/drakkar"         # Conda environment that provides the drakkar command (leave empty to skip activation)
