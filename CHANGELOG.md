@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.11] - 2026-04-30
+
+### Added
+
+- `DRAKKAR_CONDA_ENV` config key: if set, generated `{batch}.sh` scripts source the conda profile and activate the named environment before running `ehio` or `drakkar`, so screen sessions launched from a plain shell can still find the drakkar command.
 ## [0.1.10] - 2026-04-30
 
 ### Changed
