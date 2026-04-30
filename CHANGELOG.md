@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.8] - 2026-04-30
+
+### Fixed
+
+- Reference genome resolution now handles both a "Link to another record" field (returns a `rec...` ID, fetched directly) and a plain text/formula field containing a genome code such as `G0001` (looked up by `EHI_GENOME_CODE`). Previously, only linked-record IDs were supported and a genome code silently produced no flag.
 ## [0.1.7] - 2026-04-30
 
 ### Changed
