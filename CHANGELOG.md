@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.9] - 2026-04-30
+
+### Changed
+
+- `scan_module` now always prints the resolved reference flag (or `(no reference)`) for every preprocessing batch regardless of `--verbose`, making it immediately visible in standard scan output whether the flag was resolved or not.
 ## [0.1.8] - 2026-04-30
 
 ### Fixed
