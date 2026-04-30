@@ -34,8 +34,8 @@ class TestWriteSampleFile:
         assert n == 2
         rows = self._read_tsv(out)
         assert rows[0]["sample"] == "EHI00001"
-        assert rows[0]["reads1"] == "https://example.com/EHI00001_1.fq.gz"
-        assert rows[0]["reads2"] == "https://example.com/EHI00001_2.fq.gz"
+        assert rows[0]["rawreads1"] == "https://example.com/EHI00001_1.fq.gz"
+        assert rows[0]["rawreads2"] == "https://example.com/EHI00001_2.fq.gz"
         assert "reference" not in rows[0]
 
     def test_columns_with_reference(self, tmp_path: Path):
@@ -119,7 +119,24 @@ class TestWriteSampleFile:
         )
         assert n == 0
         lines = out.read_text().splitlines()
-        assert lines[0] == "sample\treads1\treads2"
+        assert lines[0] == "sample\trawreads1\trawreads2"
+
+    def test_list_field_values_are_unwrapped(self, tmp_path: Path):
+        """Airtable URL fields may be returned as a single-element list; extract the string."""
+        records = [{"id": "recZ", "fields": {
+            self.SAMPLE_FIELD: "EHI00099",
+            self.READS1_FIELD: ["https://example.com/EHI00099_1.fq.gz"],
+            self.READS2_FIELD: ["https://example.com/EHI00099_2.fq.gz"],
+        }}]
+        out = tmp_path / "samples.tsv"
+        write_sample_file(records, out,
+            sample_field=self.SAMPLE_FIELD,
+            reads1_field=self.READS1_FIELD,
+            reads2_field=self.READS2_FIELD,
+        )
+        rows = self._read_tsv(out)
+        assert rows[0]["rawreads1"] == "https://example.com/EHI00099_1.fq.gz"
+        assert rows[0]["rawreads2"] == "https://example.com/EHI00099_2.fq.gz"
 
     def test_tab_delimiter(self, tmp_path: Path):
         out = tmp_path / "samples.tsv"

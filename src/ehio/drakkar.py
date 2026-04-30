@@ -17,23 +17,29 @@ def write_sample_file(
 ) -> int:
     """Write a drakkar sample info TSV (used by preprocessing and binning).
 
-    Columns: sample, reads1, reads2[, reference]
+    Columns: sample, rawreads1, rawreads2[, reference]
     `reference` is a batch-level string applied to every row.
     Returns the number of rows written.
     """
-    columns = ["sample", "reads1", "reads2"]
+    columns = ["sample", "rawreads1", "rawreads2"]
     if reference:
         columns.append("reference")
+
+    def _str(value: object) -> str:
+        """Return a plain string from a field value that may be a list."""
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        return str(value).strip()
 
     rows = []
     for rec in records:
         fields = rec.get("fields", rec)
-        sample = str(fields.get(sample_field, "")).strip()
-        reads1 = str(fields.get(reads1_field, "")).strip()
-        reads2 = str(fields.get(reads2_field, "")).strip()
-        if not sample or not reads1:
+        sample  = _str(fields.get(sample_field,  ""))
+        rawreads1 = _str(fields.get(reads1_field, ""))
+        rawreads2 = _str(fields.get(reads2_field, ""))
+        if not sample or not rawreads1:
             continue
-        row: dict[str, str] = {"sample": sample, "reads1": reads1, "reads2": reads2}
+        row: dict[str, str] = {"sample": sample, "rawreads1": rawreads1, "rawreads2": rawreads2}
         if reference:
             row["reference"] = reference
         rows.append(row)

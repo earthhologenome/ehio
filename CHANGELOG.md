@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.3] - 2026-04-30
+
+### Fixed
+
+- `write_sample_file` now writes columns `rawreads1`/`rawreads2` (was `reads1`/`reads2`) to match the drakkar input spec.
+- `write_sample_file` now unwraps single-element lists in URL fields returned by the Airtable API, writing a plain URL string instead of a Python list literal.
 ## [0.1.2] - 2026-04-30
 
 ### Fixed
