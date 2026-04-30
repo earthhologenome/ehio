@@ -299,6 +299,8 @@ def scan_module(
     output_base        = cfg.get(_OUTPUT_BASE_CFG[module], "").strip()
     run_base           = cfg.get(_RUN_BASE_CFG, "").strip()
     trigger_status     = cfg.get("SCANNING_TRIGGER_STATUS", "Ready").strip()
+    resume_status      = cfg.get("SCANNING_RESUME_STATUS",  "Resume").strip()
+    rerun_status       = cfg.get("SCANNING_RERUN_STATUS",   "Rerun").strip()
     launched_status    = cfg.get("SCANNING_LAUNCHED_STATUS", "Running").strip()
     error_status       = cfg.get("PROCESSING_ERROR_STATUS", "Error").strip()
     profile            = cfg.get("DRAKKAR_PROFILE", "slurm").strip()
@@ -322,16 +324,25 @@ def scan_module(
         return 0, 0
 
     client = AirtableClient(api_key=token, base_id=base_id)
-    pending = client.fetch_pending_batches(
-        batch_table=batch_table,
-        batch_status_field=batch_status_field,
-        trigger_status=trigger_status,
+
+    def _fetch(status: str) -> list:
+        return client.fetch_pending_batches(
+            batch_table=batch_table,
+            batch_status_field=batch_status_field,
+            trigger_status=status,
+        ) if status else []
+
+    # (record, do_rerun)
+    pending: list[tuple[dict, bool]] = (
+        [(r, False) for r in _fetch(trigger_status)]
+        + [(r, False) for r in _fetch(resume_status)]
+        + [(r, True)  for r in _fetch(rerun_status)]
     )
 
     found    = len(pending)
     launched = 0
 
-    for record in pending:
+    for record, do_rerun in pending:
         batch_name = str(record.get("fields", {}).get(batch_code_field, "")).strip()
         if not batch_name:
             continue
@@ -358,6 +369,12 @@ def scan_module(
             ehio_conda_env=ehio_conda_env,
             drakkar_conda_env=drakkar_conda_env,
         )
+
+        if do_rerun:
+            for _d in (run_dir, output_dir):
+                if Path(_d).exists():
+                    shutil.rmtree(_d)
+                    print(f"  [{module}] {batch_name}: deleted {_d}", file=sys.stderr)
 
         if dry_run:
             # Write the script and generate the input TSV, but do not launch

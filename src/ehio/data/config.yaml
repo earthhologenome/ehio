@@ -31,7 +31,7 @@ EHI_PPR_BATCH_CODE: "fldeNHpDmJDinU1Uc"  # Field in EHI_PPR_BATCH with the batch
 EHI_PPR_BATCH_DATE: "fldeREiHHPmtwY3Qp" # Field in EHI_PPR_BATCH with the batch date (for logging)
 EHI_PPR_BATCH_STATUS: "fldhFIPsoslCbCyfo" # Field in EHI_PPR_BATCH with the batch status (for scanning and logging)
 EHI_PPR_BATCH_REFERENCE: "fldPte4nQtlSfen8B"  # Field in EHI_PPR_BATCH with the host reference genome URL (leave empty if unused)
-EHI_PPR_BATCH_EHIO_VERSION: "fldQXFuzvLSpM9BIQ" # Field in EHI_PPR_BATCH with the ehio version used for preprocessing (for logging)
+EHI_PPR_BATCH_EHIO_VERSION: "fld6h9dtLWrLIdxHk" # Field in EHI_PPR_BATCH with the ehio version used for preprocessing (for logging)
 EHI_PPR_BATCH_DRAKKAR_VERSION: "fldQXFuzvLSpM9BIQ" # Field in EHI_PPR_BATCH with the drakkar version used for preprocessing (for logging)
 
 EHI_PPR_ENTRY_ID: "fld9c9LFKKxKSKJ1U"  # Field in EHI_PPR_ENTRY with the entry record ID (for logging)
@@ -152,6 +152,8 @@ RUN_BASE: "/projects/ehi/data/RUN"
 
 # ---- Scanning module ------------------------------------------------------
 SCANNING_TRIGGER_STATUS: "Ready"     # Batch status value that triggers a launch
+SCANNING_RESUME_STATUS: "Resume"     # Same as Ready — signals an error was fixed and the job should continue from the Snakemake checkpoint
+SCANNING_RERUN_STATUS: "Rerun"       # Deletes the run and output directories and starts from scratch
 SCANNING_LAUNCHED_STATUS: "Running"  # Status written back to the batch record after launching
 PROCESSING_DONE_STATUS: "Done"       # Status written back to the batch record after output processing completes
 PROCESSING_ERROR_STATUS: "Error"     # Status written back to the batch record if drakkar fails

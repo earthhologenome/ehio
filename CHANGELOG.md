@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.17] - 2026-04-30
+
+### Added
+
+- `SCANNING_RESUME_STATUS` config key (default `"Resume"`): behaves identically to `"Ready"` — Snakemake resumes from its checkpoint. Intended as a human-readable signal in Airtable that an error was fixed.
+- `SCANNING_RERUN_STATUS` config key (default `"Rerun"`): deletes both the run directory and the output directory before relaunching, forcing a full clean restart from scratch.
 ## [0.1.16] - 2026-04-30
 
 ### Added
