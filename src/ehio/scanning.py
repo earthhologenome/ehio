@@ -75,7 +75,7 @@ def launch_screen(session_name: str, script_path: str) -> None:
 # Script builder
 # ---------------------------------------------------------------------------
 
-def _resolve_preprocessing_ref_flag(batch_record: dict, token: str) -> str:
+def _resolve_preprocessing_ref_flag(batch_record: dict, token: str, verbose: bool = False) -> str:
     """Return the drakkar reference flag for a preprocessing batch.
 
     Checks GENOME_ENTRY_URL_INDEXED first (-x, indexed tarball), then
@@ -84,38 +84,79 @@ def _resolve_preprocessing_ref_flag(batch_record: dict, token: str) -> str:
     """
     from ehio.airtable import AirtableClient
 
-    batch_ref_field    = cfg.get("EHI_PPR_BATCH_REFERENCE",    "").strip()
-    genome_base_id     = cfg.get("GENOME_BASE",                 "").strip()
-    genome_table       = cfg.get("GENOME_ENTRY",                "").strip()
-    genome_indexed_fld = cfg.get("GENOME_ENTRY_URL_INDEXED",    "").strip()
-    genome_raw_fld     = cfg.get("GENOME_ENTRY_URL_RAW",        "").strip()
+    def _dbg(msg: str) -> None:
+        if verbose:
+            print(f"    [ref] {msg}", file=sys.stderr)
+
+    batch_ref_field    = str(cfg.get("EHI_PPR_BATCH_REFERENCE")  or "").strip()
+    ehi_base_id        = str(cfg.get("EHI_BASE")                  or "").strip()
+    genome_table       = str(cfg.get("EHI_GENOME")                or "").strip()
+    genome_indexed_fld = str(cfg.get("EHI_GENOME_URL_INDEXED")    or "").strip()
+    genome_raw_fld     = str(cfg.get("EHI_GENOME_URL_RAW")        or "").strip()
 
     if not batch_ref_field:
+        _dbg("EHI_PPR_BATCH_REFERENCE not configured — no reference flag.")
         return ""
 
     ref_value = batch_record.get("fields", {}).get(batch_ref_field)
+    _dbg(f"EHI_PPR_BATCH_REFERENCE field ({batch_ref_field}) raw value: {ref_value!r}")
+
     if isinstance(ref_value, list):
         ref_value = ref_value[0] if ref_value else None
     if not ref_value:
+        _dbg("Reference field is empty — no reference flag.")
         return ""
 
     ref_rec_id = str(ref_value).strip()
-    if not ref_rec_id.startswith("rec") or not (genome_base_id and genome_table):
+    _dbg(f"Resolved reference value: {ref_rec_id!r}")
+
+    if not (ehi_base_id and genome_table):
+        print("    [ref] WARNING: EHI_BASE or EHI_GENOME not configured.", file=sys.stderr)
         return ""
 
-    genome_client = AirtableClient(api_key=token, base_id=genome_base_id)
-    genome_rec = genome_client.fetch_record_by_id(genome_table, ref_rec_id)
+    genome_client = AirtableClient(api_key=token, base_id=ehi_base_id)
+
+    if ref_rec_id.startswith("rec"):
+        # Linked-record field — fetch the genome record directly by its record ID.
+        _dbg(f"Looking up genome record by ID: {ref_rec_id}")
+        genome_rec = genome_client.fetch_record_by_id(genome_table, ref_rec_id)
+    else:
+        # Text/formula field containing the genome code (e.g. "G0001") — search by code.
+        genome_code_fld = str(cfg.get("EHI_GENOME_CODE") or "").strip()
+        _dbg(f"Looking up genome record by code: {ref_rec_id!r} in field {genome_code_fld}")
+        if not genome_code_fld:
+            print("    [ref] WARNING: EHI_GENOME_CODE not configured.", file=sys.stderr)
+            return ""
+        formula = f'{{{genome_code_fld}}} = "{ref_rec_id}"'
+        records = genome_client._table(genome_table).all(formula=formula)
+        genome_rec = records[0] if records else None
+
     if not genome_rec:
+        print(
+            f"    [ref] WARNING: genome record {ref_rec_id!r} not found in "
+            f"EHI_GENOME ({genome_table}).",
+            file=sys.stderr,
+        )
         return ""
 
     genome_fields = genome_rec.get("fields", {})
     indexed_url = str(genome_fields.get(genome_indexed_fld, "") or "").strip()
     raw_url     = str(genome_fields.get(genome_raw_fld,     "") or "").strip()
+    _dbg(f"EHI_GENOME_URL_INDEXED ({genome_indexed_fld}): {indexed_url!r}")
+    _dbg(f"EHI_GENOME_URL_RAW     ({genome_raw_fld}):     {raw_url!r}")
 
     if indexed_url:
+        _dbg(f"Using indexed reference: -x {indexed_url}")
         return f"-x {shlex.quote(indexed_url)}"
     if raw_url:
+        _dbg(f"Using raw reference: -g {raw_url}")
         return f"-g {shlex.quote(raw_url)}"
+
+    print(
+        f"    [ref] WARNING: genome record {ref_rec_id!r} found but both "
+        "EHI_GENOME_URL_INDEXED and EHI_GENOME_URL_RAW are empty.",
+        file=sys.stderr,
+    )
     return ""
 
 
@@ -283,7 +324,9 @@ def scan_module(
 
         ref_flag = ""
         if module == "preprocessing":
-            ref_flag = _resolve_preprocessing_ref_flag(record, token)
+            ref_flag = _resolve_preprocessing_ref_flag(record, token, verbose=verbose)
+            ref_desc = ref_flag if ref_flag else "(no reference)"
+            print(f"  [{module}] {batch_name}: reference flag → {ref_desc}", file=sys.stderr)
 
         script_content = build_script_content(
             module, batch_name, run_dir, output_dir, profile, error_status, ref_flag,

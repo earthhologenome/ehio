@@ -13,16 +13,14 @@
 
 EHI_BASE:    "appQpr6MxnaiVHsHy"   # EHI database
 MAG_BASE:    "appWbHBNLE6iAsMRV"   # MAG database
-GENOME_BASE: "app6ADWyLxBkDcqYX"   # Genome database
 
 EHI_PPR_BATCH:  "tbl1l5mAkF9nVtisn"  # Preprocessing batch table (EHI_BASE)
 EHI_PPR_ENTRY:  "tblJfLRU2FIVz37Y1"  # Preprocessing entry table (EHI_BASE)
 EHI_ASB_BATCH:  "tbld5JHhN4cM9P5ka"  # Assembly/binning batch table (EHI_BASE)
 EHI_ASB_ENTRY:  "tblG6ZIvkYN844I97"  # Assembly/binning entry table (EHI_BASE)
-MAG_ENTRY:      "tblMzd3oyaJhdeQcs"  # MAG table (MAG_BASE)
+EHI_GENOME:     "tbl7QOk2HKrZatIfG"  # MAG table (MAG_BASE)
 MAG_DMB_BATCH:  "tblvPsCiNanM7NeQp"  # Dereplication/mapping batch table (MAG_BASE)
 MAG_DMB_ENTRY:  "tblWDyQmM9rQ9wq57"  # Dereplication/mapping entry table (MAG_BASE)
-GENOME_ENTRY:   "tbl1t5vnst50DjT9A"  # Genome entry table (GENOME_BASE)
 
 # ---- Preprocessing module -------------------------------------------------
 # Input: fetch raw reads from EHI_PPR_ENTRY, write a drakkar sample file
@@ -55,11 +53,11 @@ EHI_PPR_ENTRY_NONPAREIL_MODELR: "fldL68iMkAgg37klM" # Field in EHI_PPR_ENTRY wit
 EHI_PPR_ENTRY_NONPAREIL_LRSTAR: "fldD7bxg9zjsytjnO" # Field in EHI_PPR_ENTRY with the Nonpareil LR* of the preprocessed reads (for logging)
 EHI_PPR_ENTRY_NONPAREIL_DIVERSITY: "fldkf6rvVabQI0bcK" # Field in EHI_PPR_ENTRY with the Nonpareil diversity of the preprocessed reads (for logging)
 
-GENOME_ENTRY_ID: "fldVwR56u27AV91cC" # Field in GENOME_ENTRY with the genome entry record ID (for processing and logging)
-GENOME_ENTRY_CODE: "fldFm6xrXeC1Gbs3T" # Field in GENOME_ENTRY with the genome entry code (primary key, for logging)
-GENOME_ENTRY_INDEX_STATUS: "fldLbMhCwARPB131W" # Field in GENOME_ENTRY with the genome indexing status (for scanning and logging)
-GENOME_ENTRY_URL_INDEXED: "fldLP9VbwKoYczUAh" # Field in GENOME_ENTRY with the indexed genome file (tarball containing all files) URL (for processing)
-GENOME_ENTRY_URL_RAW: "fldpMNue0LB0Sf4bv" # Field in GENOME_ENTRY with the genome file URL (for processing)
+EHI_GENOME_ID: "fldcZWcu2ybJobGO4" # Field in  EHI_GENOME with the MAG record ID (for logging)
+EHI_GENOME_CODE: "fldNRG6HScrWuDn5i" # Field in  EHI_GENOME with the MAG code (primary key, for logging)
+EHI_GENOME_INDEX_STATUS: "fldZRnO9nA3DfJ4iL" # Field in  EHI_GENOME with the genome indexing status (for processing and logging) 
+EHI_GENOME_URL_INDEXED: "fldWXsYf6OlpWxUUQ" # Field in  EHI_GENOME with the URL or path to the indexed genome, tar.gz (for processing and logging)
+EHI_GENOME_URL_RAW: "fldZ6V4yVA4dPtsIJ" # Field in  EHI_GENOME with the URL or path to the raw genome assembly, fna.gz (for logging)
 
 # ---- Binning module -------------------------------------------------------
 # Input: fetch preprocessed reads from EHI_ASB_ENTRY, write a drakkar sample file
