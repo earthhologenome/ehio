@@ -133,7 +133,7 @@ def main() -> int:
         run_command([sys.executable, "-m", "twine", "check", "dist/*"], shell=True)
 
     if plan.run_git:
-        run_command(["git", "add"] + changed_files)
+        run_command(["git", "add", "-u"])
         run_command(["git", "commit", "-m", f"Release v{plan.version}"])
         run_command(["git", "tag", f"v{plan.version}"])
         run_command(["git", "push", "origin", "main"])
@@ -258,12 +258,13 @@ def print_release_plan(plan: ReleasePlan, changed_files: list[str]) -> None:
     print(f"  run_build: {plan.run_build}")
     print(f"  run_twine_check: {plan.run_twine_check}")
     print(f"  run_git: {plan.run_git}")
-    print("  files_to_update:")
+    print("  version_files_updated:")
     if changed_files:
         for path in changed_files:
             print(f"    - {path}")
     else:
         print("    - none")
+    print("  note: all tracked modifications will be staged (git add -u)")
 
 
 if __name__ == "__main__":

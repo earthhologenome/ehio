@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.12] - 2026-04-30
+
+### Changed
+
+- `scripts/release.py` now stages all tracked modifications with `git add -u` instead of only the three version-metadata files, so source code changes are always included in the release commit.
 ## [0.1.11] - 2026-04-30
 
 ### Added
