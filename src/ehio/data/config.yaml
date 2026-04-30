@@ -160,5 +160,7 @@ PROCESSING_ERROR_STATUS: "Error"     # Status written back to the batch record i
 CLEANUP_OUTPUT_DIR: "true"           # Delete the output directory (PPR/ASB/DMB batch folder) after successful transfer (true/false)
 
 DRAKKAR_PROFILE: "slurm"             # Drakkar workflow profile passed to every drakkar command
+DRAKKAR_PPR_FRACTION: "true"         # Pass --fraction to drakkar preprocessing (run SingleM microbial fraction)
+DRAKKAR_PPR_NONPAREIL: "true"        # Pass --nonpareil to drakkar preprocessing (run Nonpareil coverage estimation)
 EHIO_CONDA_ENV: "/projects/alberdilab/data/environments/conda/ehio"              # Conda environment that provides the ehio command (leave empty to skip activation)
 DRAKKAR_CONDA_ENV: "/projects/alberdilab/data/environments/conda/drakkar"        # Conda environment that provides the drakkar command (leave empty to skip activation)

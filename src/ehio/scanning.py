@@ -174,6 +174,8 @@ def build_script_content(
     ref_flag: str = "",
     ehio_conda_env: str = "",
     drakkar_conda_env: str = "",
+    ppr_fraction: bool = False,
+    ppr_nonpareil: bool = False,
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -219,6 +221,9 @@ def build_script_content(
         "\n"
         "set -euo pipefail\n"
         f"exec >> {q(out_file)} 2>> {q(err_file)}\n"
+        'echo ""\n'
+        'echo "=== $(date \'+%Y-%m-%d %H:%M:%S\') ==="\n'
+        'echo "=== $(date \'+%Y-%m-%d %H:%M:%S\') ===" >&2\n'
         "\n"
         + conda_block +
         "_on_error() {\n"
@@ -230,10 +235,12 @@ def build_script_content(
     )
 
     if module == "preprocessing":
-        ref_part = f" {ref_flag}" if ref_flag else ""
+        ref_part      = f" {ref_flag}" if ref_flag else ""
+        fraction_part = " --fraction"  if ppr_fraction  else ""
+        nonpareil_part = " --nonpareil" if ppr_nonpareil else ""
         return header + (
             f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
-            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}\n"
+            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}{fraction_part}{nonpareil_part}\n"
             f"ehio preprocessing --output -b {q(batch_name)} -l {q(output_dir)}\n"
         )
 
@@ -311,6 +318,12 @@ def scan_module(
     ehio_conda_env     = cfg.get("EHIO_CONDA_ENV", "").strip()
     drakkar_conda_env  = cfg.get("DRAKKAR_CONDA_ENV", "").strip()
 
+    def _bool_cfg(key: str) -> bool:
+        return str(cfg.get(key) or "false").strip().lower() not in ("false", "0", "no", "")
+
+    ppr_fraction  = _bool_cfg("DRAKKAR_PPR_FRACTION")
+    ppr_nonpareil = _bool_cfg("DRAKKAR_PPR_NONPAREIL")
+
     if not all([base_id, batch_table, batch_code_field, batch_status_field, output_base, run_base]):
         if verbose:
             missing = [k for k, v in {
@@ -372,6 +385,8 @@ def scan_module(
             module, batch_name, run_dir, output_dir, profile, error_status, ref_flag,
             ehio_conda_env=ehio_conda_env,
             drakkar_conda_env=drakkar_conda_env,
+            ppr_fraction=ppr_fraction,
+            ppr_nonpareil=ppr_nonpareil,
         )
 
         if do_rerun:

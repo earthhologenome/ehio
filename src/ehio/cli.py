@@ -253,8 +253,11 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         else:
             _cmd = ["drakkar", "--version"]
         try:
+            import re as _re
             _res = _sp.run(_cmd, capture_output=True, text=True, timeout=30)
-            drakkar_version = (_res.stdout.strip() or _res.stderr.strip() or "unknown")
+            _raw = _res.stdout.strip() or _res.stderr.strip() or ""
+            _m = _re.search(r"(\d+\.\d+[\.\d]*)", _raw)
+            drakkar_version = _m.group(1) if _m else (_raw or "unknown")
         except Exception:
             drakkar_version = "unknown"
         batch_fields[drakkar_version_field] = drakkar_version

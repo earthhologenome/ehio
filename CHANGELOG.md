@@ -9,6 +9,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.20] - 2026-04-30
+
+### Added
+
+- `DRAKKAR_PPR_FRACTION` config key (default `true`): passes `--fraction` to `drakkar preprocessing` to run SingleM microbial fraction estimation.
+- `DRAKKAR_PPR_NONPAREIL` config key (default `true`): passes `--nonpareil` to `drakkar preprocessing` to run Nonpareil coverage estimation.
+
+### Fixed
+
+- Drakkar version stored in Airtable now contains only the version number (e.g. `1.2.1`) instead of the full `drakkar 1.2.1` string.
+- `.out` and `.err` log files in `RUN/{batch}/` now include a `=== YYYY-MM-DD HH:MM:SS ===` timestamp separator at the start of each attempt, making it easy to distinguish output from successive runs.
 ## [0.1.19] - 2026-04-30
 
 ### Added
