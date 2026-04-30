@@ -157,6 +157,7 @@ SCANNING_RERUN_STATUS: "Rerun"       # Deletes the run and output directories an
 SCANNING_LAUNCHED_STATUS: "Running"  # Status written back to the batch record after launching
 PROCESSING_DONE_STATUS: "Done"       # Status written back to the batch record after output processing completes
 PROCESSING_ERROR_STATUS: "Error"     # Status written back to the batch record if drakkar fails
+CLEANUP_OUTPUT_DIR: "true"           # Delete the output directory (PPR/ASB/DMB batch folder) after successful transfer (true/false)
 
 DRAKKAR_PROFILE: "slurm"             # Drakkar workflow profile passed to every drakkar command
 EHIO_CONDA_ENV: "/projects/alberdilab/data/environments/conda/ehio"              # Conda environment that provides the ehio command (leave empty to skip activation)

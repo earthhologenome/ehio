@@ -8,6 +8,26 @@ import sys
 from pathlib import Path
 from typing import Any
 
+OUTPUT_TSV_COLUMNS: list[str] = [
+    "sample",
+    "reads_pre_fastp",
+    "bases_pre_fastp",
+    "adapter_trimmed_reads",
+    "adapter_trimmed_bases",
+    "reads_post_fastp",
+    "bases_post_fastp",
+    "host_reads",
+    "host_bases",
+    "metagenomic_reads",
+    "metagenomic_bases",
+    "singlem_fraction",
+    "nonpareil_C",
+    "nonpareil_LR",
+    "nonpareil_modelR",
+    "nonpareil_LRstar",
+    "nonpareil_diversity",
+]
+
 
 # ---------------------------------------------------------------------------
 # Per-file parsers
@@ -181,6 +201,32 @@ def build_entry_update(
         if value is not None:
             fields[field_id] = value
     return {"id": record_id, "fields": fields}
+
+
+def write_output_tsv(
+    sample_metrics: dict[str, dict[str, Any]],
+    tsv_path: Path,
+) -> None:
+    """Write a per-sample summary TSV to tsv_path.
+
+    sample_metrics: {sample_code: metrics_dict} as returned by
+    collect_preprocessing_metadata.  host_reads / host_bases are derived
+    here as (reads_post_fastp - metagenomic_reads) etc.
+    """
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    with tsv_path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=OUTPUT_TSV_COLUMNS, delimiter="\t",
+                                extrasaction="ignore")
+        writer.writeheader()
+        for sample, m in sample_metrics.items():
+            row = {"sample": sample, **m}
+            rp = m.get("reads_post_fastp")
+            mr = m.get("metagenomic_reads")
+            bp = m.get("bases_post_fastp")
+            mb = m.get("metagenomic_bases")
+            row["host_reads"] = (rp - mr) if (rp is not None and mr is not None) else None
+            row["host_bases"] = (bp - mb) if (bp is not None and mb is not None) else None
+            writer.writerow(row)
 
 
 # Default mapping: metric key → config key (resolved to field IDs at call time)

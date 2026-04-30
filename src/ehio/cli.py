@@ -137,6 +137,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     from ehio.metadata import (
         collect_preprocessing_metadata,
         build_entry_update,
+        write_output_tsv,
         PREPROCESSING_METRIC_KEYS,
     )
     from ehio.transfer import SFTPTransfer
@@ -176,16 +177,26 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         if fld_id:
             field_map[metric_key] = fld_id
 
-    # Parse QC metadata and build Airtable update payloads
+    # Parse QC metadata for all samples
+    all_metrics: dict[str, dict] = {}
     updates: list[dict] = []
     for entry in entries:
         sample = str(entry.get("fields", {}).get(entry_code_field, "")).strip()
         if not sample:
             continue
         metrics = collect_preprocessing_metadata(sample, local_root)
+        all_metrics[sample] = metrics
         payload = build_entry_update(entry["id"], metrics, field_map)
         if payload["fields"]:
             updates.append(payload)
+
+    # Write summary TSV to RUN/{batch}/{batch}_output.tsv and copy into final/
+    run_base = str(cfg.get("RUN_BASE") or "").strip()
+    tsv_out: Path | None = None
+    if run_base:
+        tsv_out = Path(run_base) / args.batch / f"{args.batch}_output.tsv"
+        write_output_tsv(all_metrics, tsv_out)
+        _info(f"Output summary written to {tsv_out}")
 
     if updates:
         _info(f"Updating {len(updates)} entry records in Airtable...")
@@ -208,10 +219,21 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
     remote_dir = f"{remote_base.rstrip('/')}/PPR/{args.batch}"
 
+    # Copy the output TSV into final/ so it is included in the upload
+    import shutil as _shutil
+    if tsv_out is not None and tsv_out.exists():
+        _shutil.copy2(tsv_out, final_dir / tsv_out.name)
+
     _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
     with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
         n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
     _info(f"Transferred {n} file(s) to {remote_dir}.")
+
+    # Delete the output directory — only the RUN/{batch} directory is kept
+    cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
+    if cleanup not in ("false", "0", "no"):
+        _shutil.rmtree(local_root, ignore_errors=True)
+        _info(f"Deleted output directory {local_root}.")
 
     # Collect version metadata for the batch record
     batch_fields: dict = {}

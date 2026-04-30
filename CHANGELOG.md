@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.19] - 2026-04-30
+
+### Added
+
+- `ehio preprocessing --output` writes a per-sample summary TSV to `RUN/{batch}/{batch}_output.tsv`. The file includes all QC metrics plus derived `host_reads` and `host_bases` columns (`reads_post_fastp − metagenomic_reads/bases`). The TSV is copied into `preprocessing/final/` before upload so it is transferred to the remote archive alongside the `.fq.gz` and `.bam` files.
+- `CLEANUP_OUTPUT_DIR` config key (default `true`): after a successful transfer, the local output directory (`PPR/{batch}`) is deleted. Only `RUN/{batch}` (containing the `.sh`, `.tsv`, `.out`, `.err`, and `_output.tsv` files) is retained.
 ## [0.1.18] - 2026-04-30
 
 ### Changed
