@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.13] - 2026-04-30
+
+### Added
+
+- `EHIO_CONDA_ENV` config key: if set, generated scripts source conda and activate the named environment at startup, ensuring `ehio` (including the ERR trap's `ehio set-status`) is available in the screen session.
+- `DRAKKAR_CONDA_ENV` now invokes drakkar via `conda run -n <env>` rather than activating the environment, so the ehio environment stays active for the error trap throughout the script.
 ## [0.1.12] - 2026-04-30
 
 ### Changed

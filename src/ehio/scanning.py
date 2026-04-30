@@ -168,7 +168,8 @@ def build_script_content(
     profile: str,
     error_status: str = "Error",
     ref_flag: str = "",
-    conda_env: str = "",
+    ehio_conda_env: str = "",
+    drakkar_conda_env: str = "",
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -192,13 +193,15 @@ def build_script_content(
     err_file = f"{run_dir}/{batch_name}.err"
 
     conda_block = ""
-    if conda_env:
+    if ehio_conda_env:
         conda_block = (
             'if [ -f "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh" ]; then\n'
             '    source "$(conda info --base)/etc/profile.d/conda.sh"\n'
-            f"    conda activate {shlex.quote(conda_env)}\n"
+            f"    conda activate {shlex.quote(ehio_conda_env)}\n"
             "fi\n"
         )
+
+    drakkar_prefix = f"conda run -n {shlex.quote(drakkar_conda_env)} " if drakkar_conda_env else ""
 
     header = (
         "#!/usr/bin/env bash\n"
@@ -222,20 +225,20 @@ def build_script_content(
         ref_part = f" {ref_flag}" if ref_flag else ""
         return header + (
             f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
-            f"drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}\n"
+            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}\n"
         )
 
     if module == "binning":
         return header + (
             f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
-            f"drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}\n"
+            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}\n"
         )
 
     if module == "quantifying":
         bins_file = f"{run_dir}/{batch_name}_bins.txt"
         return header + (
             f"ehio quantifying --input -b {q(batch_name)} -f {q(tsv_file)} --bins-file {q(bins_file)}\n"
-            f"drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}\n"
+            f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}\n"
         )
 
     raise ValueError(f"Unknown module: {module}")
@@ -294,7 +297,8 @@ def scan_module(
     launched_status    = cfg.get("SCANNING_LAUNCHED_STATUS", "Running").strip()
     error_status       = cfg.get("PROCESSING_ERROR_STATUS", "Error").strip()
     profile            = cfg.get("DRAKKAR_PROFILE", "slurm").strip()
-    conda_env          = cfg.get("DRAKKAR_CONDA_ENV", "").strip()
+    ehio_conda_env     = cfg.get("EHIO_CONDA_ENV", "").strip()
+    drakkar_conda_env  = cfg.get("DRAKKAR_CONDA_ENV", "").strip()
 
     if not all([base_id, batch_table, batch_code_field, batch_status_field, output_base, run_base]):
         if verbose:
@@ -346,7 +350,8 @@ def scan_module(
 
         script_content = build_script_content(
             module, batch_name, run_dir, output_dir, profile, error_status, ref_flag,
-            conda_env=conda_env,
+            ehio_conda_env=ehio_conda_env,
+            drakkar_conda_env=drakkar_conda_env,
         )
 
         if dry_run:
