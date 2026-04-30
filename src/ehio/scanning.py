@@ -75,6 +75,50 @@ def launch_screen(session_name: str, script_path: str) -> None:
 # Script builder
 # ---------------------------------------------------------------------------
 
+def _resolve_preprocessing_ref_flag(batch_record: dict, token: str) -> str:
+    """Return the drakkar reference flag for a preprocessing batch.
+
+    Checks GENOME_ENTRY_URL_INDEXED first (-x, indexed tarball), then
+    GENOME_ENTRY_URL_RAW (-g, plain fasta).  Returns '' if no reference
+    is configured or the linked genome record cannot be found.
+    """
+    from ehio.airtable import AirtableClient
+
+    batch_ref_field    = cfg.get("EHI_PPR_BATCH_REFERENCE",    "").strip()
+    genome_base_id     = cfg.get("GENOME_BASE",                 "").strip()
+    genome_table       = cfg.get("GENOME_ENTRY",                "").strip()
+    genome_indexed_fld = cfg.get("GENOME_ENTRY_URL_INDEXED",    "").strip()
+    genome_raw_fld     = cfg.get("GENOME_ENTRY_URL_RAW",        "").strip()
+
+    if not batch_ref_field:
+        return ""
+
+    ref_value = batch_record.get("fields", {}).get(batch_ref_field)
+    if isinstance(ref_value, list):
+        ref_value = ref_value[0] if ref_value else None
+    if not ref_value:
+        return ""
+
+    ref_rec_id = str(ref_value).strip()
+    if not ref_rec_id.startswith("rec") or not (genome_base_id and genome_table):
+        return ""
+
+    genome_client = AirtableClient(api_key=token, base_id=genome_base_id)
+    genome_rec = genome_client.fetch_record_by_id(genome_table, ref_rec_id)
+    if not genome_rec:
+        return ""
+
+    genome_fields = genome_rec.get("fields", {})
+    indexed_url = str(genome_fields.get(genome_indexed_fld, "") or "").strip()
+    raw_url     = str(genome_fields.get(genome_raw_fld,     "") or "").strip()
+
+    if indexed_url:
+        return f"-x {shlex.quote(indexed_url)}"
+    if raw_url:
+        return f"-g {shlex.quote(raw_url)}"
+    return ""
+
+
 def build_script_content(
     module: str,
     batch_name: str,
@@ -82,6 +126,7 @@ def build_script_content(
     output_dir: str,
     profile: str,
     error_status: str = "Error",
+    ref_flag: str = "",
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -91,6 +136,7 @@ def build_script_content(
 
     run_dir    — /projects/ehi/data/RUN/{batch_code}  (samples.tsv, logs, .snakemake)
     output_dir — /projects/ehi/data/{PPR|ASB|DMB}/{batch_code}  (drakkar -o target)
+    ref_flag   — pre-resolved '-x url' or '-g url' for preprocessing; '' otherwise
     """
     if module not in DRAKKAR_CMD:
         raise ValueError(f"Unknown module: {module}")
@@ -117,11 +163,10 @@ def build_script_content(
     )
 
     if module == "preprocessing":
-        ref_env_file = f"{run_dir}/{batch_name}_ref.env"
+        ref_part = f" {ref_flag}" if ref_flag else ""
         return header + (
-            f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)} --ref-flag-file {q(ref_env_file)}\n"
-            f"source {q(ref_env_file)}\n"
-            f"drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)} $DRAKKAR_REF_FLAG\n"
+            f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
+            f"drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}\n"
         )
 
     if module == "binning":
@@ -236,8 +281,12 @@ def scan_module(
         run_dir     = str(Path(run_base)    / batch_name)
         script_path = Path(run_dir) / f"{batch_name}.sh"
 
+        ref_flag = ""
+        if module == "preprocessing":
+            ref_flag = _resolve_preprocessing_ref_flag(record, token)
+
         script_content = build_script_content(
-            module, batch_name, run_dir, output_dir, profile, error_status,
+            module, batch_name, run_dir, output_dir, profile, error_status, ref_flag,
         )
 
         if dry_run:

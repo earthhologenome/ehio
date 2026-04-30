@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.6] - 2026-04-30
+
+### Changed
+
+- Reference genome resolution for preprocessing is now performed at scan time (when the batch record is already fetched) and the flag is hardwired directly into the generated `{batch}.sh` script as `-x <url>` (indexed tarball) or `-g <url>` (raw fasta). Removes the `{batch}_ref.env` file, the `source` call, and `$DRAKKAR_REF_FLAG` indirection introduced in 0.1.5.
 ## [0.1.5] - 2026-04-30
 
 ### Added

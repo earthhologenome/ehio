@@ -107,16 +107,27 @@ class TestBuildScriptContent:
         assert "ehio preprocessing --input" in script
         assert "drakkar preprocessing" in script
 
-    def test_preprocessing_writes_ref_flag_file(self):
-        script = self._script(module="preprocessing")
-        assert "--ref-flag-file" in script
-        assert "PPR001_ref.env" in script
+    def test_preprocessing_ref_flag_hardwired_indexed(self):
+        script = build_script_content(
+            "preprocessing", "PPR001", RUN_DIR, OUT_DIR, "slurm",
+            ref_flag="-x 'https://example.com/ref.tar.gz'",
+        )
+        assert "-x 'https://example.com/ref.tar.gz'" in script
+        assert "source" not in script
+        assert "$DRAKKAR_REF_FLAG" not in script
 
-    def test_preprocessing_sources_ref_env_and_passes_flag(self):
+    def test_preprocessing_ref_flag_hardwired_raw(self):
+        script = build_script_content(
+            "preprocessing", "PPR001", RUN_DIR, OUT_DIR, "slurm",
+            ref_flag="-g 'https://example.com/ref.fna.gz'",
+        )
+        assert "-g 'https://example.com/ref.fna.gz'" in script
+
+    def test_preprocessing_no_ref_flag_when_empty(self):
         script = self._script(module="preprocessing")
-        assert "source" in script
-        assert "PPR001_ref.env" in script
-        assert "$DRAKKAR_REF_FLAG" in script
+        drakkar_line = next(l for l in script.splitlines() if l.startswith("drakkar"))
+        assert "-x" not in drakkar_line
+        assert "-g" not in drakkar_line
 
     def test_binning_uses_cataloging(self):
         script = build_script_content(
