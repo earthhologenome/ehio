@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.10] - 2026-04-30
+
+### Changed
+
+- Generated `{batch}.sh` scripts now redirect stdout to `{batch}.out` and stderr to `{batch}.err` in the run directory, so failures are captured even when the screen session exits immediately.
 ## [0.1.9] - 2026-04-30
 
 ### Changed
