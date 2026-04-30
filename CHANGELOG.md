@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.16] - 2026-04-30
+
+### Added
+
+- `ehio preprocessing --output` now writes the ehio version (`EHI_PPR_BATCH_EHIO_VERSION`) and drakkar version (`EHI_PPR_BATCH_DRAKKAR_VERSION`) to the batch record alongside the `Done` status. The drakkar version is retrieved via `conda run` using the same `DRAKKAR_CONDA_ENV` path configured for the workflow.
 ## [0.1.15] - 2026-04-30
 
 ### Changed

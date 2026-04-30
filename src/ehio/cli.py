@@ -220,12 +220,38 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     )
     _info("Transfer complete.")
 
+    # Collect version metadata for the batch record
+    batch_fields: dict = {}
+
+    ehio_version_field   = str(cfg.get("EHI_PPR_BATCH_EHIO_VERSION")   or "").strip()
+    drakkar_version_field = str(cfg.get("EHI_PPR_BATCH_DRAKKAR_VERSION") or "").strip()
+
+    if ehio_version_field:
+        batch_fields[ehio_version_field] = __version__
+
+    if drakkar_version_field:
+        import subprocess as _sp
+        drakkar_conda_env = str(cfg.get("DRAKKAR_CONDA_ENV") or "").strip()
+        if drakkar_conda_env:
+            _flag = "-p" if drakkar_conda_env.startswith(("/", "~", ".")) else "-n"
+            _cmd = ["conda", "run", _flag, drakkar_conda_env, "drakkar", "--version"]
+        else:
+            _cmd = ["drakkar", "--version"]
+        try:
+            _res = _sp.run(_cmd, capture_output=True, text=True, timeout=30)
+            drakkar_version = (_res.stdout.strip() or _res.stderr.strip() or "unknown")
+        except Exception:
+            drakkar_version = "unknown"
+        batch_fields[drakkar_version_field] = drakkar_version
+
     # Mark the batch as done
-    done_status       = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
     batch_status_field = _require_cfg("EHI_PPR_BATCH_STATUS")
+    batch_fields[batch_status_field] = done_status
+
     client.update_records(
         batch_table,
-        [{"id": batch_record["id"], "fields": {batch_status_field: done_status}}],
+        [{"id": batch_record["id"], "fields": batch_fields}],
     )
     _info(f"Batch '{args.batch}' status → '{done_status}'.")
     return 0
