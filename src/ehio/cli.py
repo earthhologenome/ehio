@@ -108,7 +108,7 @@ def cmd_preprocessing(args: argparse.Namespace) -> int:
 def _run_preprocessing_input(args: argparse.Namespace) -> int:
     """Fetch batch+entries from Airtable and write a drakkar sample TSV."""
     from ehio.airtable import AirtableClient
-    from ehio.drakkar import write_sample_file
+    from ehio.drakkar import write_sample_file, verify_input_files
 
     token       = _resolve_token(args)
     base_id     = _require_cfg("EHI_BASE")
@@ -146,7 +146,41 @@ def _run_preprocessing_input(args: argparse.Namespace) -> int:
         reads2_field=reads2_field,
     )
     _info(f"Wrote {n} samples to {out_path}")
+
+    missing = verify_input_files(entries, entry_code_field, [reads1_field, reads2_field])
+    if missing:
+        for sample, path in missing:
+            print(f"  WARNING: [{sample}] file not found: {path}", file=sys.stderr)
+        _die(f"{len(missing)} input file(s) missing — fix paths in Airtable before launching drakkar.")
     return 0
+
+
+def _rename_preprocessing_files(ppr_dir: Path, code_to_ehi: dict[str, str]) -> None:
+    """Rename drakkar preprocessing output files from sample-code names to EHI names.
+
+    Mapping:
+      {code}.bam        → {ehi}_G.bam
+      {code}_1.fq.gz    → {ehi}_M_1.fq.gz
+      {code}_2.fq.gz    → {ehi}_M_2.fq.gz
+      {code}_cond.tsv   → {ehi}_cond.tsv
+    """
+    for file_path in sorted(ppr_dir.rglob("*")):
+        if not file_path.is_file():
+            continue
+        name = file_path.name
+        for code, ehi in code_to_ehi.items():
+            new_name: str | None = None
+            if name == f"{code}.bam":
+                new_name = f"{ehi}_G.bam"
+            elif name == f"{code}_1.fq.gz":
+                new_name = f"{ehi}_M_1.fq.gz"
+            elif name == f"{code}_2.fq.gz":
+                new_name = f"{ehi}_M_2.fq.gz"
+            elif name == f"{code}_cond.tsv":
+                new_name = f"{ehi}_cond.tsv"
+            if new_name:
+                file_path.rename(file_path.parent / new_name)
+                break
 
 
 def _run_preprocessing_output(args: argparse.Namespace) -> int:
@@ -168,6 +202,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     batch_code_field  = _require_cfg("EHI_PPR_BATCH_CODE")
     entry_batch_field = _require_cfg("EHI_PPR_ENTRY_BATCH")
     entry_code_field  = _require_cfg("EHI_PPR_ENTRY_CODE")
+    ehi_number_field  = _require_cfg("EHI_PPR_ENTRY_EHI_NUMBER")
 
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
@@ -195,25 +230,31 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         if fld_id:
             field_map[metric_key] = fld_id
 
-    # Parse QC metadata for all samples
+    # Parse QC metadata for all samples; build code→EHI mapping for renaming/TSV
+    code_to_ehi: dict[str, str] = {}
     all_metrics: dict[str, dict] = {}
     updates: list[dict] = []
     for entry in entries:
-        sample = str(entry.get("fields", {}).get(entry_code_field, "")).strip()
+        fields = entry.get("fields", {})
+        sample = str(fields.get(entry_code_field, "")).strip()
+        ehi    = str(fields.get(ehi_number_field, "")).strip()
         if not sample:
             continue
+        if ehi:
+            code_to_ehi[sample] = ehi
         metrics = collect_preprocessing_metadata(sample, local_root)
         all_metrics[sample] = metrics
         payload = build_entry_update(entry["id"], metrics, field_map)
         if payload["fields"]:
             updates.append(payload)
 
-    # Write summary TSV to RUN/{batch}/{batch}_output.tsv and copy into final/
+    # Write summary TSV keyed by EHI number (fall back to sample code if missing)
+    metrics_by_ehi = {code_to_ehi.get(s, s): m for s, m in all_metrics.items()}
     run_base = str(cfg.get("RUN_BASE") or "").strip()
     tsv_out: Path | None = None
     if run_base:
         tsv_out = Path(run_base) / args.batch / f"{args.batch}_output.tsv"
-        write_output_tsv(all_metrics, tsv_out)
+        write_output_tsv(metrics_by_ehi, tsv_out)
         _info(f"Output summary written to {tsv_out}")
 
     if updates:
@@ -237,8 +278,14 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
     remote_dir = f"{remote_base.rstrip('/')}/PPR/{args.batch}"
 
-    # Copy the output TSV into the preprocessing dir so it is included in the upload
     import shutil as _shutil
+
+    # Rename output files from sample-code names to EHI names before archiving
+    if code_to_ehi:
+        _rename_preprocessing_files(ppr_dir, code_to_ehi)
+        _info(f"Renamed {len(code_to_ehi)} sample file set(s) to EHI names.")
+
+    # Copy the output TSV into the preprocessing dir so it is included in the upload
     if tsv_out is not None and tsv_out.exists():
         _shutil.copy2(tsv_out, ppr_dir / tsv_out.name)
 
@@ -294,7 +341,7 @@ def cmd_binning(args: argparse.Namespace) -> int:
 
 def _run_binning_input(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
-    from ehio.drakkar import write_sample_file
+    from ehio.drakkar import write_sample_file, verify_input_files
 
     token       = _resolve_token(args)
     base_id     = _require_cfg("EHI_BASE")
@@ -332,6 +379,12 @@ def _run_binning_input(args: argparse.Namespace) -> int:
         reads2_field=reads2_field,
     )
     _info(f"Wrote {n} samples to {out_path}")
+
+    missing = verify_input_files(entries, entry_code_field, [reads1_field, reads2_field])
+    if missing:
+        for sample, path in missing:
+            print(f"  WARNING: [{sample}] file not found: {path}", file=sys.stderr)
+        _die(f"{len(missing)} input file(s) missing — fix paths in Airtable before launching drakkar.")
     return 0
 
 
@@ -463,7 +516,7 @@ def cmd_quantifying(args: argparse.Namespace) -> int:
 
 def _run_quantifying_input(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
-    from ehio.drakkar import write_bins_file, write_sample_file
+    from ehio.drakkar import write_bins_file, write_sample_file, verify_input_files
 
     token         = _resolve_token(args)
     base_id       = _require_cfg("MAG_BASE")
@@ -524,6 +577,20 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
         reads2_field=reads2_field,
     )
     _info(f"Wrote {n_reads} read entries to {reads_path}")
+
+    missing_reads = verify_input_files(entries, entry_code_field, [reads1_field, reads2_field])
+    if missing_reads:
+        for sample, path in missing_reads:
+            print(f"  WARNING: [{sample}] reads file not found: {path}", file=sys.stderr)
+
+    missing_bins = verify_input_files(mag_records, mag_url_field, [mag_url_field])
+    if missing_bins:
+        for _, path in missing_bins:
+            print(f"  WARNING: MAG FASTA not found: {path}", file=sys.stderr)
+
+    total_missing = len(missing_reads) + len(missing_bins)
+    if total_missing:
+        _die(f"{total_missing} input file(s) missing — fix paths in Airtable before launching drakkar.")
     return 0
 
 
@@ -850,8 +917,13 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Sends a quit signal to the screen session named after the batch.",
         formatter_class=argparse.RawTextHelpFormatter,
     )
+    p_stop.add_argument("--module", "-m", required=True,
+        choices=["preprocessing", "binning", "quantifying"],
+        help="Module whose batch table to update.")
     p_stop.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code (screen session name) to stop.")
+    p_stop.add_argument("--airtable-token", metavar="TOKEN",
+        help="Airtable personal access token. Overrides $AIRTABLE_TOKEN.")
     p_stop.set_defaults(func=cmd_stop)
 
     # ------------------------------------------------------------------
@@ -941,6 +1013,26 @@ _OUTPUT_BASE_CFG = {
 
 def cmd_stop(args: argparse.Namespace) -> int:
     import subprocess
+    from ehio.airtable import AirtableClient
+
+    base_cfg, table_cfg, code_cfg, status_cfg = _SET_STATUS_CFG[args.module]
+    token            = _resolve_token(args)
+    base_id          = _require_cfg(base_cfg)
+    batch_table      = _require_cfg(table_cfg)
+    batch_code_field = _require_cfg(code_cfg)
+    status_field     = _require_cfg(status_cfg)
+    stopped_status   = str(cfg.get("SCANNING_STOPPED_STATUS") or "Stopped").strip()
+
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    if not batch_record:
+        _die(f"Batch '{args.batch}' not found in {batch_table}.")
+    client.update_records(
+        batch_table,
+        [{"id": batch_record["id"], "fields": {status_field: stopped_status}}],
+    )
+    _info(f"Batch '{args.batch}' status → '{stopped_status}'.")
+
     session = args.batch
     result = subprocess.run(
         ["screen", "-S", session, "-X", "quit"],

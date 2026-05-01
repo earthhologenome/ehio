@@ -6,7 +6,7 @@ import csv
 import pytest
 from pathlib import Path
 
-from ehio.drakkar import write_sample_file, write_bins_file
+from ehio.drakkar import write_sample_file, write_bins_file, verify_input_files
 from tests.conftest import ENTRY_RECORDS
 
 
@@ -170,3 +170,69 @@ class TestWriteBinsFile:
         out = tmp_path / "nested" / "dir" / "bins.txt"
         write_bins_file(self._RECORDS, out, bins_field=self.BINS_FIELD)
         assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# verify_input_files
+# ---------------------------------------------------------------------------
+
+class TestVerifyInputFiles:
+    SAMPLE_FIELD = "fldNGN3g6Lvqo4ySR"
+    READS1_FIELD = "fldSsNtgHYgxRaYxN"
+    READS2_FIELD = "fldMmJiQLVVoJOAjF"
+
+    def _records(self, r1: str, r2: str) -> list[dict]:
+        return [{"id": "recX", "fields": {
+            self.SAMPLE_FIELD: "EHI00001",
+            self.READS1_FIELD: r1,
+            self.READS2_FIELD: r2,
+        }}]
+
+    def test_existing_files_return_empty(self, tmp_path: Path):
+        r1 = tmp_path / "EHI00001_1.fq.gz"
+        r2 = tmp_path / "EHI00001_2.fq.gz"
+        r1.write_text("x")
+        r2.write_text("x")
+        missing = verify_input_files(
+            self._records(str(r1), str(r2)),
+            self.SAMPLE_FIELD, [self.READS1_FIELD, self.READS2_FIELD],
+        )
+        assert missing == []
+
+    def test_missing_local_file_reported(self, tmp_path: Path):
+        r1 = str(tmp_path / "missing_1.fq.gz")
+        r2 = str(tmp_path / "missing_2.fq.gz")
+        missing = verify_input_files(
+            self._records(r1, r2),
+            self.SAMPLE_FIELD, [self.READS1_FIELD, self.READS2_FIELD],
+        )
+        assert len(missing) == 2
+        paths = [p for _, p in missing]
+        assert r1 in paths
+        assert r2 in paths
+
+    def test_url_paths_are_skipped(self, tmp_path: Path):
+        records = self._records(
+            "https://example.com/EHI00001_1.fq.gz",
+            "https://example.com/EHI00001_2.fq.gz",
+        )
+        missing = verify_input_files(records, self.SAMPLE_FIELD,
+                                     [self.READS1_FIELD, self.READS2_FIELD])
+        assert missing == []
+
+    def test_empty_path_is_skipped(self, tmp_path: Path):
+        records = self._records("", "")
+        missing = verify_input_files(records, self.SAMPLE_FIELD,
+                                     [self.READS1_FIELD, self.READS2_FIELD])
+        assert missing == []
+
+    def test_one_missing_one_present(self, tmp_path: Path):
+        r1 = tmp_path / "present_1.fq.gz"
+        r1.write_text("x")
+        r2 = str(tmp_path / "absent_2.fq.gz")
+        missing = verify_input_files(
+            self._records(str(r1), r2),
+            self.SAMPLE_FIELD, [self.READS1_FIELD, self.READS2_FIELD],
+        )
+        assert len(missing) == 1
+        assert missing[0][1] == r2

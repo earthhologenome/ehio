@@ -15,6 +15,7 @@ from ehio.metadata import (
     build_entry_update,
     PREPROCESSING_METRIC_KEYS,
 )
+from ehio.cli import _rename_preprocessing_files
 from tests.conftest import FASTP_JSON, SINGLEM_SMF_TSV, NONPAREIL_TSV
 
 
@@ -206,3 +207,53 @@ class TestBuildEntryUpdate:
         """PREPROCESSING_METRIC_KEYS should reference all EHI_PPR_ENTRY_* config keys."""
         config_key_prefixes = {v for v in PREPROCESSING_METRIC_KEYS.values()}
         assert all(k.startswith("EHI_PPR_ENTRY_") for k in config_key_prefixes)
+
+
+# ---------------------------------------------------------------------------
+# _rename_preprocessing_files
+# ---------------------------------------------------------------------------
+
+class TestRenamePreprocessingFiles:
+    def _make_tree(self, base: Path, sample: str) -> list[Path]:
+        dirs = [
+            base / "final",
+            base / "singlem",
+        ]
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)
+        files = [
+            base / "final" / f"{sample}.bam",
+            base / "final" / f"{sample}_1.fq.gz",
+            base / "final" / f"{sample}_2.fq.gz",
+            base / "singlem" / f"{sample}_cond.tsv",
+        ]
+        for f in files:
+            f.write_text("placeholder")
+        return files
+
+    def test_renames_all_four_file_types(self, tmp_path: Path):
+        ppr = tmp_path / "preprocessing"
+        self._make_tree(ppr, "EHI00001")
+        _rename_preprocessing_files(ppr, {"EHI00001": "EHI000001"})
+        assert (ppr / "final"   / "EHI000001_G.bam").exists()
+        assert (ppr / "final"   / "EHI000001_M_1.fq.gz").exists()
+        assert (ppr / "final"   / "EHI000001_M_2.fq.gz").exists()
+        assert (ppr / "singlem" / "EHI000001_cond.tsv").exists()
+        assert not (ppr / "final" / "EHI00001.bam").exists()
+
+    def test_multiple_samples(self, tmp_path: Path):
+        ppr = tmp_path / "preprocessing"
+        self._make_tree(ppr, "EHI00001")
+        self._make_tree(ppr, "EHI00002")
+        _rename_preprocessing_files(ppr, {"EHI00001": "EHI000001", "EHI00002": "EHI000002"})
+        assert (ppr / "final" / "EHI000001_G.bam").exists()
+        assert (ppr / "final" / "EHI000002_G.bam").exists()
+
+    def test_unrelated_files_are_untouched(self, tmp_path: Path):
+        ppr = tmp_path / "preprocessing"
+        (ppr / "final").mkdir(parents=True)
+        other = ppr / "final" / "unrelated.txt"
+        other.write_text("keep me")
+        self._make_tree(ppr, "EHI00001")
+        _rename_preprocessing_files(ppr, {"EHI00001": "EHI000001"})
+        assert other.exists()

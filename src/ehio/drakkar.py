@@ -45,6 +45,35 @@ def write_sample_file(
     return len(rows)
 
 
+def verify_input_files(
+    records: list[dict[str, Any]],
+    sample_field: str,
+    path_fields: list[str],
+) -> list[tuple[str, str]]:
+    """Check that all local file paths referenced in records actually exist.
+
+    Returns a list of (sample, path) pairs for every path that is missing.
+    Paths that look like URLs (http/https/ftp/sftp) are skipped — they cannot
+    be verified without a network round-trip.
+    """
+    missing: list[tuple[str, str]] = []
+    for rec in records:
+        fields = rec.get("fields", rec)
+        sample = str(fields.get(sample_field, "")).strip()
+        for fld in path_fields:
+            raw = fields.get(fld, "")
+            if isinstance(raw, list):
+                raw = raw[0] if raw else ""
+            path_str = str(raw).strip()
+            if not path_str:
+                continue
+            if path_str.startswith(("http://", "https://", "ftp://", "sftp://")):
+                continue  # remote URL — cannot check locally
+            if not Path(path_str).exists():
+                missing.append((sample, path_str))
+    return missing
+
+
 def write_bins_file(
     records: list[dict[str, Any]],
     path: Path,

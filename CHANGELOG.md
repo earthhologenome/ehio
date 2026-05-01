@@ -9,6 +9,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.1] - 2026-05-01
+
+### Added
+
+- `ehio preprocessing --output` now renames output files to EHI-number-based names before archiving: `{code}.bam` → `{ehi}_G.bam`, `{code}_1.fq.gz` → `{ehi}_M_1.fq.gz`, `{code}_2.fq.gz` → `{ehi}_M_2.fq.gz`, `{code}_cond.tsv` → `{ehi}_cond.tsv`. The `sample` column in `{batch}_output.tsv` also uses the EHI number.
+- `ehio preprocessing --input`, `ehio binning --input`, and `ehio quantifying --input` now verify that all local input file paths exist before returning. Remote URLs are skipped. If any file is missing, each path is reported as a warning and the command exits with an error before a screen session can be launched.
+- `ehio stop` now requires `--module` and accepts `--airtable-token`. Before killing the screen session it connects to Airtable and sets the batch status to `SCANNING_STOPPED_STATUS` (default `"Stopped"`).
+- Config key added: `SCANNING_STOPPED_STATUS` (default `"Stopped"`).
 ## [0.2.0] - 2026-05-01
 
 ### Added
@@ -27,6 +35,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Nonpareil file path corrected from `{sample}_nonpareil.tsv` to `{sample}_np.tsv` (actual drakkar output name).
 - Nonpareil column `LR*` corrected to `LRstar` (actual column name in drakkar's `nonpareil_stats.R` output).
 - Binning metadata collection now uses correct drakkar cataloging output paths: `cataloging/quast/{sample}/report.tsv`, `cataloging/bowtie2/{sample}/{sample}.flagstat.txt`, and `cataloging/final/{sample}.tsv` for bin counts.
+
 ## [0.1.22] - 2026-05-01
 
 ### Added
