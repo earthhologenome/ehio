@@ -124,7 +124,7 @@ class TestParseSinglemMf:
 
 class TestParseNonpareil:
     def test_all_values(self, tmp_path: Path):
-        p = tmp_path / "EHI00001_nonpareil.tsv"
+        p = tmp_path / "EHI00001_np.tsv"
         p.write_text(NONPAREIL_TSV)
         result = parse_nonpareil(p)
         assert result["nonpareil_C"]         == pytest.approx(0.92)

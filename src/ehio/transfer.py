@@ -135,9 +135,16 @@ class SFTPTransfer:
         local_dir: Path,
         remote_dir: str,
         verbose: bool = False,
+        include_suffixes: list[str] | None = None,
     ) -> int:
-        """Upload all files under local_dir, preserving directory structure."""
+        """Upload files under local_dir, preserving directory structure.
+
+        include_suffixes: if given, only files whose names end with one of
+        the listed strings are uploaded (e.g. [".bam", ".fq.gz", "_output.tsv"]).
+        """
         files = [p for p in sorted(local_dir.rglob("*")) if p.is_file()]
+        if include_suffixes:
+            files = [f for f in files if any(f.name.endswith(s) for s in include_suffixes)]
         return self.upload(files, local_dir, remote_dir, verbose=verbose)
 
     def __enter__(self) -> SFTPTransfer:

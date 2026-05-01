@@ -18,9 +18,10 @@ EHI_PPR_BATCH:  "tbl1l5mAkF9nVtisn"  # Preprocessing batch table (EHI_BASE)
 EHI_PPR_ENTRY:  "tblJfLRU2FIVz37Y1"  # Preprocessing entry table (EHI_BASE)
 EHI_ASB_BATCH:  "tbld5JHhN4cM9P5ka"  # Assembly/binning batch table (EHI_BASE)
 EHI_ASB_ENTRY:  "tblG6ZIvkYN844I97"  # Assembly/binning entry table (EHI_BASE)
-EHI_GENOME:     "tbl7QOk2HKrZatIfG"  # MAG table (MAG_BASE)
+EHI_GENOME:     "tbl7QOk2HKrZatIfG"  # Reference genome table (MAG_BASE)
 MAG_DMB_BATCH:  "tblvPsCiNanM7NeQp"  # Dereplication/mapping batch table (MAG_BASE)
 MAG_DMB_ENTRY:  "tblWDyQmM9rQ9wq57"  # Dereplication/mapping entry table (MAG_BASE)
+MAG_ENTRY: "tblMzd3oyaJhdeQcs"       # MAG genome table (MAG_BASE)
 
 # ---- Preprocessing module -------------------------------------------------
 # Input: fetch raw reads from EHI_PPR_ENTRY, write a drakkar sample file
@@ -55,10 +56,10 @@ EHI_PPR_ENTRY_NONPAREIL_MODELR: "fldL68iMkAgg37klM" # Field in EHI_PPR_ENTRY wit
 EHI_PPR_ENTRY_NONPAREIL_LRSTAR: "fldD7bxg9zjsytjnO" # Field in EHI_PPR_ENTRY with the Nonpareil LR* of the preprocessed reads (for logging)
 EHI_PPR_ENTRY_NONPAREIL_DIVERSITY: "fldkf6rvVabQI0bcK" # Field in EHI_PPR_ENTRY with the Nonpareil diversity of the preprocessed reads (for logging)
 
-EHI_GENOME_ID: "fldcZWcu2ybJobGO4" # Field in  EHI_GENOME with the MAG record ID (for logging)
-EHI_GENOME_CODE: "fldNRG6HScrWuDn5i" # Field in  EHI_GENOME with the MAG code (primary key, for logging)
-EHI_GENOME_INDEX_STATUS: "fldZRnO9nA3DfJ4iL" # Field in  EHI_GENOME with the genome indexing status (for processing and logging) 
-EHI_GENOME_URL_INDEXED: "fldWXsYf6OlpWxUUQ" # Field in  EHI_GENOME with the URL or path to the indexed genome, tar.gz (for processing and logging)
+EHI_GENOME_ID: "fldcZWcu2ybJobGO4" # Field in EHI_GENOME with the reference genome record ID (for logging)
+EHI_GENOME_CODE: "fldNRG6HScrWuDn5i" # Field in EHI_GENOME with the reference genome code (primary key, for logging)
+EHI_GENOME_INDEX_STATUS: "fldZRnO9nA3DfJ4iL" # Field in EHI_GENOME with the reference genome indexing status (for processing and logging) 
+EHI_GENOME_URL_INDEXED: "fldWXsYf6OlpWxUUQ" # Field in EHI_GENOME with the URL or path to the indexed genome, tar.gz (for processing and logging)
 EHI_GENOME_URL_RAW: "fldZ6V4yVA4dPtsIJ" # Field in  EHI_GENOME with the URL or path to the raw genome assembly, fna.gz (for logging)
 
 # ---- Binning module -------------------------------------------------------
@@ -71,6 +72,8 @@ EHI_ASB_BATCH_CODE: "fldBV65e7paYvGCwQ"  # Field in EHI_ASB_BATCH with the batch
 EHI_ASB_BATCH_DATE: "fldjrdzUdYVoPOQid" # Field in EHI_ASB_BATCH with the batch date (for logging)
 EHI_ASB_BATCH_STATUS: "fldqtozTLIRTzKiac" # Field in EHI_ASB_BATCH with the batch status (for scanning, processing and logging)
 EHI_ASB_BATCH_TYPE: "fldNQm1mdTIKkGaVC" # Field in EHI_ASB_BATCH with the batch type (e.g. "co-assembly", for processing)
+EHI_ASB_BATCH_EHIO_VERSION: "fldehAA7O6ndnOqMQ" # Field in EHI_ASB_BATCH with the ehio version used for cataloging (for logging)
+EHI_ASB_BATCH_DRAKKAR_VERSION: "fldWvZyrMKf3DRKgD" # Field in EHI_ASB_BATCH with the drakkar version used for cataloging (for logging)
 
 EHI_ASB_ENTRY_ID: "fld7Nj5uaCBktk00s"  # Field in EHI_ASB_ENTRY with the entry record ID (for processing and logging)
 EHI_ASB_ENTRY_CODE: "fldr9ObDHV3TWAu8n" # Field in EHI_ASB_ENTRY with the entry code (primary key, for processing and logging)
@@ -82,6 +85,8 @@ EHI_ASB_ENTRY_ASSEMBLY_CONTIGS_NUMBER: "fldqJQKYdYc2PRav2" # Field in EHI_ASB_EN
 EHI_ASB_ENTRY_ASSEMBLY_CONTIGS_LARGEST: "fldRDp4DD2d1IMkje" # Field in EHI_ASB_ENTRY with the length of the largest contig in the assembly (for logging)
 EHI_ASB_ENTRY_ASSEMBLY_MAPPING_RATE: "fldr34M6ht8m8D3Xb" # Field in EHI_ASB_ENTRY with the mapping rate of the assembly (for logging)
 EHI_ASB_ENTRY_BINS_NUMBER: "fldCW35Oas5s0Df7G"
+EHI_ASB_ENTRY_READS1: "fldhOqe2A5bbawp54"  # Field in EHI_ASB_ENTRY with the preprocessed forward reads URL
+EHI_ASB_ENTRY_READS2: "fldkxbagzLysSeuyv"  # Field in EHI_ASB_ENTRY with the preprocessed reverse reads URL
 
 MAG_ENTRY_ID: "fldNGbdZaGfDBKB7k" # Field in MAG_ENTRY with the entry record ID (for processing and logging)
 MAG_ENTRY_CODE: "fldkc0amZdshQUwkg" # Field in MAG_ENTRY with the MAG code (primary key, for processing and logging)
@@ -108,6 +113,7 @@ MAG_ENTRY_GTDB_CLOSEST_ANI: "fldsTSy8J1B73iLsa" # Field in MAG_ENTRY with the AN
 MAG_ENTRY_GTDB_CLOSEST_AF: "fldDT4VsnW4kN5Utk" # Field in MAG_ENTRY with the alignment fraction (AF) of the closest GTDB reference genome (for logging)
 MAG_ENTRY_CHECKM_COMPLETENESS: "fldcFmtnC7wvC05iZ" # Field in MAG_ENTRY with the CheckM completeness of the MAG (for logging)
 MAG_ENTRY_CHECKM_CONTAMINATION: "fldDwHfLHtjaCL12Q" # Field in MAG_ENTRY with the CheckM contamination of the MAG (for logging)
+MAG_ENTRY_URL_FASTA: "fldN9Dh6FXWjV8cOZ" # Field in MAG_ENTRY with the URL or path to the MAG fasta file (for processing and logging)
 
 # ---- Quantifying module ---------------------------------------------------
 # Input: fetch bin paths and reads from MAG_DMB_ENTRY, write a bins file and a reads sample file
@@ -118,11 +124,17 @@ MAG_DMB_BATCH_CODE: "fldr36ymPFWzln8dr" # Field in MAG_DMB_BATCH with the batch 
 MAG_DMB_BATCH_DATE: "fld6vUZLQCVHEV98d" # Field in MAG_DMB_BATCH with the batch date (for logging)
 MAG_DMB_BATCH_STATUS: "fldryNfc7YGJot4t6" # Field in MAG_DMB_BATCH with the batch status (for scanning, processing and logging)
 MAG_DMB_BATCH_DREP_TRHESHOLD: "fldZhjmUfIJdDoDw5" # Field in MAG_DMB_BATCH with the dRep threshold used for dereplication (for logging)
+MAG_DMB_BATCH_EHIO_VERSION: "fldQlMBHcZxEPA3Qo" # Field in MAG_DMB_BATCH with the ehio version used for profiling (for logging)
+MAG_DMB_BATCH_DRAKKAR_VERSION: "fldc3hlc2e21Ypsyl" # Field in MAG_DMB_BATCH with the drakkar version used for profiling (for logging)
+MAG_DMB_BATCH_LIST_MAGS: "fldR7UBwTItriazqA" # Field in MAG_DMB_BATCH with the linked MAG records of the batch, i.e. a list of MAG_ENTRY_ID (for processing and logging)
+MAG_DMB_BATCH_LIST_ENTRY: "fldDM08HXSmMOJcQq" # Field in MAG_DMB_BATCH with the linked MAG_DMB_ENTRY records of the batch, i.e. a list of MAG_DMB_ENTRY_ID (for processing and logging)
 
 MAG_DMB_ENTRY_ID: "fldGIAejYpkpaws1a" # Field in  MAG_DMB_ENTRY with the entry record ID (for processing and logging)
 MAG_DMB_ENTRY_CODE: "fldbfDFaVIO7OHzN4" # Field in  MAG_DMB_ENTRY with the entry code (primary key, for processing and logging)
 MAG_DMB_ENTRY_BATCH: "fld10ns3lKacZUB5C"  # Field in  MAG_DMB_ENTRY with the linked batch record ID, i.e. MAG_DMB_BATCH_ID (for processing)
 MAG_DMB_ENTRY_MAPPING_RATE: "fldl7n9sXo2h8mL1C" # Field in  MAG_DMB_ENTRY with the mapping rate of the reads to the bins (for logging)
+MAG_DMB_ENTRY_READS1: "fld57KxJyO0x3WHl1"  # Field in MAG_DMB_ENTRY with the preprocessed forward reads URL (for input)
+MAG_DMB_ENTRY_READS2: "fld67YsnZ1Bhav0zH"  # Field in MAG_DMB_ENTRY with the preprocessed reverse reads URL (for input)
 
 # ---- SFTP settings --------------------------------------------------------
 SFTP_HOST: "io.erda.dk"

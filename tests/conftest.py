@@ -44,8 +44,8 @@ SINGLEM_SMF_TSV = (
 # ---------------------------------------------------------------------------
 
 NONPAREIL_TSV = (
-    "sample\tC\tLR\tmodelR\tLR*\tdiversity\n"
-    "EHI00001\t0.92\t14.5\t16.2\t18.1\t21.3\n"
+    "sample\tkappa\tC\tLR\tmodelR\tLRstar\tdiversity\n"
+    "EHI00001\t0.001\t0.92\t14.5\t16.2\t18.1\t21.3\n"
 )
 
 
@@ -114,6 +114,6 @@ def drakkar_output(tmp_path: Path) -> Path:
         (final_dir / f"{sample}.metareads").write_text("8500000\n")
         (final_dir / f"{sample}.metabases").write_text("1275000000\n")
         (singlem_dir / f"{sample}_smf.tsv").write_text(SINGLEM_SMF_TSV)
-        (nonpareil_dir / f"{sample}_nonpareil.tsv").write_text(NONPAREIL_TSV)
+        (nonpareil_dir / f"{sample}_np.tsv").write_text(NONPAREIL_TSV)
 
     return tmp_path

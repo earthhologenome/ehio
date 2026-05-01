@@ -93,11 +93,10 @@ def parse_singlem_mf(smf_path: Path) -> dict[str, Any]:
 
 
 def parse_nonpareil(summary_path: Path) -> dict[str, Any]:
-    """Parse a Nonpareil summary TSV (if present).
+    """Parse a Nonpareil summary TSV produced by drakkar nonpareil_stats.R.
 
-    Drakkar does not currently run Nonpareil directly; this parser handles
-    an optional TSV with columns: sample, C, LR, modelR, LR*, diversity
-    that could be produced by a separate Nonpareil step.
+    Expected file: preprocessing/nonpareil/{sample}_np.tsv
+    Columns: sample, kappa, C, LR, modelR, LRstar, diversity
     Returns all values as None if the file is absent or unparseable.
     """
     result: dict[str, Any] = {
@@ -124,7 +123,7 @@ def parse_nonpareil(summary_path: Path) -> dict[str, Any]:
                 result["nonpareil_C"]         = _f("C")
                 result["nonpareil_LR"]        = _f("LR")
                 result["nonpareil_modelR"]    = _f("modelR")
-                result["nonpareil_LRstar"]    = _f("LR*")
+                result["nonpareil_LRstar"]    = _f("LRstar")
                 result["nonpareil_diversity"] = _f("diversity")
                 break  # one row per sample file
     except OSError:
@@ -150,7 +149,7 @@ def collect_preprocessing_metadata(
         preprocessing/final/{sample}.metareads
         preprocessing/final/{sample}.metabases
         preprocessing/singlem/{sample}_smf.tsv
-        preprocessing/nonpareil/{sample}_nonpareil.tsv   (optional)
+        preprocessing/nonpareil/{sample}_np.tsv          (optional)
 
     Returns a flat dict of metric_key → value (None if file missing).
     """
@@ -160,7 +159,7 @@ def collect_preprocessing_metadata(
     metareads     = base / "final"    / f"{sample}.metareads"
     metabases     = base / "final"    / f"{sample}.metabases"
     singlem_file  = base / "singlem"  / f"{sample}_smf.tsv"
-    nonpareil_tsv = base / "nonpareil" / f"{sample}_nonpareil.tsv"
+    nonpareil_tsv = base / "nonpareil" / f"{sample}_np.tsv"
 
     result: dict[str, Any] = {}
 
@@ -229,6 +228,179 @@ def write_output_tsv(
             writer.writerow(row)
 
 
+BINNING_OUTPUT_TSV_COLUMNS: list[str] = [
+    "sample",
+    "assembly_length",
+    "assembly_n50",
+    "assembly_l50",
+    "assembly_contigs_number",
+    "assembly_contigs_largest",
+    "assembly_mapping_rate",
+    "bins_number",
+]
+
+QUANTIFYING_OUTPUT_TSV_COLUMNS: list[str] = [
+    "sample",
+    "mapping_rate",
+]
+
+
+# ---------------------------------------------------------------------------
+# Binning / cataloging parsers
+# ---------------------------------------------------------------------------
+
+def parse_quast_report(report_path: Path) -> dict[str, Any]:
+    """Parse a QUAST report.tsv file. Returns assembly stats.
+
+    Expected file: cataloging/assembly/quast/{sample}/report.tsv
+    """
+    result: dict[str, Any] = {
+        "assembly_length":          None,
+        "assembly_n50":             None,
+        "assembly_l50":             None,
+        "assembly_contigs_number":  None,
+        "assembly_contigs_largest": None,
+    }
+    if not report_path.exists():
+        return result
+    _QUAST_MAP = {
+        "Total length":   "assembly_length",
+        "N50":            "assembly_n50",
+        "L50":            "assembly_l50",
+        "# contigs":      "assembly_contigs_number",
+        "Largest contig": "assembly_contigs_largest",
+    }
+    try:
+        with report_path.open(newline="") as fh:
+            for line in fh:
+                line = line.rstrip("\n")
+                if line.startswith("#") or line.startswith("Assembly"):
+                    continue
+                parts = line.split("\t", 1)
+                if len(parts) < 2:
+                    continue
+                metric, raw = parts[0].strip(), parts[1].strip()
+                if metric in _QUAST_MAP:
+                    try:
+                        result[_QUAST_MAP[metric]] = int(raw)
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+    return result
+
+
+def parse_flagstat(flagstat_path: Path) -> dict[str, Any]:
+    """Parse a samtools flagstat file to extract the overall mapping rate (%).
+
+    Expected file: cataloging/mapping/{sample}.flagstat
+                   profiling/mapping/{sample}.flagstat
+    """
+    result: dict[str, Any] = {"mapping_rate": None}
+    if not flagstat_path.exists():
+        return result
+    import re
+    try:
+        text = flagstat_path.read_text()
+        m = re.search(r"mapped \((\d+\.\d+)%", text)
+        if m:
+            result["mapping_rate"] = float(m.group(1))
+    except OSError:
+        pass
+    return result
+
+
+def parse_dastool_summary(summary_path: Path) -> dict[str, Any]:
+    """Count recovered bins from a DAS_Tool summary TSV.
+
+    Expected file: cataloging/binning/dastool/{sample}/{sample}_DASTool_summary.tsv
+    Each data row represents one bin; header row is excluded from the count.
+    """
+    result: dict[str, Any] = {"bins_number": None}
+    if not summary_path.exists():
+        return result
+    try:
+        with summary_path.open(newline="") as fh:
+            rows = list(csv.reader(fh, delimiter="\t"))
+        result["bins_number"] = max(0, len(rows) - 1)
+    except OSError:
+        pass
+    return result
+
+
+def collect_binning_metadata(
+    sample: str,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Collect assembly and binning QC metrics for one sample.
+
+    Looks for output files under output_dir using the path layout produced
+    by the drakkar cataloging workflow:
+
+        cataloging/assembly/quast/{sample}/report.tsv
+        cataloging/mapping/{sample}.flagstat
+        cataloging/binning/dastool/{sample}/{sample}_DASTool_summary.tsv
+
+    Returns a flat dict of metric_key → value (None if file missing).
+    """
+    base = output_dir / "cataloging"
+
+    quast_file   = base / "assembly" / "quast" / sample / "report.tsv"
+    flagstat     = base / "mapping"  / f"{sample}.flagstat"
+    dastool_file = base / "binning"  / "dastool" / sample / f"{sample}_DASTool_summary.tsv"
+
+    result: dict[str, Any] = {}
+    result.update(parse_quast_report(quast_file))
+    result["assembly_mapping_rate"] = parse_flagstat(flagstat).get("mapping_rate")
+    result.update(parse_dastool_summary(dastool_file))
+    return result
+
+
+def collect_quantifying_metadata(
+    sample: str,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Collect profiling metrics for one sample.
+
+    Looks for output files under output_dir using the path layout produced
+    by the drakkar profiling workflow:
+
+        profiling/mapping/{sample}.flagstat
+
+    Returns a flat dict of metric_key → value (None if file missing).
+    """
+    flagstat = output_dir / "profiling" / "mapping" / f"{sample}.flagstat"
+    return parse_flagstat(flagstat)
+
+
+def write_binning_output_tsv(
+    sample_metrics: dict[str, dict[str, Any]],
+    tsv_path: Path,
+) -> None:
+    """Write a per-sample assembly/binning summary TSV to tsv_path."""
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    with tsv_path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=BINNING_OUTPUT_TSV_COLUMNS, delimiter="\t",
+                                extrasaction="ignore")
+        writer.writeheader()
+        for sample, m in sample_metrics.items():
+            writer.writerow({"sample": sample, **m})
+
+
+def write_quantifying_output_tsv(
+    sample_metrics: dict[str, dict[str, Any]],
+    tsv_path: Path,
+) -> None:
+    """Write a per-sample mapping summary TSV to tsv_path."""
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    with tsv_path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=QUANTIFYING_OUTPUT_TSV_COLUMNS, delimiter="\t",
+                                extrasaction="ignore")
+        writer.writeheader()
+        for sample, m in sample_metrics.items():
+            writer.writerow({"sample": sample, **m})
+
+
 # Default mapping: metric key → config key (resolved to field IDs at call time)
 PREPROCESSING_METRIC_KEYS: dict[str, str] = {
     "reads_pre_fastp":        "EHI_PPR_ENTRY_READS_PRE_FASTP",
@@ -245,4 +417,18 @@ PREPROCESSING_METRIC_KEYS: dict[str, str] = {
     "nonpareil_modelR":       "EHI_PPR_ENTRY_NONPAREIL_MODELR",
     "nonpareil_LRstar":       "EHI_PPR_ENTRY_NONPAREIL_LRSTAR",
     "nonpareil_diversity":    "EHI_PPR_ENTRY_NONPAREIL_DIVERSITY",
+}
+
+BINNING_METRIC_KEYS: dict[str, str] = {
+    "assembly_length":          "EHI_ASB_ENTRY_ASSEMBLY_LENGTH",
+    "assembly_n50":             "EHI_ASB_ENTRY_ASSEMBLY_N50",
+    "assembly_l50":             "EHI_ASB_ENTRY_ASSEMBLY_L50",
+    "assembly_contigs_number":  "EHI_ASB_ENTRY_ASSEMBLY_CONTIGS_NUMBER",
+    "assembly_contigs_largest": "EHI_ASB_ENTRY_ASSEMBLY_CONTIGS_LARGEST",
+    "assembly_mapping_rate":    "EHI_ASB_ENTRY_ASSEMBLY_MAPPING_RATE",
+    "bins_number":              "EHI_ASB_ENTRY_BINS_NUMBER",
+}
+
+QUANTIFYING_METRIC_KEYS: dict[str, str] = {
+    "mapping_rate": "MAG_DMB_ENTRY_MAPPING_RATE",
 }

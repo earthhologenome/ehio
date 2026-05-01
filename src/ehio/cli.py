@@ -81,6 +81,24 @@ def _require_cfg(key: str) -> str:
 # preprocessing
 # ---------------------------------------------------------------------------
 
+def _get_drakkar_version() -> str:
+    import re as _re
+    import subprocess as _sp
+    drakkar_conda_env = str(cfg.get("DRAKKAR_CONDA_ENV") or "").strip()
+    if drakkar_conda_env:
+        _flag = "-p" if drakkar_conda_env.startswith(("/", "~", ".")) else "-n"
+        _cmd = ["conda", "run", _flag, drakkar_conda_env, "drakkar", "--version"]
+    else:
+        _cmd = ["drakkar", "--version"]
+    try:
+        _res = _sp.run(_cmd, capture_output=True, text=True, timeout=30)
+        _raw = _res.stdout.strip() or _res.stderr.strip() or ""
+        _m = _re.search(r"(\d+\.\d+[\.\d]*)", _raw)
+        return _m.group(1) if _m else (_raw or "unknown")
+    except Exception:
+        return "unknown"
+
+
 def cmd_preprocessing(args: argparse.Namespace) -> int:
     if args.input:
         return _run_preprocessing_input(args)
@@ -226,7 +244,11 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
 
     _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
     with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
-        n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
+        n = xfer.upload_dir(
+            final_dir, remote_dir,
+            verbose=getattr(args, "verbose", False),
+            include_suffixes=[".bam", ".fq.gz", "_output.tsv"],
+        )
     _info(f"Transferred {n} file(s) to {remote_dir}.")
 
     # Delete the output directory — only the RUN/{batch} directory is kept
@@ -245,22 +267,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         batch_fields[ehio_version_field] = __version__
 
     if drakkar_version_field:
-        import subprocess as _sp
-        drakkar_conda_env = str(cfg.get("DRAKKAR_CONDA_ENV") or "").strip()
-        if drakkar_conda_env:
-            _flag = "-p" if drakkar_conda_env.startswith(("/", "~", ".")) else "-n"
-            _cmd = ["conda", "run", _flag, drakkar_conda_env, "drakkar", "--version"]
-        else:
-            _cmd = ["drakkar", "--version"]
-        try:
-            import re as _re
-            _res = _sp.run(_cmd, capture_output=True, text=True, timeout=30)
-            _raw = _res.stdout.strip() or _res.stderr.strip() or ""
-            _m = _re.search(r"(\d+\.\d+[\.\d]*)", _raw)
-            drakkar_version = _m.group(1) if _m else (_raw or "unknown")
-        except Exception:
-            drakkar_version = "unknown"
-        batch_fields[drakkar_version_field] = drakkar_version
+        batch_fields[drakkar_version_field] = _get_drakkar_version()
 
     # Mark the batch as done
     done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
@@ -329,8 +336,119 @@ def _run_binning_input(args: argparse.Namespace) -> int:
 
 
 def _run_binning_output(args: argparse.Namespace) -> int:
-    _info("Binning output wiring is not yet implemented.")
-    return 1
+    """Parse cataloging metadata from drakkar output, update Airtable, transfer files."""
+    from ehio.airtable import AirtableClient
+    from ehio.metadata import (
+        collect_binning_metadata,
+        build_entry_update,
+        write_binning_output_tsv,
+        BINNING_METRIC_KEYS,
+    )
+    from ehio.transfer import SFTPTransfer
+
+    token       = _resolve_token(args)
+    base_id     = _require_cfg("EHI_BASE")
+    batch_table = _require_cfg("EHI_ASB_BATCH")
+    entry_table = _require_cfg("EHI_ASB_ENTRY")
+
+    batch_code_field  = _require_cfg("EHI_ASB_BATCH_CODE")
+    entry_batch_field = _require_cfg("EHI_ASB_ENTRY_BATCH")
+    entry_code_field  = _require_cfg("EHI_ASB_ENTRY_CODE")
+
+    local_root = Path(args.local_dir).resolve()
+    if not local_root.is_dir():
+        _die(f"Local directory not found: {local_root}")
+
+    _info(f"Looking up batch '{args.batch}' in Airtable...")
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record, entries = client.fetch_batch_and_entries(
+        batch_table=batch_table,
+        batch_code_field=batch_code_field,
+        batch_code=args.batch,
+        entry_table=entry_table,
+        entry_batch_field=entry_batch_field,
+    )
+    if batch_record is None:
+        _die(f"Batch '{args.batch}' not found.")
+    if not entries:
+        _die(f"No entries found for batch '{args.batch}'.")
+
+    field_map: dict[str, str] = {}
+    for metric_key, config_key in BINNING_METRIC_KEYS.items():
+        fld_id = str(cfg.get(config_key) or "").strip()
+        if fld_id:
+            field_map[metric_key] = fld_id
+
+    all_metrics: dict[str, dict] = {}
+    updates: list[dict] = []
+    for entry in entries:
+        sample = str(entry.get("fields", {}).get(entry_code_field, "")).strip()
+        if not sample:
+            continue
+        metrics = collect_binning_metadata(sample, local_root)
+        all_metrics[sample] = metrics
+        payload = build_entry_update(entry["id"], metrics, field_map)
+        if payload["fields"]:
+            updates.append(payload)
+
+    run_base = str(cfg.get("RUN_BASE") or "").strip()
+    tsv_out: Path | None = None
+    if run_base:
+        tsv_out = Path(run_base) / args.batch / f"{args.batch}_output.tsv"
+        write_binning_output_tsv(all_metrics, tsv_out)
+        _info(f"Output summary written to {tsv_out}")
+
+    if updates:
+        _info(f"Updating {len(updates)} entry records in Airtable...")
+        client.update_records(entry_table, updates)
+        _info("Airtable update complete.")
+    else:
+        _info("No assembly/binning metrics found to update.")
+
+    final_dir = local_root / "cataloging" / "final"
+    if not final_dir.is_dir():
+        _info(f"Final output directory not found ({final_dir}); skipping transfer.")
+    else:
+        host     = _conf(args, "host",     "SFTP_HOST",     required=True)
+        user     = _conf(args, "user",     "SFTP_USER",     required=True)
+        port     = int(_conf(args, "port", "SFTP_PORT") or 22)
+        identity = _conf(args, "identity", "SFTP_IDENTITY") or None
+
+        remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
+        remote_dir  = f"{remote_base.rstrip('/')}/ASB/{args.batch}"
+
+        import shutil as _shutil
+        if tsv_out is not None and tsv_out.exists():
+            _shutil.copy2(tsv_out, final_dir / tsv_out.name)
+
+        _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
+        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+            n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
+        _info(f"Transferred {n} file(s) to {remote_dir}.")
+
+        cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
+        if cleanup not in ("false", "0", "no"):
+            _shutil.rmtree(local_root, ignore_errors=True)
+            _info(f"Deleted output directory {local_root}.")
+
+    batch_fields: dict = {}
+    ehio_version_field    = str(cfg.get("EHI_ASB_BATCH_EHIO_VERSION")    or "").strip()
+    drakkar_version_field = str(cfg.get("EHI_ASB_BATCH_DRAKKAR_VERSION") or "").strip()
+    if ehio_version_field:
+        batch_fields[ehio_version_field] = __version__
+    if drakkar_version_field:
+        batch_fields[drakkar_version_field] = _get_drakkar_version()
+
+    done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    batch_status_field = _require_cfg("EHI_ASB_BATCH_STATUS")
+    batch_fields[batch_status_field] = done_status
+
+    client.update_records(
+        batch_table,
+        [{"id": batch_record["id"], "fields": batch_fields}],
+    )
+    _info(f"Batch '{args.batch}' status → '{done_status}'.")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -347,18 +465,19 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
     from ehio.drakkar import write_bins_file, write_sample_file
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("MAG_BASE")
-    batch_table = _require_cfg("MAG_DMB_BATCH")
-    entry_table = _require_cfg("MAG_DMB_ENTRY")
+    token         = _resolve_token(args)
+    base_id       = _require_cfg("MAG_BASE")
+    batch_table   = _require_cfg("MAG_DMB_BATCH")
+    entry_table   = _require_cfg("MAG_DMB_ENTRY")
+    mag_table     = _require_cfg("MAG_ENTRY")
 
     batch_code_field  = _require_cfg("MAG_DMB_BATCH_CODE")
     entry_batch_field = _require_cfg("MAG_DMB_ENTRY_BATCH")
     entry_code_field  = _require_cfg("MAG_DMB_ENTRY_CODE")
-
-    bins_field   = _conf(args, "bins_field",   "MAG_DMB_ENTRY_BINS",   required=True)
-    reads1_field = _conf(args, "reads1_field", "MAG_DMB_ENTRY_READS1", required=True)
-    reads2_field = _conf(args, "reads2_field", "MAG_DMB_ENTRY_READS2", required=True)
+    mag_list_field    = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
+    mag_url_field     = _require_cfg("MAG_ENTRY_URL_FASTA")
+    reads1_field      = _conf(args, "reads1_field", "MAG_DMB_ENTRY_READS1", required=True)
+    reads2_field      = _conf(args, "reads2_field", "MAG_DMB_ENTRY_READS2", required=True)
 
     _info(f"Looking up batch '{args.batch}'...")
     client = AirtableClient(api_key=token, base_id=base_id)
@@ -371,13 +490,30 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     )
     if batch_record is None:
         _die(f"Batch '{args.batch}' not found.")
-    _info(f"Found {len(entries)} entries for batch '{args.batch}'.")
+    _info(f"Found {len(entries)} sample entries for batch '{args.batch}'.")
     if not entries:
-        _die(f"No entries found for batch '{args.batch}'.")
+        _die(f"No sample entries found for batch '{args.batch}'.")
+
+    # Fetch MAG records linked to this batch for the bins file
+    mag_rec_ids = batch_record.get("fields", {}).get(mag_list_field, [])
+    if not mag_rec_ids:
+        _die(
+            f"No MAG records linked in field {mag_list_field} of batch '{args.batch}'. "
+            "Ensure MAG_DMB_BATCH_LIST_MAGS is populated in Airtable."
+        )
+    _info(f"Fetching {len(mag_rec_ids)} MAG record(s) from {mag_table}...")
+    mag_records = []
+    for rec_id in mag_rec_ids:
+        if isinstance(rec_id, str) and rec_id.startswith("rec"):
+            rec = client.fetch_record_by_id(mag_table, rec_id)
+            if rec:
+                mag_records.append(rec)
+    if not mag_records:
+        _die(f"Could not fetch any MAG records for batch '{args.batch}'.")
 
     bins_path = Path(args.bins_file)
-    n_bins = write_bins_file(entries, bins_path, bins_field=bins_field)
-    _info(f"Wrote {n_bins} bin paths to {bins_path}")
+    n_bins = write_bins_file(mag_records, bins_path, bins_field=mag_url_field)
+    _info(f"Wrote {n_bins} MAG paths to {bins_path}")
 
     reads_path = Path(args.sample_file)
     n_reads = write_sample_file(
@@ -392,8 +528,119 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
 
 
 def _run_quantifying_output(args: argparse.Namespace) -> int:
-    _info("Quantifying output wiring is not yet implemented.")
-    return 1
+    """Parse profiling metadata from drakkar output, update Airtable, transfer files."""
+    from ehio.airtable import AirtableClient
+    from ehio.metadata import (
+        collect_quantifying_metadata,
+        build_entry_update,
+        write_quantifying_output_tsv,
+        QUANTIFYING_METRIC_KEYS,
+    )
+    from ehio.transfer import SFTPTransfer
+
+    token       = _resolve_token(args)
+    base_id     = _require_cfg("MAG_BASE")
+    batch_table = _require_cfg("MAG_DMB_BATCH")
+    entry_table = _require_cfg("MAG_DMB_ENTRY")
+
+    batch_code_field  = _require_cfg("MAG_DMB_BATCH_CODE")
+    entry_batch_field = _require_cfg("MAG_DMB_ENTRY_BATCH")
+    entry_code_field  = _require_cfg("MAG_DMB_ENTRY_CODE")
+
+    local_root = Path(args.local_dir).resolve()
+    if not local_root.is_dir():
+        _die(f"Local directory not found: {local_root}")
+
+    _info(f"Looking up batch '{args.batch}' in Airtable...")
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record, entries = client.fetch_batch_and_entries(
+        batch_table=batch_table,
+        batch_code_field=batch_code_field,
+        batch_code=args.batch,
+        entry_table=entry_table,
+        entry_batch_field=entry_batch_field,
+    )
+    if batch_record is None:
+        _die(f"Batch '{args.batch}' not found.")
+    if not entries:
+        _die(f"No entries found for batch '{args.batch}'.")
+
+    field_map: dict[str, str] = {}
+    for metric_key, config_key in QUANTIFYING_METRIC_KEYS.items():
+        fld_id = str(cfg.get(config_key) or "").strip()
+        if fld_id:
+            field_map[metric_key] = fld_id
+
+    all_metrics: dict[str, dict] = {}
+    updates: list[dict] = []
+    for entry in entries:
+        sample = str(entry.get("fields", {}).get(entry_code_field, "")).strip()
+        if not sample:
+            continue
+        metrics = collect_quantifying_metadata(sample, local_root)
+        all_metrics[sample] = metrics
+        payload = build_entry_update(entry["id"], metrics, field_map)
+        if payload["fields"]:
+            updates.append(payload)
+
+    run_base = str(cfg.get("RUN_BASE") or "").strip()
+    tsv_out: Path | None = None
+    if run_base:
+        tsv_out = Path(run_base) / args.batch / f"{args.batch}_output.tsv"
+        write_quantifying_output_tsv(all_metrics, tsv_out)
+        _info(f"Output summary written to {tsv_out}")
+
+    if updates:
+        _info(f"Updating {len(updates)} entry records in Airtable...")
+        client.update_records(entry_table, updates)
+        _info("Airtable update complete.")
+    else:
+        _info("No mapping metrics found to update.")
+
+    final_dir = local_root / "profiling" / "final"
+    if not final_dir.is_dir():
+        _info(f"Final output directory not found ({final_dir}); skipping transfer.")
+    else:
+        host     = _conf(args, "host",     "SFTP_HOST",     required=True)
+        user     = _conf(args, "user",     "SFTP_USER",     required=True)
+        port     = int(_conf(args, "port", "SFTP_PORT") or 22)
+        identity = _conf(args, "identity", "SFTP_IDENTITY") or None
+
+        remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
+        remote_dir  = f"{remote_base.rstrip('/')}/DMB/{args.batch}"
+
+        import shutil as _shutil
+        if tsv_out is not None and tsv_out.exists():
+            _shutil.copy2(tsv_out, final_dir / tsv_out.name)
+
+        _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
+        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+            n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
+        _info(f"Transferred {n} file(s) to {remote_dir}.")
+
+        cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
+        if cleanup not in ("false", "0", "no"):
+            _shutil.rmtree(local_root, ignore_errors=True)
+            _info(f"Deleted output directory {local_root}.")
+
+    batch_fields: dict = {}
+    ehio_version_field    = str(cfg.get("MAG_DMB_BATCH_EHIO_VERSION")    or "").strip()
+    drakkar_version_field = str(cfg.get("MAG_DMB_BATCH_DRAKKAR_VERSION") or "").strip()
+    if ehio_version_field:
+        batch_fields[ehio_version_field] = __version__
+    if drakkar_version_field:
+        batch_fields[drakkar_version_field] = _get_drakkar_version()
+
+    done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    batch_status_field = _require_cfg("MAG_DMB_BATCH_STATUS")
+    batch_fields[batch_status_field] = done_status
+
+    client.update_records(
+        batch_table,
+        [{"id": batch_record["id"], "fields": batch_fields}],
+    )
+    _info(f"Batch '{args.batch}' status → '{done_status}'.")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -495,9 +742,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "quantifying",
         help="Input/output for the dereplication and mapping workflow.",
         description=(
-            "Input mode:  fetch batch + entries from MAG_BASE/MAG_DMB_* tables\n"
-            "             and write a bins file and a reads sample file.\n"
-            "Output mode: transfer coverage tables via lftp (not yet implemented)."
+            "Input mode:  fetch batch + entries from MAG_BASE/MAG_DMB_* tables,\n"
+            "             fetch linked MAG records (MAG_DMB_BATCH_LIST_MAGS → MAG_ENTRY),\n"
+            "             and write a bins file (MAG FASTAs) and a reads sample file.\n"
+            "Output mode: parse mapping metrics, update MAG_DMB_ENTRY, transfer files."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -508,9 +756,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_qnt.add_argument("--sample-file", "-f", default="samples.tsv", metavar="PATH",
         help="Output reads sample file for drakkar (input mode). Default: samples.tsv.")
     p_qnt.add_argument("--bins-file", default="bins.txt", metavar="PATH",
-        help="Output bins path file for drakkar (input mode). Default: bins.txt.")
-    p_qnt.add_argument("--bins-field", metavar="FIELD",
-        help="Field ID for bin file paths (overrides MAG_DMB_ENTRY_BINS).")
+        help="Output MAG bins path file for drakkar (input mode). Default: bins.txt.")
     p_qnt.add_argument("--reads1-field", metavar="FIELD",
         help="Field ID for R1 reads URL (overrides MAG_DMB_ENTRY_READS1).")
     p_qnt.add_argument("--reads2-field", metavar="FIELD",

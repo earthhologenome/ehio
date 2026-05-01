@@ -9,6 +9,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.1.22] - 2026-05-01
+
+### Added
+
+- `ehio binning --output`: mirrors preprocessing output — collects assembly/binning QC metrics (QUAST, DAS_Tool, flagstat), writes `{batch}_output.tsv` to `RUN/{batch}/`, updates `EHI_ASB_ENTRY` in Airtable, transfers `cataloging/final/` via SFTP, logs ehio/drakkar versions to the batch record, and sets status to `Done`.
+- `ehio quantifying --output`: same structure — collects per-sample mapping rates from samtools flagstat, writes `{batch}_output.tsv`, updates `MAG_DMB_ENTRY`, transfers `profiling/final/` via SFTP, and marks the batch `Done`.
+- Generated scripts for binning and quantifying now include `ehio binning/quantifying --output` after the drakkar call, matching preprocessing.
+- `ehio quantifying --input` now fetches the bins file from MAG records linked via `MAG_DMB_BATCH_LIST_MAGS` → `MAG_ENTRY_URL_FASTA`, rather than expecting a bins field on each entry.
+- Config keys `EHI_ASB_BATCH_EHIO_VERSION`, `EHI_ASB_BATCH_DRAKKAR_VERSION`, `MAG_DMB_BATCH_EHIO_VERSION`, `MAG_DMB_BATCH_DRAKKAR_VERSION`, `MAG_DMB_BATCH_LIST_MAGS`, `MAG_ENTRY_URL_FASTA` added.
+
+### Fixed
+
+- Nonpareil file path corrected from `{sample}_nonpareil.tsv` to `{sample}_np.tsv` (actual drakkar output name).
+- Nonpareil column `LR*` corrected to `LRstar` (actual column name in drakkar's `nonpareil_stats.R` output).
+- Preprocessing SFTP transfer now only uploads `.bam`, `.fq.gz`, and `_output.tsv` files, excluding intermediate files such as `.hostbases`, `.hostreads`, `.metareads`, and `.metabases`.
 ## [0.1.21] - 2026-04-30
 
 ### Added

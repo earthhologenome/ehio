@@ -248,6 +248,7 @@ def build_script_content(
         return header + (
             f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
             f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}\n"
+            f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}\n"
         )
 
     if module == "quantifying":
@@ -255,6 +256,7 @@ def build_script_content(
         return header + (
             f"ehio quantifying --input -b {q(batch_name)} -f {q(tsv_file)} --bins-file {q(bins_file)}\n"
             f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}\n"
+            f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}\n"
         )
 
     raise ValueError(f"Unknown module: {module}")
