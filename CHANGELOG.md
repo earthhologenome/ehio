@@ -9,12 +9,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.3] - 2026-05-01
+
+### Added
+
+- `ehio scanning` now reads `EHI_ASB_BATCH_TYPE` from each binning batch record and passes `-m individual` or `-m all` to `drakkar cataloging` accordingly. Airtable values `"Individual"` and `"Coassembly"` (case-insensitive) are supported; anything other than a co-assembly variant defaults to `individual`.
 ## [0.2.2] - 2026-05-01
 
 ### Changed
 
 - `ehio preprocessing --output` now transfers files flat (no subdirectories) to the remote archive. Only the renamed `.fq.gz`, `.bam`, `_cond.tsv`, and `{batch}_output.tsv` files are uploaded; the full `preprocessing/` directory tree is no longer mirrored.
 - `SFTPTransfer.upload_flat`: new method that uploads a list of files directly into a remote directory without preserving any local subdirectory structure.
+
 ## [0.2.1] - 2026-05-01
 
 ### Added
@@ -23,6 +29,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ehio preprocessing --input`, `ehio binning --input`, and `ehio quantifying --input` now verify that all local input file paths exist before returning. Remote URLs are skipped. If any file is missing, each path is reported as a warning and the command exits with an error before a screen session can be launched.
 - `ehio stop` now requires `--module` and accepts `--airtable-token`. Before killing the screen session it connects to Airtable and sets the batch status to `SCANNING_STOPPED_STATUS` (default `"Stopped"`).
 - Config key added: `SCANNING_STOPPED_STATUS` (default `"Stopped"`).
+
 ## [0.2.0] - 2026-05-01
 
 ### Added

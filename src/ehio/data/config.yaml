@@ -170,7 +170,7 @@ SCANNING_LAUNCHED_STATUS: "Running"  # Status written back to the batch record a
 SCANNING_STOPPED_STATUS: "Stopped"  # Status written when a running batch is killed via ehio stop
 PROCESSING_DONE_STATUS: "Done"       # Status written back to the batch record after output processing completes
 PROCESSING_ERROR_STATUS: "Error"     # Status written back to the batch record if drakkar fails
-CLEANUP_OUTPUT_DIR: "true"           # Delete the output directory (PPR/ASB/DMB batch folder) after successful transfer (true/false)
+CLEANUP_OUTPUT_DIR: "false"           # Delete the output directory (PPR/ASB/DMB batch folder) after successful transfer (true/false)
 
 DRAKKAR_PROFILE: "slurm"             # Drakkar workflow profile passed to every drakkar command
 DRAKKAR_PPR_FRACTION: "true"         # Pass --fraction to drakkar preprocessing (run SingleM microbial fraction)
