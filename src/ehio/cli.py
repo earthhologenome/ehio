@@ -223,10 +223,10 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     else:
         _info("No QC metrics found to update.")
 
-    # Transfer final preprocessed files via lftp
-    final_dir = local_root / "preprocessing" / "final"
-    if not final_dir.is_dir():
-        _info(f"Final output directory not found ({final_dir}); skipping transfer.")
+    # Transfer preprocessed output files via SFTP
+    ppr_dir = local_root / "preprocessing"
+    if not ppr_dir.is_dir():
+        _info(f"Preprocessing output directory not found ({ppr_dir}); skipping transfer.")
         return 0
 
     host     = _conf(args, "host",     "SFTP_HOST",     required=True)
@@ -237,17 +237,17 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
     remote_dir = f"{remote_base.rstrip('/')}/PPR/{args.batch}"
 
-    # Copy the output TSV into final/ so it is included in the upload
+    # Copy the output TSV into the preprocessing dir so it is included in the upload
     import shutil as _shutil
     if tsv_out is not None and tsv_out.exists():
-        _shutil.copy2(tsv_out, final_dir / tsv_out.name)
+        _shutil.copy2(tsv_out, ppr_dir / tsv_out.name)
 
-    _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
+    _info(f"Transferring {ppr_dir} → {user}@{host}:{remote_dir} ...")
     with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
         n = xfer.upload_dir(
-            final_dir, remote_dir,
+            ppr_dir, remote_dir,
             verbose=getattr(args, "verbose", False),
-            include_suffixes=[".bam", ".fq.gz", "_output.tsv"],
+            include_suffixes=[".bam", ".fq.gz", "_cond.tsv", "_output.tsv"],
         )
     _info(f"Transferred {n} file(s) to {remote_dir}.")
 

@@ -9,6 +9,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.0] - 2026-05-01
+
+### Added
+
+- `ehio binning --output`: collects assembly/binning QC metrics (QUAST, samtools flagstat, Binette bin count), writes `{batch}_output.tsv`, updates `EHI_ASB_ENTRY` in Airtable, transfers `cataloging/final/` via SFTP, logs ehio/drakkar versions to the batch record, and sets status to `Done`.
+- `ehio quantifying --output`: collects per-sample mapping rates (samtools flagstat), writes `{batch}_output.tsv`, updates `MAG_DMB_ENTRY`, transfers `profiling/final/` via SFTP, and marks the batch `Done`.
+- Generated scripts for binning and quantifying now include `ehio binning/quantifying --output` after the drakkar call, mirroring preprocessing.
+- `ehio quantifying --input` now fetches the bins file from MAG records linked via `MAG_DMB_BATCH_LIST_MAGS` → `MAG_ENTRY_URL_FASTA` instead of expecting a bins field on each entry.
+- `ehio stop --batch XXXXX`: kills the screen session for a running batch.
+- `ehio remove --module MODULE --batch XXXXX`: deletes the output directory without touching `RUN/{batch}`.
+- Config keys added: `EHI_ASB_BATCH_EHIO_VERSION`, `EHI_ASB_BATCH_DRAKKAR_VERSION`, `MAG_DMB_BATCH_EHIO_VERSION`, `MAG_DMB_BATCH_DRAKKAR_VERSION`, `MAG_DMB_BATCH_LIST_MAGS`, `MAG_ENTRY_URL_FASTA`.
+- Preprocessing SFTP transfer now uploads `.bam`, `.fq.gz`, `_cond.tsv` (SingleM condensed profile), and `_output.tsv` from the full `preprocessing/` tree, excluding intermediate files (`.hostbases`, `.hostreads`, `.metareads`, `.metabases`).
+
+### Fixed
+
+- Nonpareil file path corrected from `{sample}_nonpareil.tsv` to `{sample}_np.tsv` (actual drakkar output name).
+- Nonpareil column `LR*` corrected to `LRstar` (actual column name in drakkar's `nonpareil_stats.R` output).
+- Binning metadata collection now uses correct drakkar cataloging output paths: `cataloging/quast/{sample}/report.tsv`, `cataloging/bowtie2/{sample}/{sample}.flagstat.txt`, and `cataloging/final/{sample}.tsv` for bin counts.
 ## [0.1.22] - 2026-05-01
 
 ### Added

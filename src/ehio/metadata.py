@@ -293,7 +293,7 @@ def parse_quast_report(report_path: Path) -> dict[str, Any]:
 def parse_flagstat(flagstat_path: Path) -> dict[str, Any]:
     """Parse a samtools flagstat file to extract the overall mapping rate (%).
 
-    Expected file: cataloging/mapping/{sample}.flagstat
+    Expected file: cataloging/bowtie2/{sample}/{sample}.flagstat.txt
                    profiling/mapping/{sample}.flagstat
     """
     result: dict[str, Any] = {"mapping_rate": None}
@@ -337,22 +337,22 @@ def collect_binning_metadata(
     Looks for output files under output_dir using the path layout produced
     by the drakkar cataloging workflow:
 
-        cataloging/assembly/quast/{sample}/report.tsv
-        cataloging/mapping/{sample}.flagstat
-        cataloging/binning/dastool/{sample}/{sample}_DASTool_summary.tsv
+        cataloging/quast/{sample}/report.tsv                 (QUAST assembly stats)
+        cataloging/bowtie2/{sample}/{sample}.flagstat.txt    (samtools flagstat)
+        cataloging/final/{sample}.tsv                        (Binette quality report, bins count)
 
     Returns a flat dict of metric_key → value (None if file missing).
     """
     base = output_dir / "cataloging"
 
-    quast_file   = base / "assembly" / "quast" / sample / "report.tsv"
-    flagstat     = base / "mapping"  / f"{sample}.flagstat"
-    dastool_file = base / "binning"  / "dastool" / sample / f"{sample}_DASTool_summary.tsv"
+    quast_file   = base / "quast"   / sample / "report.tsv"
+    flagstat     = base / "bowtie2" / sample  / f"{sample}.flagstat.txt"
+    binette_file = base / "final"   / f"{sample}.tsv"
 
     result: dict[str, Any] = {}
     result.update(parse_quast_report(quast_file))
     result["assembly_mapping_rate"] = parse_flagstat(flagstat).get("mapping_rate")
-    result.update(parse_dastool_summary(dastool_file))
+    result.update(parse_dastool_summary(binette_file))
     return result
 
 
