@@ -147,6 +147,27 @@ class SFTPTransfer:
             files = [f for f in files if any(f.name.endswith(s) for s in include_suffixes)]
         return self.upload(files, local_dir, remote_dir, verbose=verbose)
 
+    def upload_flat(
+        self,
+        files: list[Path],
+        remote_dir: str,
+        verbose: bool = False,
+    ) -> int:
+        """Upload a list of files directly into remote_dir, without subdirectories.
+
+        All files land as remote_dir/{filename} regardless of their local location.
+        """
+        self._ensure_remote_dir(remote_dir)
+        remote_root = PurePosixPath(remote_dir)
+        count = 0
+        for file_path in sorted(files):
+            remote_path = str(remote_root / file_path.name)
+            self._sftp.put(str(file_path), remote_path)
+            count += 1
+            if verbose:
+                print(f"  PUT {file_path} -> {remote_path}", file=sys.stderr)
+        return count
+
     def __enter__(self) -> SFTPTransfer:
         self.connect()
         return self

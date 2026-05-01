@@ -285,18 +285,33 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         _rename_preprocessing_files(ppr_dir, code_to_ehi)
         _info(f"Renamed {len(code_to_ehi)} sample file set(s) to EHI names.")
 
-    # Copy the output TSV into the preprocessing dir so it is included in the upload
+    # Collect specific files for a flat transfer (no subdirectory structure)
+    files_to_transfer: list[Path] = []
+    final_dir = ppr_dir / "final"
+    if final_dir.is_dir():
+        files_to_transfer += [
+            f for f in sorted(final_dir.iterdir())
+            if f.is_file() and (f.name.endswith(".bam") or f.name.endswith(".fq.gz"))
+        ]
+    singlem_dir = ppr_dir / "singlem"
+    if singlem_dir.is_dir():
+        files_to_transfer += [
+            f for f in sorted(singlem_dir.iterdir())
+            if f.is_file() and f.name.endswith("_cond.tsv")
+        ]
     if tsv_out is not None and tsv_out.exists():
-        _shutil.copy2(tsv_out, ppr_dir / tsv_out.name)
+        files_to_transfer.append(tsv_out)
 
-    _info(f"Transferring {ppr_dir} → {user}@{host}:{remote_dir} ...")
-    with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
-        n = xfer.upload_dir(
-            ppr_dir, remote_dir,
-            verbose=getattr(args, "verbose", False),
-            include_suffixes=[".bam", ".fq.gz", "_cond.tsv", "_output.tsv"],
-        )
-    _info(f"Transferred {n} file(s) to {remote_dir}.")
+    if not files_to_transfer:
+        _info("No output files found to transfer; skipping SFTP upload.")
+    else:
+        _info(f"Transferring {len(files_to_transfer)} file(s) to {user}@{host}:{remote_dir} ...")
+        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+            n = xfer.upload_flat(
+                files_to_transfer, remote_dir,
+                verbose=getattr(args, "verbose", False),
+            )
+        _info(f"Transferred {n} file(s) to {remote_dir}.")
 
     # Delete the output directory — only the RUN/{batch} directory is kept
     cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
