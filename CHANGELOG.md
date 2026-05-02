@@ -9,6 +9,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.4] - 2026-05-02
+
+### Fixed
+
+- `ehio binning --input` now uses `EHI_ASB_ENTRY_EHI_NUMBER` as the sample name in the input TSV instead of `EHI_ASB_ENTRY_CODE`.
+
+### Changed
+
+- Generated batch scripts now use an `EXIT` trap with a success sentinel (`_EHIO_SUCCESS`) instead of an `ERR` trap. `_EHIO_SUCCESS=1` is set only after `ehio --output` completes; any earlier exit (snakemake failure, SIGTERM, or unexpected screen-session termination) triggers `ehio set-status --status Error` in Airtable.
+
 ## [0.2.3] - 2026-05-01
 
 ### Added

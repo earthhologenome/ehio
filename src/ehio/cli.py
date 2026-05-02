@@ -365,7 +365,7 @@ def _run_binning_input(args: argparse.Namespace) -> int:
 
     batch_code_field  = _require_cfg("EHI_ASB_BATCH_CODE")
     entry_batch_field = _require_cfg("EHI_ASB_ENTRY_BATCH")
-    entry_code_field  = _require_cfg("EHI_ASB_ENTRY_CODE")
+    ehi_number_field  = _require_cfg("EHI_ASB_ENTRY_EHI_NUMBER")
 
     reads1_field = _conf(args, "reads1_field", "EHI_ASB_ENTRY_READS1", required=True)
     reads2_field = _conf(args, "reads2_field", "EHI_ASB_ENTRY_READS2", required=True)
@@ -389,13 +389,13 @@ def _run_binning_input(args: argparse.Namespace) -> int:
     n = write_sample_file(
         entries,
         out_path,
-        sample_field=entry_code_field,
+        sample_field=ehi_number_field,
         reads1_field=reads1_field,
         reads2_field=reads2_field,
     )
     _info(f"Wrote {n} samples to {out_path}")
 
-    missing = verify_input_files(entries, entry_code_field, [reads1_field, reads2_field])
+    missing = verify_input_files(entries, ehi_number_field, [reads1_field, reads2_field])
     if missing:
         for sample, path in missing:
             print(f"  WARNING: [{sample}] file not found: {path}", file=sys.stderr)

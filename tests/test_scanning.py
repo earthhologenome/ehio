@@ -44,14 +44,16 @@ class TestBuildScriptContent:
     def test_has_strict_mode(self):
         assert "set -euo pipefail" in self._script()
 
-    # --- error trap ---
+    # --- exit trap ---
 
-    def test_has_err_trap(self):
+    def test_has_exit_trap(self):
         script = self._script()
-        assert "trap _on_error ERR" in script
+        assert "trap _on_exit EXIT" in script
 
-    def test_error_trap_calls_set_status(self):
+    def test_exit_trap_calls_set_status_on_failure(self):
         script = self._script(batch="PPR001", error_status="Error")
+        assert "_EHIO_SUCCESS=0" in script
+        assert '_EHIO_SUCCESS" -ne 1' in script
         assert "ehio set-status" in script
         assert "--module preprocessing" in script
         assert "--batch" in script
@@ -59,10 +61,17 @@ class TestBuildScriptContent:
         assert "--status" in script
         assert "Error" in script
 
+    def test_success_sentinel_set_after_output_step(self):
+        script = self._script()
+        assert "_EHIO_SUCCESS=1" in script
+        output_pos  = script.index("ehio preprocessing --output")
+        sentinel_pos = script.index("_EHIO_SUCCESS=1")
+        assert sentinel_pos > output_pos
+
     def test_error_status_is_configurable(self):
         script = self._script(error_status="Failed")
         assert "Failed" in script
-        assert "Error" not in script.split("_on_error")[1]  # not in the trap body
+        assert "Error" not in script.split("_on_exit")[1]  # not in the trap body
 
     # --- directories ---
 

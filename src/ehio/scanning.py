@@ -227,10 +227,13 @@ def build_script_content(
         'echo "=== $(date \'+%Y-%m-%d %H:%M:%S\') ===" >&2\n'
         "\n"
         + conda_block +
-        "_on_error() {\n"
-        f"    ehio set-status --module {module} --batch {q(batch_name)} --status {q(error_status)}\n"
+        "_EHIO_SUCCESS=0\n"
+        "_on_exit() {\n"
+        '    if [ "$_EHIO_SUCCESS" -ne 1 ]; then\n'
+        f"        ehio set-status --module {module} --batch {q(batch_name)} --status {q(error_status)}\n"
+        "    fi\n"
         "}\n"
-        "trap _on_error ERR\n"
+        "trap _on_exit EXIT\n"
         "\n"
         f"mkdir -p {q(run_dir)} {q(output_dir)}\n"
     )
@@ -243,6 +246,7 @@ def build_script_content(
             f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
             f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}{fraction_part}{nonpareil_part}\n"
             f"ehio preprocessing --output -b {q(batch_name)} -l {q(output_dir)}\n"
+            "_EHIO_SUCCESS=1\n"
         )
 
     if module == "binning":
@@ -250,6 +254,7 @@ def build_script_content(
             f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
             f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)} -m {q(assembly_mode)}\n"
             f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}\n"
+            "_EHIO_SUCCESS=1\n"
         )
 
     if module == "quantifying":
@@ -258,6 +263,7 @@ def build_script_content(
             f"ehio quantifying --input -b {q(batch_name)} -f {q(tsv_file)} --bins-file {q(bins_file)}\n"
             f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}\n"
             f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}\n"
+            "_EHIO_SUCCESS=1\n"
         )
 
     raise ValueError(f"Unknown module: {module}")
