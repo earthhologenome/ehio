@@ -78,6 +78,7 @@ EHI_ASB_BATCH_DRAKKAR_VERSION: "fldWvZyrMKf3DRKgD" # Field in EHI_ASB_BATCH with
 EHI_ASB_ENTRY_ID: "fld7Nj5uaCBktk00s"  # Field in EHI_ASB_ENTRY with the entry record ID (for processing and logging)
 EHI_ASB_ENTRY_CODE: "fldr9ObDHV3TWAu8n" # Field in EHI_ASB_ENTRY with the entry code (primary key, for processing and logging)
 EHI_ASB_ENTRY_BATCH: "fldG157uPStteBDSL" # Field in EHI_ASB_ENTRY with the linked batch record ID, i.e. EHI_ASB_BATCH_ID (for processing)
+EHI_ASB_ENTRY_EHI_NUMBER: "fldxt8zSwSPioQMAI" # Field in EHI_ASB_ENTRY with the EHI number (for logging)
 EHI_ASB_ENTRY_ASSEMBLY_LENGTH: "fldEbvAMXXpBHbsMD" # Field in EHI_ASB_ENTRY with the total length of the assembly (for logging)
 EHI_ASB_ENTRY_ASSEMBLY_N50: "fldJGlKPtALADiZH1" # Field in EHI_ASB_ENTRY with the N50 of the assembly (for logging)
 EHI_ASB_ENTRY_ASSEMBLY_L50: "fldEGMn73XVjKMoAt" # Field in EHI_ASB_ENTRY with the L50 of the assembly (for logging)
