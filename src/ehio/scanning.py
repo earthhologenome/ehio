@@ -39,6 +39,16 @@ _OUTPUT_BASE_CFG = {
     "binning":       "EHI_ASB_OUTPUT_BASE",
     "quantifying":   "MAG_DMB_OUTPUT_BASE",
 }
+_BOOST_TIME_CFG = {
+    "preprocessing": "EHI_PPR_BATCH_BOOST_TIME",
+    "binning":       "EHI_ASB_BATCH_BOOST_TIME",
+    "quantifying":   "MAG_DMB_BATCH_BOOST_TIME",
+}
+_BOOST_MEMORY_CFG = {
+    "preprocessing": "EHI_PPR_BATCH_BOOST_MEMORY",
+    "binning":       "EHI_ASB_BATCH_BOOST_MEMORY",
+    "quantifying":   "MAG_DMB_BATCH_BOOST_MEMORY",
+}
 _RUN_BASE_CFG = "RUN_BASE"
 
 DRAKKAR_CMD = {
@@ -177,6 +187,8 @@ def build_script_content(
     ppr_fraction: bool = False,
     ppr_nonpareil: bool = False,
     assembly_mode: str = "individual",
+    boost_time: int | None = None,
+    boost_memory: int | None = None,
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -238,13 +250,17 @@ def build_script_content(
         f"mkdir -p {q(run_dir)} {q(output_dir)}\n"
     )
 
+    time_part   = f" --time-multiplier {boost_time}"     if boost_time   and boost_time   > 1 else ""
+    memory_part = f" --memory-multiplier {boost_memory}" if boost_memory and boost_memory > 1 else ""
+    boost_parts = time_part + memory_part
+
     if module == "preprocessing":
-        ref_part      = f" {ref_flag}" if ref_flag else ""
-        fraction_part = " --fraction"  if ppr_fraction  else ""
+        ref_part       = f" {ref_flag}" if ref_flag else ""
+        fraction_part  = " --fraction"  if ppr_fraction  else ""
         nonpareil_part = " --nonpareil" if ppr_nonpareil else ""
         return header + (
             f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
-            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}{fraction_part}{nonpareil_part}\n"
+            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}{fraction_part}{nonpareil_part}{boost_parts}\n"
             f"ehio preprocessing --output -b {q(batch_name)} -l {q(output_dir)}\n"
             "_EHIO_SUCCESS=1\n"
         )
@@ -252,7 +268,7 @@ def build_script_content(
     if module == "binning":
         return header + (
             f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
-            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)} -m {q(assembly_mode)}\n"
+            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)} -m {q(assembly_mode)}{boost_parts}\n"
             f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}\n"
             "_EHIO_SUCCESS=1\n"
         )
@@ -261,7 +277,7 @@ def build_script_content(
         bins_file = f"{run_dir}/{batch_name}_bins.txt"
         return header + (
             f"ehio quantifying --input -b {q(batch_name)} -f {q(tsv_file)} --bins-file {q(bins_file)}\n"
-            f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}\n"
+            f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
             f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}\n"
             "_EHIO_SUCCESS=1\n"
         )
@@ -399,6 +415,24 @@ def scan_module(
                     assembly_mode = "all"
             print(f"  [{module}] {batch_name}: assembly mode → {assembly_mode}", file=sys.stderr)
 
+        def _read_boost(cfg_dict: dict) -> int | None:
+            field_id = str(cfg.get(cfg_dict[module]) or "").strip()
+            if not field_id:
+                return None
+            raw = record.get("fields", {}).get(field_id)
+            try:
+                return int(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        boost_time   = _read_boost(_BOOST_TIME_CFG)
+        boost_memory = _read_boost(_BOOST_MEMORY_CFG)
+        if boost_time or boost_memory:
+            print(
+                f"  [{module}] {batch_name}: boost time={boost_time} memory={boost_memory}",
+                file=sys.stderr,
+            )
+
         script_content = build_script_content(
             module, batch_name, run_dir, output_dir, profile, error_status, ref_flag,
             ehio_conda_env=ehio_conda_env,
@@ -406,6 +440,8 @@ def scan_module(
             ppr_fraction=ppr_fraction,
             ppr_nonpareil=ppr_nonpareil,
             assembly_mode=assembly_mode,
+            boost_time=boost_time,
+            boost_memory=boost_memory,
         )
 
         if do_rerun:

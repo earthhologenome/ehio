@@ -230,6 +230,51 @@ class TestBuildScriptContent:
 
 
 # ---------------------------------------------------------------------------
+# boost flags
+# ---------------------------------------------------------------------------
+
+class TestBoostFlags:
+    def _script(self, module="preprocessing", boost_time=None, boost_memory=None):
+        return build_script_content(
+            module, "PPR001", RUN_DIR, OUT_DIR, "slurm",
+            boost_time=boost_time, boost_memory=boost_memory,
+        )
+
+    def test_no_boost_flags_by_default(self):
+        script = self._script()
+        assert "--time-multiplier"   not in script
+        assert "--memory-multiplier" not in script
+
+    def test_time_multiplier_appended(self):
+        script = self._script(boost_time=4)
+        assert "--time-multiplier 4" in script
+
+    def test_memory_multiplier_appended(self):
+        script = self._script(boost_memory=2)
+        assert "--memory-multiplier 2" in script
+
+    def test_both_multipliers_appended(self):
+        script = self._script(boost_time=3, boost_memory=2)
+        assert "--time-multiplier 3"   in script
+        assert "--memory-multiplier 2" in script
+
+    def test_value_of_1_is_omitted(self):
+        script = self._script(boost_time=1, boost_memory=1)
+        assert "--time-multiplier"   not in script
+        assert "--memory-multiplier" not in script
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_boost_applied_to_all_modules(self, module: str):
+        script = build_script_content(
+            module, "BATCH001",
+            "/run/BATCH001", "/out/BATCH001", "slurm",
+            boost_time=2, boost_memory=4,
+        )
+        assert "--time-multiplier 2"   in script
+        assert "--memory-multiplier 4" in script
+
+
+# ---------------------------------------------------------------------------
 # session_exists
 # ---------------------------------------------------------------------------
 

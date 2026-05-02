@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.5] - 2026-05-02
+
+### Added
+
+- `ehio scanning` now reads `EHI_PPR_BATCH_BOOST_TIME` / `EHI_PPR_BATCH_BOOST_MEMORY` (and the homologous `EHI_ASB_*` and `MAG_DMB_*` keys) from each batch record and passes `--time-multiplier` and `--memory-multiplier` to the corresponding drakkar command. Values of 1 or absent are omitted (default drakkar behaviour).
+
 ## [0.2.4] - 2026-05-02
 
 ### Fixed
@@ -25,6 +31,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `ehio scanning` now reads `EHI_ASB_BATCH_TYPE` from each binning batch record and passes `-m individual` or `-m all` to `drakkar cataloging` accordingly. Airtable values `"Individual"` and `"Coassembly"` (case-insensitive) are supported; anything other than a co-assembly variant defaults to `individual`.
+
 ## [0.2.2] - 2026-05-01
 
 ### Changed
