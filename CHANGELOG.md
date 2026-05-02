@@ -14,6 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - `ehio binning --input` now uses `EHI_ASB_ENTRY_EHI_NUMBER` as the sample name in the input TSV instead of `EHI_ASB_ENTRY_CODE`.
+- `__version__` is now read from package metadata via `importlib.metadata` instead of being hardcoded, so `ehio --version` always reflects the installed version.
 
 ### Changed
 
