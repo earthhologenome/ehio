@@ -34,6 +34,8 @@ EHI_PPR_BATCH_STATUS: "fldhFIPsoslCbCyfo" # Field in EHI_PPR_BATCH with the batc
 EHI_PPR_BATCH_REFERENCE: "fldPte4nQtlSfen8B"  # Field in EHI_PPR_BATCH with the host reference genome URL (leave empty if unused)
 EHI_PPR_BATCH_EHIO_VERSION: "fld6h9dtLWrLIdxHk" # Field in EHI_PPR_BATCH with the ehio version used for preprocessing (for logging)
 EHI_PPR_BATCH_DRAKKAR_VERSION: "fldQXFuzvLSpM9BIQ" # Field in EHI_PPR_BATCH with the drakkar version used for preprocessing (for logging)
+EHI_PPR_BATCH_BOOST_TIME: "fldwB7NVjqdyzmbSr" # Field in EHI_PPR_BATCH with the time boost value passed to drakkar (for processing)
+EHI_PPR_BATCH_BOOST_MEMORY: "fldxmytMjHeuCO0hP" # Field in EHI_PPR_BATCH with the memory boost value passed to drakkar (for processing)
 
 EHI_PPR_ENTRY_ID: "fld9c9LFKKxKSKJ1U"  # Field in EHI_PPR_ENTRY with the entry record ID (for logging)
 EHI_PPR_ENTRY_CODE: "fldNGN3g6Lvqo4ySR" # Field in EHI_PPR_ENTRY with the entry code (primary key, for logging)
@@ -74,6 +76,8 @@ EHI_ASB_BATCH_STATUS: "fldqtozTLIRTzKiac" # Field in EHI_ASB_BATCH with the batc
 EHI_ASB_BATCH_TYPE: "fldNQm1mdTIKkGaVC" # Field in EHI_ASB_BATCH with the batch type (e.g. "co-assembly", for processing)
 EHI_ASB_BATCH_EHIO_VERSION: "fldehAA7O6ndnOqMQ" # Field in EHI_ASB_BATCH with the ehio version used for cataloging (for logging)
 EHI_ASB_BATCH_DRAKKAR_VERSION: "fldWvZyrMKf3DRKgD" # Field in EHI_ASB_BATCH with the drakkar version used for cataloging (for logging)
+EHI_ASB_BATCH_BOOST_TIME: "fldAWH3ThmXdLmXNO" # Field in EHI_ASB_BATCH with the time boost value passed to drakkar (for processing)
+EHI_ASB_BATCH_BOOST_MEMORY: "fld097CY62eALUWBp" # Field in EHI_ASB_BATCH with the memory boost value passed to drakkar (for processing)
 
 EHI_ASB_ENTRY_ID: "fld7Nj5uaCBktk00s"  # Field in EHI_ASB_ENTRY with the entry record ID (for processing and logging)
 EHI_ASB_ENTRY_CODE: "fldr9ObDHV3TWAu8n" # Field in EHI_ASB_ENTRY with the entry code (primary key, for processing and logging)
@@ -129,6 +133,8 @@ MAG_DMB_BATCH_EHIO_VERSION: "fldQlMBHcZxEPA3Qo" # Field in MAG_DMB_BATCH with th
 MAG_DMB_BATCH_DRAKKAR_VERSION: "fldc3hlc2e21Ypsyl" # Field in MAG_DMB_BATCH with the drakkar version used for profiling (for logging)
 MAG_DMB_BATCH_LIST_MAGS: "fldR7UBwTItriazqA" # Field in MAG_DMB_BATCH with the linked MAG records of the batch, i.e. a list of MAG_ENTRY_ID (for processing and logging)
 MAG_DMB_BATCH_LIST_ENTRY: "fldDM08HXSmMOJcQq" # Field in MAG_DMB_BATCH with the linked MAG_DMB_ENTRY records of the batch, i.e. a list of MAG_DMB_ENTRY_ID (for processing and logging)
+MAG_DMB_BATCH_BOOST_TIME: "fldoDeP1xpEKl144d" # Field in MAG_DMB_BATCH with the time boost value passed to drakkar (for processing)
+MAG_DMB_BATCH_BOOST_MEMORY: "fldAMqZtYYTHQG15r" # Field in MAG_DMB_BATCH with the memory boost value passed to drakkar (for processing)
 
 MAG_DMB_ENTRY_ID: "fldGIAejYpkpaws1a" # Field in  MAG_DMB_ENTRY with the entry record ID (for processing and logging)
 MAG_DMB_ENTRY_CODE: "fldbfDFaVIO7OHzN4" # Field in  MAG_DMB_ENTRY with the entry code (primary key, for processing and logging)
