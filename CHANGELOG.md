@@ -9,6 +9,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.6] - 2026-05-02
+
+### Changed
+
+- `ehio preprocessing --output` now reads metrics from the drakkar-generated `preprocessing.tsv` (at the root of the output directory) instead of parsing individual per-sample output files. This fixes missing `metagenomic_reads`, `metagenomic_bases`, `host_reads`, and `host_bases` values that arose because the source files are declared `temp()` in snakemake and deleted after the pipeline run.
+- `ehio binning --output` likewise reads from `cataloging.tsv` instead of per-sample QUAST/flagstat/DAS_Tool files.
+- `write_output_tsv` now uses `host_reads`/`host_bases` from the metrics dict directly when available, falling back to derivation only if absent.
+
+### Added
+
+- `parse_drakkar_stats_tsv`: new function that reads any drakkar summary TSV into a `{sample: metrics}` dict, handling `NA`/empty cells as `None` and coercing numeric strings to `int` or `float`.
+- `host_reads` and `host_bases` added to `PREPROCESSING_METRIC_KEYS` and config (`EHI_PPR_ENTRY_HOST_READS`, `EHI_PPR_ENTRY_HOST_BASES`).
+
 ## [0.2.5] - 2026-05-02
 
 ### Added

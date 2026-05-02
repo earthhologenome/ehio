@@ -12,6 +12,7 @@ from ehio.metadata import (
     parse_singlem_mf,
     parse_nonpareil,
     collect_preprocessing_metadata,
+    parse_drakkar_stats_tsv,
     build_entry_update,
     PREPROCESSING_METRIC_KEYS,
 )
@@ -173,6 +174,66 @@ class TestCollectPreprocessingMetadata:
 # ---------------------------------------------------------------------------
 # build_entry_update
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# parse_drakkar_stats_tsv
+# ---------------------------------------------------------------------------
+
+DRAKKAR_PREPROCESSING_TSV = (
+    "sample\treads_pre_fastp\tbases_pre_fastp\thost_reads\thost_bases"
+    "\tmetagenomic_reads\tmetagenomic_bases\tsinglem_fraction\tnonpareil_C\n"
+    "PR00001\t10000000\t1500000000\t13230\t1686712\t9000000\t1350000000\t77.14\t0.84\n"
+    "PR00002\t8000000\t1200000000\tNA\tNA\t7000000\t1050000000\tNA\t0.91\n"
+)
+
+DRAKKAR_CATALOGING_TSV = (
+    "sample\tassembly_length\tassembly_n50\tbins_number\n"
+    "PR00001\t150000000\t45000\t12\n"
+    "PR00002\t120000000\tNA\t0\n"
+)
+
+
+class TestParseDrakkarStatsTsv:
+    def test_parses_integers(self, tmp_path: Path):
+        p = tmp_path / "preprocessing.tsv"
+        p.write_text(DRAKKAR_PREPROCESSING_TSV)
+        data = parse_drakkar_stats_tsv(p)
+        assert data["PR00001"]["reads_pre_fastp"] == 10_000_000
+        assert data["PR00001"]["host_reads"]      == 13_230
+        assert data["PR00001"]["metagenomic_reads"] == 9_000_000
+
+    def test_parses_floats(self, tmp_path: Path):
+        p = tmp_path / "preprocessing.tsv"
+        p.write_text(DRAKKAR_PREPROCESSING_TSV)
+        data = parse_drakkar_stats_tsv(p)
+        assert data["PR00001"]["singlem_fraction"] == pytest.approx(77.14)
+        assert data["PR00001"]["nonpareil_C"]      == pytest.approx(0.84)
+
+    def test_na_becomes_none(self, tmp_path: Path):
+        p = tmp_path / "preprocessing.tsv"
+        p.write_text(DRAKKAR_PREPROCESSING_TSV)
+        data = parse_drakkar_stats_tsv(p)
+        assert data["PR00002"]["host_reads"]       is None
+        assert data["PR00002"]["singlem_fraction"] is None
+
+    def test_missing_file_returns_empty(self, tmp_path: Path):
+        data = parse_drakkar_stats_tsv(tmp_path / "nonexistent.tsv")
+        assert data == {}
+
+    def test_all_samples_present(self, tmp_path: Path):
+        p = tmp_path / "preprocessing.tsv"
+        p.write_text(DRAKKAR_PREPROCESSING_TSV)
+        data = parse_drakkar_stats_tsv(p)
+        assert set(data.keys()) == {"PR00001", "PR00002"}
+
+    def test_cataloging_tsv(self, tmp_path: Path):
+        p = tmp_path / "cataloging.tsv"
+        p.write_text(DRAKKAR_CATALOGING_TSV)
+        data = parse_drakkar_stats_tsv(p)
+        assert data["PR00001"]["assembly_length"] == 150_000_000
+        assert data["PR00001"]["bins_number"]     == 12
+        assert data["PR00002"]["assembly_n50"]    is None
+
 
 class TestBuildEntryUpdate:
     FIELD_MAP = {

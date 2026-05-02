@@ -49,6 +49,8 @@ EHI_PPR_ENTRY_ADAPTER_TRIMMED_READS: "fldtiEgq84YUCgOzd" # Field in EHI_PPR_ENTR
 EHI_PPR_ENTRY_ADAPTER_TRIMMED_BASES: "fldKQwge0das5oC7a" # Field in EHI_PPR_ENTRY with the number of bases in the reads with adapters trimmed (for logging)
 EHI_PPR_ENTRY_READS_POST_FASTP: "fld3g3ZNUyoN8tY36" # Field in EHI_PPR_ENTRY with the number of reads in the preprocessed reads (for logging)
 EHI_PPR_ENTRY_BASES_POST_FASTP: "fldqOODWP4U8cP2z4" # Field in EHI_PPR_ENTRY with the number of bases in the preprocessed reads (for logging)
+EHI_PPR_ENTRY_HOST_READS: "fldn94xR5b0UQA82E" # Field in EHI_PPR_ENTRY with the number of host reads (fill in Airtable field ID to enable)
+EHI_PPR_ENTRY_HOST_BASES: "fldJdI34Lp7rB4vN7" # Field in EHI_PPR_ENTRY with the number of host bases (fill in Airtable field ID to enable)
 EHI_PPR_ENTRY_METAGENOMIC_READS: "fldzI8PYD9asJYIkN" # Field in EHI_PPR_ENTRY with the number of reads in the preprocessed reads that are metagenomic (for logging)
 EHI_PPR_ENTRY_METAGENOMIC_BASES: "fldtB7Y7PSzpdSKUa" # Field in EHI_PPR_ENTRY with the number of reads in the preprocessed reads that are metagenomic (for logging)
 EHI_PPR_ENTRY_SINGLEM_FRACTION: "fldm3dHUMQ8X9fWoj" # Field in EHI_PPR_ENTRY with the fraction of reads in the preprocessed reads that are singletons (for logging)

@@ -187,7 +187,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     """Parse QC metadata from drakkar output, update Airtable, transfer files."""
     from ehio.airtable import AirtableClient
     from ehio.metadata import (
-        collect_preprocessing_metadata,
+        parse_drakkar_stats_tsv,
         build_entry_update,
         write_output_tsv,
         PREPROCESSING_METRIC_KEYS,
@@ -230,7 +230,13 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         if fld_id:
             field_map[metric_key] = fld_id
 
-    # Parse QC metadata for all samples; build code→EHI mapping for renaming/TSV
+    # Read all QC metrics from the drakkar-generated summary TSV
+    stats_tsv = local_root / "preprocessing.tsv"
+    sample_stats = parse_drakkar_stats_tsv(stats_tsv)
+    if not sample_stats:
+        print(f"  Warning: drakkar stats TSV not found or empty: {stats_tsv}", file=sys.stderr)
+
+    # Build code→EHI mapping and Airtable update payloads
     code_to_ehi: dict[str, str] = {}
     all_metrics: dict[str, dict] = {}
     updates: list[dict] = []
@@ -242,7 +248,9 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
             continue
         if ehi:
             code_to_ehi[sample] = ehi
-        metrics = collect_preprocessing_metadata(sample, local_root)
+        metrics = sample_stats.get(sample, {})
+        if not metrics:
+            print(f"  Warning: no stats found for sample '{sample}' in {stats_tsv}", file=sys.stderr)
         all_metrics[sample] = metrics
         payload = build_entry_update(entry["id"], metrics, field_map)
         if payload["fields"]:
@@ -407,7 +415,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     """Parse cataloging metadata from drakkar output, update Airtable, transfer files."""
     from ehio.airtable import AirtableClient
     from ehio.metadata import (
-        collect_binning_metadata,
+        parse_drakkar_stats_tsv,
         build_entry_update,
         write_binning_output_tsv,
         BINNING_METRIC_KEYS,
@@ -447,13 +455,21 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         if fld_id:
             field_map[metric_key] = fld_id
 
+    # Read all QC metrics from the drakkar-generated summary TSV
+    stats_tsv = local_root / "cataloging.tsv"
+    sample_stats = parse_drakkar_stats_tsv(stats_tsv)
+    if not sample_stats:
+        print(f"  Warning: drakkar stats TSV not found or empty: {stats_tsv}", file=sys.stderr)
+
     all_metrics: dict[str, dict] = {}
     updates: list[dict] = []
     for entry in entries:
         sample = str(entry.get("fields", {}).get(entry_code_field, "")).strip()
         if not sample:
             continue
-        metrics = collect_binning_metadata(sample, local_root)
+        metrics = sample_stats.get(sample, {})
+        if not metrics:
+            print(f"  Warning: no stats found for sample '{sample}' in {stats_tsv}", file=sys.stderr)
         all_metrics[sample] = metrics
         payload = build_entry_update(entry["id"], metrics, field_map)
         if payload["fields"]:

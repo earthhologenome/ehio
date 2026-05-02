@@ -202,15 +202,50 @@ def build_entry_update(
     return {"id": record_id, "fields": fields}
 
 
+def parse_drakkar_stats_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
+    """Read a drakkar summary TSV (e.g. preprocessing.tsv or cataloging.tsv).
+
+    Returns {sample_code: {metric_name: value, ...}}.
+    Numeric strings are coerced to int (if whole-valued) or float.
+    'NA', empty, and similar sentinel strings become None.
+    """
+    result: dict[str, dict[str, Any]] = {}
+    if not tsv_path.exists():
+        return result
+    try:
+        with tsv_path.open(newline="") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            for row in reader:
+                sample = (row.get("sample") or "").strip()
+                if not sample:
+                    continue
+                metrics: dict[str, Any] = {}
+                for col, raw in row.items():
+                    if col == "sample":
+                        continue
+                    v = (raw or "").strip()
+                    if v in ("", "NA", "nan", "NaN", "None", "none"):
+                        metrics[col] = None
+                    else:
+                        try:
+                            f = float(v)
+                            metrics[col] = int(f) if f == round(f) else f
+                        except ValueError:
+                            metrics[col] = v
+                result[sample] = metrics
+    except OSError:
+        pass
+    return result
+
+
 def write_output_tsv(
     sample_metrics: dict[str, dict[str, Any]],
     tsv_path: Path,
 ) -> None:
     """Write a per-sample summary TSV to tsv_path.
 
-    sample_metrics: {sample_code: metrics_dict} as returned by
-    collect_preprocessing_metadata.  host_reads / host_bases are derived
-    here as (reads_post_fastp - metagenomic_reads) etc.
+    Uses host_reads / host_bases from the metrics dict when present;
+    falls back to deriving them as (reads_post_fastp - metagenomic_reads) etc.
     """
     tsv_path.parent.mkdir(parents=True, exist_ok=True)
     with tsv_path.open("w", newline="") as fh:
@@ -219,12 +254,14 @@ def write_output_tsv(
         writer.writeheader()
         for sample, m in sample_metrics.items():
             row = {"sample": sample, **m}
-            rp = m.get("reads_post_fastp")
-            mr = m.get("metagenomic_reads")
-            bp = m.get("bases_post_fastp")
-            mb = m.get("metagenomic_bases")
-            row["host_reads"] = (rp - mr) if (rp is not None and mr is not None) else None
-            row["host_bases"] = (bp - mb) if (bp is not None and mb is not None) else None
+            if row.get("host_reads") is None:
+                rp = m.get("reads_post_fastp")
+                mr = m.get("metagenomic_reads")
+                row["host_reads"] = (rp - mr) if (rp is not None and mr is not None) else None
+            if row.get("host_bases") is None:
+                bp = m.get("bases_post_fastp")
+                mb = m.get("metagenomic_bases")
+                row["host_bases"] = (bp - mb) if (bp is not None and mb is not None) else None
             writer.writerow(row)
 
 
@@ -409,6 +446,8 @@ PREPROCESSING_METRIC_KEYS: dict[str, str] = {
     "adapter_trimmed_bases":  "EHI_PPR_ENTRY_ADAPTER_TRIMMED_BASES",
     "reads_post_fastp":       "EHI_PPR_ENTRY_READS_POST_FASTP",
     "bases_post_fastp":       "EHI_PPR_ENTRY_BASES_POST_FASTP",
+    "host_reads":             "EHI_PPR_ENTRY_HOST_READS",
+    "host_bases":             "EHI_PPR_ENTRY_HOST_BASES",
     "metagenomic_reads":      "EHI_PPR_ENTRY_METAGENOMIC_READS",
     "metagenomic_bases":      "EHI_PPR_ENTRY_METAGENOMIC_BASES",
     "singlem_fraction":       "EHI_PPR_ENTRY_SINGLEM_FRACTION",
