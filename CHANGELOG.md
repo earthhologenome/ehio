@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.14] - 2026-05-03
+
+### Changed
+
+- Removed `score` from `BIN_METRIC_KEYS` and dropped `MAG_ENTRY_SCORE` from config. The Binette score is no longer written to Airtable.
+
 ## [0.2.13] - 2026-05-03
 
 ### Fixed

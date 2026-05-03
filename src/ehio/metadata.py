@@ -335,7 +335,6 @@ QUANTIFYING_OUTPUT_TSV_COLUMNS: list[str] = [
 BIN_METRIC_KEYS: dict[str, str] = {
     "completeness":  "MAG_ENTRY_CHECKM_COMPLETENESS",
     "contamination": "MAG_ENTRY_CHECKM_CONTAMINATION",
-    "score":         "MAG_ENTRY_SCORE",
     "size":          "MAG_ENTRY_SIZE",
     "N50":           "MAG_ENTRY_N50",
     "contig_count":  "MAG_ENTRY_CONTIGS_NUMBER",

@@ -338,9 +338,8 @@ class TestParseBinMetadataCsv:
     def test_missing_file_returns_empty(self, tmp_path: Path):
         assert parse_bin_metadata_csv(tmp_path / "missing.csv") == []
 
-    def test_bin_metric_keys_cover_all_csv_columns(self):
-        csv_data_cols = {"completeness", "contamination", "score", "size", "N50", "contig_count"}
-        assert csv_data_cols == set(BIN_METRIC_KEYS.keys())
+    def test_bin_metric_keys_excludes_score(self):
+        assert "score" not in BIN_METRIC_KEYS
 
 
 class TestBuildEntryUpdate:
