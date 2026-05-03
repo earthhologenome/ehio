@@ -193,6 +193,45 @@ class TestBuildScriptContent:
 
 
 # ---------------------------------------------------------------------------
+# resume flag (skip --input step)
+# ---------------------------------------------------------------------------
+
+class TestResumeFlag:
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_resume_skips_input_step(self, module: str):
+        script = build_script_content(
+            module, "BATCH001", "/run/BATCH001", "/out/BATCH001", "slurm",
+            resume=True,
+        )
+        assert f"ehio {module} --input" not in script
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_resume_keeps_drakkar_and_output_steps(self, module: str):
+        script = build_script_content(
+            module, "BATCH001", "/run/BATCH001", "/out/BATCH001", "slurm",
+            resume=True,
+        )
+        drakkar_sub = DRAKKAR_CMD[module]
+        assert f"drakkar {drakkar_sub}" in script
+        assert f"ehio {module} --output" in script
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_no_resume_includes_input_step(self, module: str):
+        script = build_script_content(
+            module, "BATCH001", "/run/BATCH001", "/out/BATCH001", "slurm",
+            resume=False,
+        )
+        assert f"ehio {module} --input" in script
+
+    def test_resume_tsv_path_still_passed_to_drakkar(self):
+        script = build_script_content(
+            "binning", "ASB001", "/run/ASB001", "/out/ASB001", "slurm",
+            resume=True,
+        )
+        assert "ASB001.tsv" in script
+
+
+# ---------------------------------------------------------------------------
 # boost flags
 # ---------------------------------------------------------------------------
 

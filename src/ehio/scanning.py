@@ -189,6 +189,7 @@ def build_script_content(
     boost_time: int | None = None,
     boost_memory: int | None = None,
     rerun: bool = False,
+    resume: bool = False,
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -259,28 +260,31 @@ def build_script_content(
         ref_part       = f" {ref_flag}" if ref_flag else ""
         fraction_part  = " --fraction"  if ppr_fraction  else ""
         nonpareil_part = " --nonpareil" if ppr_nonpareil else ""
+        input_step = "" if resume else f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
         return header + (
-            f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
-            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}{fraction_part}{nonpareil_part}{boost_parts}\n"
-            f"ehio preprocessing --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
-            "_EHIO_SUCCESS=1\n"
+            input_step
+            + f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}{fraction_part}{nonpareil_part}{boost_parts}\n"
+            + f"ehio preprocessing --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
+            + "_EHIO_SUCCESS=1\n"
         )
 
     if module == "binning":
+        input_step = "" if resume else f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
         return header + (
-            f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
-            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
-            f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
-            "_EHIO_SUCCESS=1\n"
+            input_step
+            + f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
+            + f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
+            + "_EHIO_SUCCESS=1\n"
         )
 
     if module == "quantifying":
-        bins_file = f"{run_dir}/{batch_name}_bins.txt"
+        bins_file  = f"{run_dir}/{batch_name}_bins.txt"
+        input_step = "" if resume else f"ehio quantifying --input -b {q(batch_name)} -f {q(tsv_file)} --bins-file {q(bins_file)}\n"
         return header + (
-            f"ehio quantifying --input -b {q(batch_name)} -f {q(tsv_file)} --bins-file {q(bins_file)}\n"
-            f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
-            f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
-            "_EHIO_SUCCESS=1\n"
+            input_step
+            + f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
+            + f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
+            + "_EHIO_SUCCESS=1\n"
         )
 
     raise ValueError(f"Unknown module: {module}")
@@ -375,17 +379,17 @@ def scan_module(
             trigger_status=status,
         ) if status else []
 
-    # (record, do_rerun)
-    pending: list[tuple[dict, bool]] = (
-        [(r, False) for r in _fetch(trigger_status)]
-        + [(r, False) for r in _fetch(resume_status)]
-        + [(r, True)  for r in _fetch(rerun_status)]
+    # (record, do_rerun, do_resume)
+    pending: list[tuple[dict, bool, bool]] = (
+        [(r, False, False) for r in _fetch(trigger_status)]
+        + [(r, False, True)  for r in _fetch(resume_status)]
+        + [(r, True,  False) for r in _fetch(rerun_status)]
     )
 
     found    = len(pending)
     launched = 0
 
-    for record, do_rerun in pending:
+    for record, do_rerun, do_resume in pending:
         batch_name = str(record.get("fields", {}).get(batch_code_field, "")).strip()
         if not batch_name:
             continue
@@ -434,6 +438,7 @@ def scan_module(
             boost_time=boost_time,
             boost_memory=boost_memory,
             rerun=do_rerun,
+            resume=do_resume,
         )
 
         if do_rerun:
@@ -449,16 +454,19 @@ def scan_module(
             script_path.write_text(script_content, encoding="utf-8")
             script_path.chmod(0o755)
             print(f"  [{module}] {batch_name}: script written → {script_path}")
-            try:
-                _generate_input_files(module, batch_name, run_dir, token)
-                tsv_path = Path(run_dir) / f"{batch_name}.tsv"
-                print(f"  [{module}] {batch_name}: input file written → {tsv_path}")
-            except subprocess.CalledProcessError as exc:
-                print(
-                    f"  [{module}] {batch_name}: WARNING — input generation failed "
-                    f"(exit {exc.returncode}); check Airtable fields and token.",
-                    file=sys.stderr,
-                )
+            if do_resume:
+                print(f"  [{module}] {batch_name}: resume — skipping input file generation (using existing TSV)")
+            else:
+                try:
+                    _generate_input_files(module, batch_name, run_dir, token)
+                    tsv_path = Path(run_dir) / f"{batch_name}.tsv"
+                    print(f"  [{module}] {batch_name}: input file written → {tsv_path}")
+                except subprocess.CalledProcessError as exc:
+                    print(
+                        f"  [{module}] {batch_name}: WARNING — input generation failed "
+                        f"(exit {exc.returncode}); check Airtable fields and token.",
+                        file=sys.stderr,
+                    )
             print(f"  [{module}] {batch_name}: dry-run — screen session not launched, Airtable status unchanged")
             launched += 1
             continue

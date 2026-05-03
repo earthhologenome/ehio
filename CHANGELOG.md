@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.10] - 2026-05-03
+
+### Added
+
+- "Resume" batch status: when a batch is set to `SCANNING_RESUME_STATUS` (default `"Resume"`), the generated script skips the `ehio <module> --input` step and runs drakkar directly against the existing input TSV, then runs `ehio <module> --output` as normal. Useful when drakkar stopped mid-run and the input files are already in place.
+
 ## [0.2.9] - 2026-05-03
 
 ### Fixed
@@ -23,7 +29,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `--rerun` flag for `ehio preprocessing/binning/quantifying --output`: when set, the remote archive directory is deleted via SFTP before uploading the new output files, replacing the previous run's data cleanly.
 
-## [0.2.7] - 2026-05-03
 
 ### Changed
 
