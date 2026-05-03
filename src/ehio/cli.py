@@ -547,7 +547,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         else:
             mag_table    = _require_cfg("MAG_ENTRY")
             mag_client   = AirtableClient(api_key=token, base_id=mag_base_id)
-            mag_code_fld = str(cfg.get("MAG_ENTRY_CODE")      or "").strip()
+            mag_name_fld = str(cfg.get("MAG_ENTRY_NAME")      or "").strip()
             mag_url_fld  = str(cfg.get("MAG_ENTRY_URL_FASTA") or "").strip()
             mag_field_map: dict[str, str] = {}
             for _mk, _ck in BIN_METRIC_KEYS.items():
@@ -579,10 +579,10 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                 genome = bin_row.get("genome", "")
                 if not genome:
                     continue
-                genome_code = genome.removesuffix(".fa").removesuffix(".fasta")
+                genome_name = genome.removesuffix(".fa").removesuffix(".fasta")
                 rec_fields: dict = {}
-                if mag_code_fld:
-                    rec_fields[mag_code_fld] = genome_code
+                if mag_name_fld:
+                    rec_fields[mag_name_fld] = genome_name
                 for metric, fld_id in mag_field_map.items():
                     val = bin_row.get(metric)
                     if val is not None:

@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.15] - 2026-05-03
+
+### Fixed
+
+- `MAG_ENTRY_CODE` (the auto-number primary key "ID" in Airtable) is no longer written during record creation. The genome filename (without extension) is now stored in `MAG_ENTRY_NAME` instead, which is a writable text field.
+
 ## [0.2.14] - 2026-05-03
 
 ### Changed
