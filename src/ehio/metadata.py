@@ -332,6 +332,49 @@ QUANTIFYING_OUTPUT_TSV_COLUMNS: list[str] = [
     "mapping_rate",
 ]
 
+BIN_METRIC_KEYS: dict[str, str] = {
+    "completeness":  "MAG_ENTRY_CHECKM_COMPLETENESS",
+    "contamination": "MAG_ENTRY_CHECKM_CONTAMINATION",
+    "score":         "MAG_ENTRY_SCORE",
+    "size":          "MAG_ENTRY_SIZE",
+    "N50":           "MAG_ENTRY_N50",
+    "contig_count":  "MAG_ENTRY_CONTIGS_NUMBER",
+}
+
+
+def parse_bin_metadata_csv(csv_path: Path) -> list[dict[str, Any]]:
+    """Read drakkar's all_bin_metadata.csv.
+
+    Columns: genome, completeness, contamination, score, size, N50, contig_count
+    Returns a list of dicts, one per bin.  Numeric strings are coerced; empty /
+    NA values become None.
+    """
+    result: list[dict[str, Any]] = []
+    if not csv_path.exists():
+        return result
+    try:
+        with csv_path.open(newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                bin_info: dict[str, Any] = {}
+                for col, raw in row.items():
+                    v = (raw or "").strip()
+                    if col == "genome":
+                        bin_info[col] = v
+                    elif v in ("", "NA", "nan", "NaN", "None", "none"):
+                        bin_info[col] = None
+                    else:
+                        try:
+                            f = float(v)
+                            bin_info[col] = int(f) if f == round(f) else f
+                        except ValueError:
+                            bin_info[col] = v
+                if bin_info.get("genome"):
+                    result.append(bin_info)
+    except OSError:
+        pass
+    return result
+
 
 # ---------------------------------------------------------------------------
 # Binning / cataloging parsers

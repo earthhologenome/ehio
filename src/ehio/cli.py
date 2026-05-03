@@ -422,9 +422,11 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     from ehio.metadata import (
         parse_drakkar_cataloging_tsv,
         parse_sample_mapping_rates,
+        parse_bin_metadata_csv,
         build_entry_update,
         write_binning_output_tsv,
         BINNING_METRIC_KEYS,
+        BIN_METRIC_KEYS,
     )
     from ehio.transfer import SFTPTransfer
 
@@ -532,6 +534,80 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                 _info(f"Deleted remote directory {remote_dir} for rerun.")
             n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
         _info(f"Transferred {n} file(s) to {remote_dir}.")
+
+        # --- Create MAG_ENTRY records and upload FASTA files ----------------
+        bin_metadata_csv = final_dir / "all_bin_metadata.csv"
+        bin_paths_txt    = final_dir / "all_bin_paths.txt"
+        mag_base_id      = str(cfg.get("MAG_BASE") or "").strip()
+
+        if not bin_metadata_csv.exists():
+            _info(f"No bin metadata CSV found ({bin_metadata_csv}); skipping MAG creation.")
+        elif not mag_base_id:
+            _info("MAG_BASE not configured; skipping MAG creation.")
+        else:
+            mag_table    = _require_cfg("MAG_ENTRY")
+            mag_client   = AirtableClient(api_key=token, base_id=mag_base_id)
+            mag_code_fld = str(cfg.get("MAG_ENTRY_CODE")      or "").strip()
+            mag_url_fld  = str(cfg.get("MAG_ENTRY_URL_FASTA") or "").strip()
+            mag_field_map: dict[str, str] = {}
+            for _mk, _ck in BIN_METRIC_KEYS.items():
+                _fid = str(cfg.get(_ck) or "").strip()
+                if _fid:
+                    mag_field_map[_mk] = _fid
+
+            remote_mag_dir = f"{remote_base.rstrip('/')}/MAG/{args.batch}"
+
+            # Collect FASTA files listed in all_bin_paths.txt
+            bin_files: list[Path] = []
+            if bin_paths_txt.exists():
+                for _line in bin_paths_txt.read_text().splitlines():
+                    _line = _line.strip()
+                    if _line:
+                        _p = local_root / _line
+                        if _p.exists():
+                            bin_files.append(_p)
+
+            # Map filename → remote URL (preserving assembly subdirectory)
+            remote_urls: dict[str, str] = {}
+            for _bf in bin_files:
+                _rel = _bf.relative_to(final_dir)
+                remote_urls[_bf.name] = f"{remote_mag_dir}/{_rel.as_posix()}"
+
+            # Build and create MAG_ENTRY records
+            bins_data = parse_bin_metadata_csv(bin_metadata_csv)
+            records_to_create: list[dict] = []
+            for bin_row in bins_data:
+                genome = bin_row.get("genome", "")
+                if not genome:
+                    continue
+                genome_code = genome.removesuffix(".fa").removesuffix(".fasta")
+                rec_fields: dict = {}
+                if mag_code_fld:
+                    rec_fields[mag_code_fld] = genome_code
+                for metric, fld_id in mag_field_map.items():
+                    val = bin_row.get(metric)
+                    if val is not None:
+                        rec_fields[fld_id] = val
+                if mag_url_fld and genome in remote_urls:
+                    rec_fields[mag_url_fld] = remote_urls[genome]
+                if rec_fields:
+                    records_to_create.append(rec_fields)
+
+            if records_to_create:
+                _info(f"Creating {len(records_to_create)} MAG_ENTRY records in Airtable...")
+                mag_client.create_records(mag_table, records_to_create)
+                _info("MAG_ENTRY records created.")
+
+            # Upload FASTA files to MAG/{batch}/
+            if bin_files:
+                _info(f"Uploading {len(bin_files)} FASTA files to {remote_mag_dir} ...")
+                with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+                    if getattr(args, "rerun", False):
+                        xfer.remove_remote_dir(remote_mag_dir)
+                        _info(f"Deleted remote MAG directory {remote_mag_dir} for rerun.")
+                    n_mag = xfer.upload(bin_files, final_dir, remote_mag_dir,
+                                        verbose=getattr(args, "verbose", False))
+                _info(f"Uploaded {n_mag} FASTA files to {remote_mag_dir}.")
 
         cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
         if cleanup not in ("false", "0", "no"):

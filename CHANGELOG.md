@@ -9,6 +9,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.12] - 2026-05-03
+
+### Added
+
+- `ehio binning --output` now reads `cataloging/final/all_bin_metadata.csv` and creates one `MAG_ENTRY` record per bin in Airtable (`MAG_BASE`), populating: code (genome filename without extension), completeness, contamination, score, size, N50, contig count, and the remote FASTA URL.
+- FASTA files listed in `cataloging/final/all_bin_paths.txt` are uploaded to `{SFTP_REMOTE_BASE}/MAG/{batch}/` preserving the assembly subdirectory (e.g. `.../MAG/ABB0650/EHA05803/EHA05803_bin_2253.fa`). The remote URL is written into `MAG_ENTRY_URL_FASTA` at record-creation time.
+- New config key `MAG_ENTRY_SCORE` for the Binette composite score field (leave empty to skip).
+- `AirtableClient.create_records`: new method for batch-creating records via `batch_create`.
+
 ## [0.2.11] - 2026-05-03
 
 ### Changed

@@ -121,6 +121,7 @@ MAG_ENTRY_GTDB_CLOSEST_ANI: "fldsTSy8J1B73iLsa" # Field in MAG_ENTRY with the AN
 MAG_ENTRY_GTDB_CLOSEST_AF: "fldDT4VsnW4kN5Utk" # Field in MAG_ENTRY with the alignment fraction (AF) of the closest GTDB reference genome (for logging)
 MAG_ENTRY_CHECKM_COMPLETENESS: "fldcFmtnC7wvC05iZ" # Field in MAG_ENTRY with the CheckM completeness of the MAG (for logging)
 MAG_ENTRY_CHECKM_CONTAMINATION: "fldDwHfLHtjaCL12Q" # Field in MAG_ENTRY with the CheckM contamination of the MAG (for logging)
+MAG_ENTRY_SCORE: ""                        # Field in MAG_ENTRY with the Binette composite score (fill in Airtable field ID to enable)
 MAG_ENTRY_URL_FASTA: "fldN9Dh6FXWjV8cOZ" # Field in MAG_ENTRY with the URL or path to the MAG fasta file (for processing and logging)
 
 # ---- Quantifying module ---------------------------------------------------

@@ -15,8 +15,10 @@ from ehio.metadata import (
     parse_drakkar_stats_tsv,
     parse_drakkar_cataloging_tsv,
     parse_sample_mapping_rates,
+    parse_bin_metadata_csv,
     build_entry_update,
     PREPROCESSING_METRIC_KEYS,
+    BIN_METRIC_KEYS,
 )
 from ehio.cli import _rename_preprocessing_files
 from tests.conftest import FASTP_JSON, SINGLEM_SMF_TSV, NONPAREIL_TSV
@@ -293,6 +295,52 @@ class TestParseSampleMappingRates:
         result = parse_sample_mapping_rates(" EHI00001 : 12.3 ; EHI00002 : 45.6 ")
         assert "EHI00001" in result
         assert result["EHI00001"] == pytest.approx(12.3)
+
+
+BIN_METADATA_CSV = (
+    "genome,completeness,contamination,score,size,N50,contig_count\n"
+    "EHA05803_bin_2253.fa,94.97,0.91,93.15,3140745,59647,107\n"
+    "EHA05803_bin_32.fa,89.95,0.21,89.53,961738,23966,63\n"
+    "EHA05803_bin_bad.fa,NA,NA,NA,NA,NA,NA\n"
+)
+
+
+class TestParseBinMetadataCsv:
+    def test_returns_one_dict_per_bin(self, tmp_path: Path):
+        p = tmp_path / "all_bin_metadata.csv"
+        p.write_text(BIN_METADATA_CSV)
+        result = parse_bin_metadata_csv(p)
+        assert len(result) == 3
+
+    def test_genome_column_preserved(self, tmp_path: Path):
+        p = tmp_path / "all_bin_metadata.csv"
+        p.write_text(BIN_METADATA_CSV)
+        result = parse_bin_metadata_csv(p)
+        assert result[0]["genome"] == "EHA05803_bin_2253.fa"
+
+    def test_numeric_coercion(self, tmp_path: Path):
+        p = tmp_path / "all_bin_metadata.csv"
+        p.write_text(BIN_METADATA_CSV)
+        result = parse_bin_metadata_csv(p)
+        assert result[0]["completeness"]  == pytest.approx(94.97)
+        assert result[0]["size"]          == 3_140_745
+        assert result[0]["N50"]           == 59_647
+        assert result[0]["contig_count"]  == 107
+
+    def test_na_becomes_none(self, tmp_path: Path):
+        p = tmp_path / "all_bin_metadata.csv"
+        p.write_text(BIN_METADATA_CSV)
+        result = parse_bin_metadata_csv(p)
+        bad = result[2]
+        assert bad["completeness"]  is None
+        assert bad["size"]          is None
+
+    def test_missing_file_returns_empty(self, tmp_path: Path):
+        assert parse_bin_metadata_csv(tmp_path / "missing.csv") == []
+
+    def test_bin_metric_keys_cover_all_csv_columns(self):
+        csv_data_cols = {"completeness", "contamination", "score", "size", "N50", "contig_count"}
+        assert csv_data_cols == set(BIN_METRIC_KEYS.keys())
 
 
 class TestBuildEntryUpdate:

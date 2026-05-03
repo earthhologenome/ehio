@@ -91,3 +91,16 @@ class AirtableClient:
         if not updates:
             return
         self._table(table_name).batch_update(updates)
+
+    def create_records(
+        self,
+        table_name: str,
+        fields_list: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Batch-create records. fields_list is a list of field dicts (no 'id').
+
+        Returns the created records with their new Airtable record IDs.
+        """
+        if not fields_list:
+            return []
+        return self._table(table_name).batch_create(fields_list)
