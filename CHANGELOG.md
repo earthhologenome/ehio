@@ -9,6 +9,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.11] - 2026-05-03
+
+### Changed
+
+- `ehio binning --output` now uses per-sample mapping rates from the `sample_mapping_rates` column of `cataloging.tsv` (e.g. `EHI00001:1.96;EHI00002:34.75`) instead of the assembly-level `mapping_rate_percent`. Each entry in Airtable and each row in the output TSV receives its own mapping rate.
+- Binning output TSV now includes an `assembly` column (second column, after `sample`) containing the assembly code. For individual assemblies each sample has a unique code; for co-assemblies all members share the same code.
+
 ## [0.2.10] - 2026-05-03
 
 ### Added

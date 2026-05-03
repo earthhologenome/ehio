@@ -14,6 +14,7 @@ from ehio.metadata import (
     collect_preprocessing_metadata,
     parse_drakkar_stats_tsv,
     parse_drakkar_cataloging_tsv,
+    parse_sample_mapping_rates,
     build_entry_update,
     PREPROCESSING_METRIC_KEYS,
 )
@@ -267,6 +268,31 @@ class TestParseDrakkarCatalogingTsv:
         p.write_text(DRAKKAR_CATALOGING_TSV)
         data = parse_drakkar_cataloging_tsv(p)
         assert data["EHA05804"]["samples"] == "EHI00001,EHI00002"
+
+
+class TestParseSampleMappingRates:
+    def test_coassembly_two_samples(self):
+        result = parse_sample_mapping_rates("EHI00001:1.96;EHI00002:34.75")
+        assert result == {"EHI00001": pytest.approx(1.96), "EHI00002": pytest.approx(34.75)}
+
+    def test_single_sample(self):
+        result = parse_sample_mapping_rates("EHI00003:55.0")
+        assert result == {"EHI00003": pytest.approx(55.0)}
+
+    def test_empty_string_returns_empty(self):
+        assert parse_sample_mapping_rates("") == {}
+
+    def test_none_like_input_returns_empty(self):
+        assert parse_sample_mapping_rates(None or "") == {}
+
+    def test_unparseable_rate_becomes_none(self):
+        result = parse_sample_mapping_rates("EHI00001:NA")
+        assert result["EHI00001"] is None
+
+    def test_whitespace_stripped(self):
+        result = parse_sample_mapping_rates(" EHI00001 : 12.3 ; EHI00002 : 45.6 ")
+        assert "EHI00001" in result
+        assert result["EHI00001"] == pytest.approx(12.3)
 
 
 class TestBuildEntryUpdate:

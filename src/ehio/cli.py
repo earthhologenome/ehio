@@ -421,6 +421,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
     from ehio.metadata import (
         parse_drakkar_cataloging_tsv,
+        parse_sample_mapping_rates,
         build_entry_update,
         write_binning_output_tsv,
         BINNING_METRIC_KEYS,
@@ -479,9 +480,16 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         ehi_number = str(fields.get(ehi_number_field, entry_code)).strip() if ehi_number_field else entry_code
         # Metrics are keyed by assembly code in cataloging.tsv
         assembly_code = str(fields.get(assembly_code_field, entry_code)).strip() if assembly_code_field else entry_code
-        metrics = assembly_stats.get(assembly_code, {})
-        if not metrics:
+        assembly_metrics = assembly_stats.get(assembly_code, {})
+        if not assembly_metrics:
             print(f"  Warning: no stats found for assembly '{assembly_code}' in {stats_tsv}", file=sys.stderr)
+        # Override assembly-level mapping rate with this sample's individual rate
+        sample_rates = parse_sample_mapping_rates(str(assembly_metrics.get("sample_mapping_rates") or ""))
+        metrics = {
+            **assembly_metrics,
+            "assembly": assembly_code,
+            "assembly_mapping_rate": sample_rates.get(ehi_number),
+        }
         all_metrics[ehi_number] = metrics
         payload = build_entry_update(entry["id"], metrics, field_map)
         if payload["fields"]:

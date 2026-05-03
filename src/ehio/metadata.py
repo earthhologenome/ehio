@@ -295,6 +295,7 @@ def write_output_tsv(
 
 BINNING_OUTPUT_TSV_COLUMNS: list[str] = [
     "sample",
+    "assembly",
     "assembly_length",
     "assembly_n50",
     "assembly_l50",
@@ -303,6 +304,28 @@ BINNING_OUTPUT_TSV_COLUMNS: list[str] = [
     "assembly_mapping_rate",
     "bins_number",
 ]
+
+
+def parse_sample_mapping_rates(raw: str) -> dict[str, float | None]:
+    """Parse drakkar's sample_mapping_rates string into a per-sample dict.
+
+    Input:  'EHI00001:1.96;EHI00002:34.75'
+    Output: {'EHI00001': 1.96, 'EHI00002': 34.75}
+    """
+    result: dict[str, float | None] = {}
+    if not raw:
+        return result
+    for part in raw.split(";"):
+        part = part.strip()
+        if ":" not in part:
+            continue
+        sample, _, rate_str = part.partition(":")
+        sample = sample.strip()
+        try:
+            result[sample] = float(rate_str.strip())
+        except ValueError:
+            result[sample] = None
+    return result
 
 QUANTIFYING_OUTPUT_TSV_COLUMNS: list[str] = [
     "sample",
