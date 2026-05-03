@@ -202,13 +202,12 @@ def build_entry_update(
     return {"id": record_id, "fields": fields}
 
 
-def parse_drakkar_stats_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
-    """Read a drakkar summary TSV (e.g. preprocessing.tsv or cataloging.tsv).
-
-    Returns {sample_code: {metric_name: value, ...}}.
-    Numeric strings are coerced to int (if whole-valued) or float.
-    'NA', empty, and similar sentinel strings become None.
-    """
+def _parse_tsv_keyed(
+    tsv_path: Path,
+    key_col: str,
+    col_map: dict[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Generic TSV reader keyed on key_col with optional column renaming."""
     result: dict[str, dict[str, Any]] = {}
     if not tsv_path.exists():
         return result
@@ -216,26 +215,55 @@ def parse_drakkar_stats_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
         with tsv_path.open(newline="") as fh:
             reader = csv.DictReader(fh, delimiter="\t")
             for row in reader:
-                sample = (row.get("sample") or "").strip()
-                if not sample:
+                key = (row.get(key_col) or "").strip()
+                if not key:
                     continue
                 metrics: dict[str, Any] = {}
                 for col, raw in row.items():
-                    if col == "sample":
+                    if col == key_col:
                         continue
+                    target = col_map.get(col, col) if col_map else col
                     v = (raw or "").strip()
                     if v in ("", "NA", "nan", "NaN", "None", "none"):
-                        metrics[col] = None
+                        metrics[target] = None
                     else:
                         try:
                             f = float(v)
-                            metrics[col] = int(f) if f == round(f) else f
+                            metrics[target] = int(f) if f == round(f) else f
                         except ValueError:
-                            metrics[col] = v
-                result[sample] = metrics
+                            metrics[target] = v
+                result[key] = metrics
     except OSError:
         pass
     return result
+
+
+def parse_drakkar_stats_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
+    """Read a drakkar preprocessing.tsv summary.
+
+    Returns {sample_code: {metric_name: value, ...}}.
+    """
+    return _parse_tsv_keyed(tsv_path, key_col="sample")
+
+
+_CATALOGING_COL_MAP: dict[str, str] = {
+    "assembly_total_length":   "assembly_length",
+    "assembly_largest_contig": "assembly_contigs_largest",
+    "assembly_contigs":        "assembly_contigs_number",
+    "assembly_N50":            "assembly_n50",
+    "assembly_L50":            "assembly_l50",
+    "mapping_rate_percent":    "assembly_mapping_rate",
+    "final_bins":              "bins_number",
+}
+
+
+def parse_drakkar_cataloging_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
+    """Read a drakkar cataloging.tsv summary, keyed by assembly code.
+
+    Column names are mapped from drakkar's naming to ehio metric keys.
+    Returns {assembly_code: {metric_name: value, ...}}.
+    """
+    return _parse_tsv_keyed(tsv_path, key_col="assembly", col_map=_CATALOGING_COL_MAP)
 
 
 def write_output_tsv(

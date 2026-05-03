@@ -9,6 +9,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.9] - 2026-05-03
+
+### Fixed
+
+- `ehio binning --output` now correctly reads `cataloging.tsv` using the `assembly` column as the key (previously it looked for a `sample` column, so all metrics were empty).
+- Column names from drakkar's `cataloging.tsv` (`assembly_total_length`, `assembly_N50`, `assembly_L50`, `assembly_contigs`, `assembly_largest_contig`, `mapping_rate_percent`, `final_bins`) are now mapped to ehio's metric keys (`assembly_length`, `assembly_n50`, `assembly_l50`, `assembly_contigs_number`, `assembly_contigs_largest`, `assembly_mapping_rate`, `bins_number`).
+- The binning `_output.tsv` now contains one row per sample (EHI number) rather than one row per assembly code, so co-assemblies produce the correct number of rows.
+
 ## [0.2.8] - 2026-05-03
 
 ### Added

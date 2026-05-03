@@ -13,6 +13,7 @@ from ehio.metadata import (
     parse_nonpareil,
     collect_preprocessing_metadata,
     parse_drakkar_stats_tsv,
+    parse_drakkar_cataloging_tsv,
     build_entry_update,
     PREPROCESSING_METRIC_KEYS,
 )
@@ -186,10 +187,12 @@ DRAKKAR_PREPROCESSING_TSV = (
     "PR00002\t8000000\t1200000000\tNA\tNA\t7000000\t1050000000\tNA\t0.91\n"
 )
 
+# Real drakkar cataloging.tsv column names (with co-assembly example)
 DRAKKAR_CATALOGING_TSV = (
-    "sample\tassembly_length\tassembly_n50\tbins_number\n"
-    "PR00001\t150000000\t45000\t12\n"
-    "PR00002\t120000000\tNA\t0\n"
+    "assembly\tsamples\tassembly_contigs\tassembly_total_length\tassembly_largest_contig"
+    "\tassembly_N50\tassembly_L50\tmapping_rate_percent\tfinal_bins\n"
+    "EHA05804\tEHI00001,EHI00002\t10928\t43585842\t201785\t5037\t1684\t32.89\t10\n"
+    "EHA05805\tEHI00003\t8000\t30000000\tNA\t4000\t2000\tNA\t0\n"
 )
 
 
@@ -226,13 +229,44 @@ class TestParseDrakkarStatsTsv:
         data = parse_drakkar_stats_tsv(p)
         assert set(data.keys()) == {"PR00001", "PR00002"}
 
-    def test_cataloging_tsv(self, tmp_path: Path):
+
+
+class TestParseDrakkarCatalogingTsv:
+    def test_keyed_by_assembly(self, tmp_path: Path):
         p = tmp_path / "cataloging.tsv"
         p.write_text(DRAKKAR_CATALOGING_TSV)
-        data = parse_drakkar_stats_tsv(p)
-        assert data["PR00001"]["assembly_length"] == 150_000_000
-        assert data["PR00001"]["bins_number"]     == 12
-        assert data["PR00002"]["assembly_n50"]    is None
+        data = parse_drakkar_cataloging_tsv(p)
+        assert set(data.keys()) == {"EHA05804", "EHA05805"}
+
+    def test_column_names_renamed(self, tmp_path: Path):
+        p = tmp_path / "cataloging.tsv"
+        p.write_text(DRAKKAR_CATALOGING_TSV)
+        data = parse_drakkar_cataloging_tsv(p)
+        row = data["EHA05804"]
+        assert row["assembly_length"]          == 43_585_842
+        assert row["assembly_contigs_largest"] == 201_785
+        assert row["assembly_contigs_number"]  == 10_928
+        assert row["assembly_n50"]             == 5_037
+        assert row["assembly_l50"]             == 1_684
+        assert row["assembly_mapping_rate"]    == pytest.approx(32.89)
+        assert row["bins_number"]              == 10
+
+    def test_na_becomes_none(self, tmp_path: Path):
+        p = tmp_path / "cataloging.tsv"
+        p.write_text(DRAKKAR_CATALOGING_TSV)
+        data = parse_drakkar_cataloging_tsv(p)
+        assert data["EHA05805"]["assembly_contigs_largest"] is None
+        assert data["EHA05805"]["assembly_mapping_rate"]    is None
+
+    def test_missing_file_returns_empty(self, tmp_path: Path):
+        assert parse_drakkar_cataloging_tsv(tmp_path / "missing.tsv") == {}
+
+    def test_samples_column_preserved(self, tmp_path: Path):
+        """The 'samples' column (co-assembly member list) is kept as a string."""
+        p = tmp_path / "cataloging.tsv"
+        p.write_text(DRAKKAR_CATALOGING_TSV)
+        data = parse_drakkar_cataloging_tsv(p)
+        assert data["EHA05804"]["samples"] == "EHI00001,EHI00002"
 
 
 class TestBuildEntryUpdate:

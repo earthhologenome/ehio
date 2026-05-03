@@ -420,7 +420,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     """Parse cataloging metadata from drakkar output, update Airtable, transfer files."""
     from ehio.airtable import AirtableClient
     from ehio.metadata import (
-        parse_drakkar_stats_tsv,
+        parse_drakkar_cataloging_tsv,
         build_entry_update,
         write_binning_output_tsv,
         BINNING_METRIC_KEYS,
@@ -435,6 +435,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     batch_code_field     = _require_cfg("EHI_ASB_BATCH_CODE")
     entry_batch_field    = _require_cfg("EHI_ASB_ENTRY_BATCH")
     entry_code_field     = _require_cfg("EHI_ASB_ENTRY_CODE")
+    ehi_number_field     = str(cfg.get("EHI_ASB_ENTRY_EHI_NUMBER") or "").strip()
     assembly_code_field  = str(cfg.get("EHI_ASB_ENTRY_ASSEMBLY_CODE") or "").strip()
 
     local_root = Path(args.local_dir).resolve()
@@ -461,25 +462,27 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         if fld_id:
             field_map[metric_key] = fld_id
 
-    # Read all QC metrics from the drakkar-generated summary TSV (keyed by assembly code)
+    # Read assembly metrics from the drakkar cataloging summary (keyed by assembly code)
     stats_tsv = local_root / "cataloging.tsv"
-    sample_stats = parse_drakkar_stats_tsv(stats_tsv)
-    if not sample_stats:
+    assembly_stats = parse_drakkar_cataloging_tsv(stats_tsv)
+    if not assembly_stats:
         print(f"  Warning: drakkar stats TSV not found or empty: {stats_tsv}", file=sys.stderr)
 
     all_metrics: dict[str, dict] = {}
     updates: list[dict] = []
     for entry in entries:
         fields = entry.get("fields", {})
-        sample = str(fields.get(entry_code_field, "")).strip()
-        if not sample:
+        entry_code = str(fields.get(entry_code_field, "")).strip()
+        if not entry_code:
             continue
-        # Metrics are stored by assembly code; fall back to entry code if field absent
-        assembly_code = str(fields.get(assembly_code_field, sample)).strip() if assembly_code_field else sample
-        metrics = sample_stats.get(assembly_code, {})
+        # Use EHI number as the output-TSV key (one row per sample); fall back to entry code
+        ehi_number = str(fields.get(ehi_number_field, entry_code)).strip() if ehi_number_field else entry_code
+        # Metrics are keyed by assembly code in cataloging.tsv
+        assembly_code = str(fields.get(assembly_code_field, entry_code)).strip() if assembly_code_field else entry_code
+        metrics = assembly_stats.get(assembly_code, {})
         if not metrics:
             print(f"  Warning: no stats found for assembly '{assembly_code}' in {stats_tsv}", file=sys.stderr)
-        all_metrics[sample] = metrics
+        all_metrics[ehi_number] = metrics
         payload = build_entry_update(entry["id"], metrics, field_map)
         if payload["fields"]:
             updates.append(payload)
