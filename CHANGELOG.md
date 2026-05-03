@@ -9,6 +9,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.17] - 2026-05-03
+
+### Changed
+
+- `MAG_ENTRY_NAME` now stores the genome filename with its `.fa` extension (e.g. `EHA05803_bin_2253.fa`).
+- FASTA files are compressed to `.fa.gz` before uploading to `MAG/{batch}/`; temporary `.gz` files are removed after transfer.
+
 ## [0.2.16] - 2026-05-03
 
 ### Fixed

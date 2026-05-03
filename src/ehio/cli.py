@@ -578,7 +578,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                 assembly_code = genome_name.split("_bin_")[0] if "_bin_" in genome_name else genome_name
                 rec_fields: dict = {}
                 if mag_name_fld:
-                    rec_fields[mag_name_fld] = genome_name
+                    rec_fields[mag_name_fld] = genome
                 if mag_assembly_fld:
                     rec_fields[mag_assembly_fld] = assembly_code
                 for metric, fld_id in mag_field_map.items():
@@ -593,16 +593,28 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                 mag_client.create_records(mag_table, records_to_create)
                 _info("MAG_ENTRY records created.")
 
-            # Upload FASTA files to MAG/{batch}/
+            # Compress and upload FASTA files to MAG/{batch}/
             if bin_files:
-                _info(f"Uploading {len(bin_files)} FASTA files to {remote_mag_dir} ...")
-                with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
-                    if getattr(args, "rerun", False):
-                        xfer.remove_remote_dir(remote_mag_dir)
-                        _info(f"Deleted remote MAG directory {remote_mag_dir} for rerun.")
-                    n_mag = xfer.upload_flat(bin_files, remote_mag_dir,
-                                             verbose=getattr(args, "verbose", False))
-                _info(f"Uploaded {n_mag} FASTA files to {remote_mag_dir}.")
+                import gzip as _gzip
+                gz_files: list[Path] = []
+                for _fa in bin_files:
+                    _gz = Path(str(_fa) + ".gz")
+                    with _fa.open("rb") as _fin, _gzip.open(_gz, "wb") as _fout:
+                        _shutil.copyfileobj(_fin, _fout)
+                    gz_files.append(_gz)
+                _info(f"Uploading {len(gz_files)} compressed FASTA files to {remote_mag_dir} ...")
+                n_mag = 0
+                try:
+                    with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+                        if getattr(args, "rerun", False):
+                            xfer.remove_remote_dir(remote_mag_dir)
+                            _info(f"Deleted remote MAG directory {remote_mag_dir} for rerun.")
+                        n_mag = xfer.upload_flat(gz_files, remote_mag_dir,
+                                                 verbose=getattr(args, "verbose", False))
+                finally:
+                    for _gz in gz_files:
+                        _gz.unlink(missing_ok=True)
+                _info(f"Uploaded {n_mag} compressed FASTA files to {remote_mag_dir}.")
 
         cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
         if cleanup not in ("false", "0", "no"):
