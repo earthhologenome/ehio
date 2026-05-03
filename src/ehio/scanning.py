@@ -186,7 +186,6 @@ def build_script_content(
     drakkar_conda_env: str = "",
     ppr_fraction: bool = False,
     ppr_nonpareil: bool = False,
-    assembly_mode: str = "individual",
     boost_time: int | None = None,
     boost_memory: int | None = None,
 ) -> str:
@@ -268,7 +267,7 @@ def build_script_content(
     if module == "binning":
         return header + (
             f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
-            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)} -m {q(assembly_mode)}{boost_parts}\n"
+            f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
             f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}\n"
             "_EHIO_SUCCESS=1\n"
         )
@@ -406,15 +405,6 @@ def scan_module(
             ref_desc = ref_flag if ref_flag else "(no reference)"
             print(f"  [{module}] {batch_name}: reference flag → {ref_desc}", file=sys.stderr)
 
-        assembly_mode = "individual"
-        if module == "binning":
-            type_field = str(cfg.get("EHI_ASB_BATCH_TYPE") or "").strip()
-            if type_field:
-                raw_type = str(record.get("fields", {}).get(type_field, "") or "").strip().lower()
-                if raw_type in ("coassembly", "co-assembly", "co_assembly", "all"):
-                    assembly_mode = "all"
-            print(f"  [{module}] {batch_name}: assembly mode → {assembly_mode}", file=sys.stderr)
-
         def _read_boost(cfg_dict: dict) -> int | None:
             field_id = str(cfg.get(cfg_dict[module]) or "").strip()
             if not field_id:
@@ -439,7 +429,6 @@ def scan_module(
             drakkar_conda_env=drakkar_conda_env,
             ppr_fraction=ppr_fraction,
             ppr_nonpareil=ppr_nonpareil,
-            assembly_mode=assembly_mode,
             boost_time=boost_time,
             boost_memory=boost_memory,
         )

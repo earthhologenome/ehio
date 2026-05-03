@@ -371,9 +371,10 @@ def _run_binning_input(args: argparse.Namespace) -> int:
     batch_table = _require_cfg("EHI_ASB_BATCH")
     entry_table = _require_cfg("EHI_ASB_ENTRY")
 
-    batch_code_field  = _require_cfg("EHI_ASB_BATCH_CODE")
-    entry_batch_field = _require_cfg("EHI_ASB_ENTRY_BATCH")
-    ehi_number_field  = _require_cfg("EHI_ASB_ENTRY_EHI_NUMBER")
+    batch_code_field     = _require_cfg("EHI_ASB_BATCH_CODE")
+    entry_batch_field    = _require_cfg("EHI_ASB_ENTRY_BATCH")
+    ehi_number_field     = _require_cfg("EHI_ASB_ENTRY_EHI_NUMBER")
+    assembly_code_field  = _require_cfg("EHI_ASB_ENTRY_ASSEMBLY_CODE")
 
     reads1_field = _conf(args, "reads1_field", "EHI_ASB_ENTRY_READS1", required=True)
     reads2_field = _conf(args, "reads2_field", "EHI_ASB_ENTRY_READS2", required=True)
@@ -400,6 +401,7 @@ def _run_binning_input(args: argparse.Namespace) -> int:
         sample_field=ehi_number_field,
         reads1_field=reads1_field,
         reads2_field=reads2_field,
+        assembly_field=assembly_code_field,
     )
     _info(f"Wrote {n} samples to {out_path}")
 
@@ -427,9 +429,10 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     batch_table = _require_cfg("EHI_ASB_BATCH")
     entry_table = _require_cfg("EHI_ASB_ENTRY")
 
-    batch_code_field  = _require_cfg("EHI_ASB_BATCH_CODE")
-    entry_batch_field = _require_cfg("EHI_ASB_ENTRY_BATCH")
-    entry_code_field  = _require_cfg("EHI_ASB_ENTRY_CODE")
+    batch_code_field     = _require_cfg("EHI_ASB_BATCH_CODE")
+    entry_batch_field    = _require_cfg("EHI_ASB_ENTRY_BATCH")
+    entry_code_field     = _require_cfg("EHI_ASB_ENTRY_CODE")
+    assembly_code_field  = str(cfg.get("EHI_ASB_ENTRY_ASSEMBLY_CODE") or "").strip()
 
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
@@ -455,7 +458,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         if fld_id:
             field_map[metric_key] = fld_id
 
-    # Read all QC metrics from the drakkar-generated summary TSV
+    # Read all QC metrics from the drakkar-generated summary TSV (keyed by assembly code)
     stats_tsv = local_root / "cataloging.tsv"
     sample_stats = parse_drakkar_stats_tsv(stats_tsv)
     if not sample_stats:
@@ -464,12 +467,15 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     all_metrics: dict[str, dict] = {}
     updates: list[dict] = []
     for entry in entries:
-        sample = str(entry.get("fields", {}).get(entry_code_field, "")).strip()
+        fields = entry.get("fields", {})
+        sample = str(fields.get(entry_code_field, "")).strip()
         if not sample:
             continue
-        metrics = sample_stats.get(sample, {})
+        # Metrics are stored by assembly code; fall back to entry code if field absent
+        assembly_code = str(fields.get(assembly_code_field, sample)).strip() if assembly_code_field else sample
+        metrics = sample_stats.get(assembly_code, {})
         if not metrics:
-            print(f"  Warning: no stats found for sample '{sample}' in {stats_tsv}", file=sys.stderr)
+            print(f"  Warning: no stats found for assembly '{assembly_code}' in {stats_tsv}", file=sys.stderr)
         all_metrics[sample] = metrics
         payload = build_entry_update(entry["id"], metrics, field_map)
         if payload["fields"]:

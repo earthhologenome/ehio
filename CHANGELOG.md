@@ -9,6 +9,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.7] - 2026-05-03
+
+### Changed
+
+- `ehio binning --input` now writes an `assembly` column (from `EHI_ASB_ENTRY_ASSEMBLY_CODE`) to the drakkar sample TSV. Drakkar infers co-assembly vs individual assembly automatically from rows that share the same `assembly` value, replacing the old `-m individual` / `-m all` CLI flag.
+- `ehio binning --output` now looks up cataloging metrics by `EHI_ASB_ENTRY_ASSEMBLY_CODE` rather than entry code, so co-assembly metrics are correctly applied to all entries sharing the same assembly.
+- Generated binning scripts no longer pass `-m` to `drakkar cataloging`.
+- `write_sample_file` accepts an optional `assembly_field` parameter; when supplied it adds an `assembly` column as the second column in the TSV.
+
 ## [0.2.6] - 2026-05-02
 
 ### Changed

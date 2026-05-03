@@ -148,31 +148,16 @@ class TestBuildScriptContent:
         assert "ehio binning --input" in script
         assert "drakkar cataloging" in script
 
-    def test_binning_individual_mode(self):
-        """Airtable value 'Individual' → -m individual."""
+    def test_binning_has_no_m_flag(self):
+        """Assembly mode is now driven by the 'assembly' column in the TSV, not -m."""
         script = build_script_content(
             "binning", "ASB001",
             "/projects/ehi/data/RUN/ASB001",
             "/projects/ehi/data/ASB/ASB001",
             "slurm",
-            assembly_mode="individual",
         )
         drakkar_line = next(l for l in script.splitlines() if "drakkar cataloging" in l)
-        assert "-m individual" in drakkar_line
-        assert "-m all" not in drakkar_line
-
-    def test_binning_coassembly_mode(self):
-        """Airtable value 'Coassembly' → -m all."""
-        script = build_script_content(
-            "binning", "ASB001",
-            "/projects/ehi/data/RUN/ASB001",
-            "/projects/ehi/data/ASB/ASB001",
-            "slurm",
-            assembly_mode="all",
-        )
-        drakkar_line = next(l for l in script.splitlines() if "drakkar cataloging" in l)
-        assert "-m all" in drakkar_line
-        assert "-m individual" not in drakkar_line
+        assert "-m " not in drakkar_line
 
     def test_quantifying_uses_profiling_and_bins_file(self):
         script = build_script_content(
@@ -199,28 +184,6 @@ class TestBuildScriptContent:
     def test_unknown_module_raises(self):
         with pytest.raises(ValueError, match="Unknown module"):
             build_script_content("unknown", "B001", "/run", "/out", "slurm")
-
-    @pytest.mark.parametrize("airtable_value,expected_flag", [
-        ("Individual",  "-m individual"),
-        ("Coassembly",  "-m all"),
-        ("individual",  "-m individual"),
-        ("coassembly",  "-m all"),
-        ("co-assembly", "-m all"),
-    ])
-    def test_binning_assembly_mode_mapping(self, airtable_value: str, expected_flag: str):
-        """EHI_ASB_BATCH_TYPE Airtable values map to the correct drakkar -m flag."""
-        mode = "individual"
-        if airtable_value.strip().lower() in ("coassembly", "co-assembly", "co_assembly", "all"):
-            mode = "all"
-        script = build_script_content(
-            "binning", "ASB001",
-            "/projects/ehi/data/RUN/ASB001",
-            "/projects/ehi/data/ASB/ASB001",
-            "slurm",
-            assembly_mode=mode,
-        )
-        drakkar_line = next(l for l in script.splitlines() if "drakkar cataloging" in l)
-        assert expected_flag in drakkar_line
 
     def test_batch_name_with_spaces_is_quoted(self):
         script = build_script_content(

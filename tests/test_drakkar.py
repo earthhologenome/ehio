@@ -105,6 +105,47 @@ class TestWriteSampleFile:
         lines = out.read_text().splitlines()
         assert lines[0] == "sample\trawreads1\trawreads2"
 
+    def test_assembly_column_written_when_field_provided(self, tmp_path: Path):
+        ASSEMBLY_FIELD = "fldASSEMBLY"
+        records = [
+            {"id": "rec1", "fields": {
+                self.SAMPLE_FIELD: "EHI00001",
+                self.READS1_FIELD: "https://example.com/1.fq.gz",
+                self.READS2_FIELD: "https://example.com/2.fq.gz",
+                ASSEMBLY_FIELD: "CA001",
+            }},
+            {"id": "rec2", "fields": {
+                self.SAMPLE_FIELD: "EHI00002",
+                self.READS1_FIELD: "https://example.com/3.fq.gz",
+                self.READS2_FIELD: "https://example.com/4.fq.gz",
+                ASSEMBLY_FIELD: "CA001",
+            }},
+        ]
+        out = tmp_path / "samples.tsv"
+        n = write_sample_file(records, out,
+            sample_field=self.SAMPLE_FIELD,
+            reads1_field=self.READS1_FIELD,
+            reads2_field=self.READS2_FIELD,
+            assembly_field=ASSEMBLY_FIELD,
+        )
+        assert n == 2
+        rows = self._read_tsv(out)
+        assert rows[0]["assembly"] == "CA001"
+        assert rows[1]["assembly"] == "CA001"
+        # column order: sample, assembly, rawreads1, rawreads2
+        assert list(rows[0].keys()) == ["sample", "assembly", "rawreads1", "rawreads2"]
+
+    def test_no_assembly_column_without_field(self, tmp_path: Path):
+        out = tmp_path / "samples.tsv"
+        write_sample_file(
+            ENTRY_RECORDS, out,
+            sample_field=self.SAMPLE_FIELD,
+            reads1_field=self.READS1_FIELD,
+            reads2_field=self.READS2_FIELD,
+        )
+        rows = self._read_tsv(out)
+        assert "assembly" not in rows[0]
+
     def test_list_field_values_are_unwrapped(self, tmp_path: Path):
         """Airtable URL fields may be returned as a single-element list; extract the string."""
         records = [{"id": "recZ", "fields": {
