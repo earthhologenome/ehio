@@ -9,6 +9,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.16] - 2026-05-03
+
+### Fixed
+
+- `MAG_ENTRY_URL_FASTA` (`MAG_url`) is no longer written during record creation — it is computed by Airtable automatically.
+
+### Added
+
+- Assembly code (the prefix before `_bin_` in the genome filename, e.g. `EHA05803`) is now written to `MAG_ENTRY_ASSEMBLY` for each created MAG record.
+
 ## [0.2.15] - 2026-05-03
 
 ### Fixed

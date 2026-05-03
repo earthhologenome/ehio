@@ -96,9 +96,10 @@ EHI_ASB_ENTRY_BINS_NUMBER: "fldCW35Oas5s0Df7G"
 EHI_ASB_ENTRY_READS1: "fldhOqe2A5bbawp54"  # Field in EHI_ASB_ENTRY with the preprocessed forward reads URL
 EHI_ASB_ENTRY_READS2: "fldkxbagzLysSeuyv"  # Field in EHI_ASB_ENTRY with the preprocessed reverse reads URL
 
-MAG_ENTRY_ID: "fldNGbdZaGfDBKB7k" # Field in MAG_ENTRY with the entry record ID (for processing and logging)
-MAG_ENTRY_CODE: "fldkc0amZdshQUwkg" # Field in MAG_ENTRY with the MAG code (primary key, for processing and logging)
+MAG_ENTRY_ID: "fldNGbdZaGfDBKB7k" # Field in MAG_ENTRY with the entry record ID (auto-computed, do not write)
+MAG_ENTRY_CODE: "fldkc0amZdshQUwkg" # Field in MAG_ENTRY with the MAG code (auto-computed primary key, do not write)
 MAG_ENTRY_NAME: "fldmvf2UgaZm5AFul" # Field in MAG_ENTRY with the MAG name (for logging)
+MAG_ENTRY_ASSEMBLY: "fldYdvMyK6BYhHyI2" # Field in MAG_ENTRY with the linked assembly record ID, i.e. EHI_ASB_ENTRY_ID (for processing and logging)
 MAG_ENTRY_DOMAIN: "fldkKwS0hxbv3dcKH" # Field in MAG_ENTRY with the MAG domain (for logging)
 MAG_ENTRY_PHYLUM: "fldU99Co1sMcQ0zgR" # Field in MAG_ENTRY with the MAG phylum (for logging)
 MAG_ENTRY_CLASS: "fldrvXVQzX5UTtNYe" # Field in MAG_ENTRY with the MAG class (for logging)

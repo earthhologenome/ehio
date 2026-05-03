@@ -545,10 +545,10 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         elif not mag_base_id:
             _info("MAG_BASE not configured; skipping MAG creation.")
         else:
-            mag_table    = _require_cfg("MAG_ENTRY")
-            mag_client   = AirtableClient(api_key=token, base_id=mag_base_id)
-            mag_name_fld = str(cfg.get("MAG_ENTRY_NAME")      or "").strip()
-            mag_url_fld  = str(cfg.get("MAG_ENTRY_URL_FASTA") or "").strip()
+            mag_table        = _require_cfg("MAG_ENTRY")
+            mag_client       = AirtableClient(api_key=token, base_id=mag_base_id)
+            mag_name_fld     = str(cfg.get("MAG_ENTRY_NAME")     or "").strip()
+            mag_assembly_fld = str(cfg.get("MAG_ENTRY_ASSEMBLY") or "").strip()
             mag_field_map: dict[str, str] = {}
             for _mk, _ck in BIN_METRIC_KEYS.items():
                 _fid = str(cfg.get(_ck) or "").strip()
@@ -567,11 +567,6 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                         if _p.exists():
                             bin_files.append(_p)
 
-            # Map filename → remote URL (flat, no assembly subdirectory)
-            remote_urls: dict[str, str] = {}
-            for _bf in bin_files:
-                remote_urls[_bf.name] = f"{remote_mag_dir}/{_bf.name}"
-
             # Build and create MAG_ENTRY records
             bins_data = parse_bin_metadata_csv(bin_metadata_csv)
             records_to_create: list[dict] = []
@@ -579,16 +574,17 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                 genome = bin_row.get("genome", "")
                 if not genome:
                     continue
-                genome_name = genome.removesuffix(".fa").removesuffix(".fasta")
+                genome_name   = genome.removesuffix(".fa").removesuffix(".fasta")
+                assembly_code = genome_name.split("_bin_")[0] if "_bin_" in genome_name else genome_name
                 rec_fields: dict = {}
                 if mag_name_fld:
                     rec_fields[mag_name_fld] = genome_name
+                if mag_assembly_fld:
+                    rec_fields[mag_assembly_fld] = assembly_code
                 for metric, fld_id in mag_field_map.items():
                     val = bin_row.get(metric)
                     if val is not None:
                         rec_fields[fld_id] = val
-                if mag_url_fld and genome in remote_urls:
-                    rec_fields[mag_url_fld] = remote_urls[genome]
                 if rec_fields:
                     records_to_create.append(rec_fields)
 
