@@ -567,11 +567,10 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                         if _p.exists():
                             bin_files.append(_p)
 
-            # Map filename → remote URL (preserving assembly subdirectory)
+            # Map filename → remote URL (flat, no assembly subdirectory)
             remote_urls: dict[str, str] = {}
             for _bf in bin_files:
-                _rel = _bf.relative_to(final_dir)
-                remote_urls[_bf.name] = f"{remote_mag_dir}/{_rel.as_posix()}"
+                remote_urls[_bf.name] = f"{remote_mag_dir}/{_bf.name}"
 
             # Build and create MAG_ENTRY records
             bins_data = parse_bin_metadata_csv(bin_metadata_csv)
@@ -605,8 +604,8 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                     if getattr(args, "rerun", False):
                         xfer.remove_remote_dir(remote_mag_dir)
                         _info(f"Deleted remote MAG directory {remote_mag_dir} for rerun.")
-                    n_mag = xfer.upload(bin_files, final_dir, remote_mag_dir,
-                                        verbose=getattr(args, "verbose", False))
+                    n_mag = xfer.upload_flat(bin_files, remote_mag_dir,
+                                             verbose=getattr(args, "verbose", False))
                 _info(f"Uploaded {n_mag} FASTA files to {remote_mag_dir}.")
 
         cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()

@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.13] - 2026-05-03
+
+### Fixed
+
+- MAG FASTA files are now uploaded flat to `{SFTP_REMOTE_BASE}/MAG/{batch}/EHA05803_bin_2253.fa` instead of into a per-assembly subdirectory. The `MAG_ENTRY_URL_FASTA` values written to Airtable reflect this flat layout.
+
 ## [0.2.12] - 2026-05-03
 
 ### Added
