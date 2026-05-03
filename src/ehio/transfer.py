@@ -147,6 +147,24 @@ class SFTPTransfer:
             files = [f for f in files if any(f.name.endswith(s) for s in include_suffixes)]
         return self.upload(files, local_dir, remote_dir, verbose=verbose)
 
+    def remove_remote_dir(self, remote_dir: str) -> None:
+        """Recursively remove a remote directory and all its contents.
+
+        Silently does nothing if the directory does not exist.
+        """
+        import stat as _stat
+        try:
+            entries = self._sftp.listdir_attr(remote_dir)
+        except FileNotFoundError:
+            return
+        for entry in entries:
+            child = f"{remote_dir}/{entry.filename}"
+            if _stat.S_ISDIR(entry.st_mode):
+                self.remove_remote_dir(child)
+            else:
+                self._sftp.remove(child)
+        self._sftp.rmdir(remote_dir)
+
     def upload_flat(
         self,
         files: list[Path],

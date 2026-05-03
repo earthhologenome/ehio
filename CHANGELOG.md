@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.2.8] - 2026-05-03
+
+### Added
+
+- `--rerun` flag for `ehio preprocessing/binning/quantifying --output`: when set, the remote archive directory is deleted via SFTP before uploading the new output files, replacing the previous run's data cleanly.
+
 ## [0.2.7] - 2026-05-03
 
 ### Changed

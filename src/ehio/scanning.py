@@ -188,6 +188,7 @@ def build_script_content(
     ppr_nonpareil: bool = False,
     boost_time: int | None = None,
     boost_memory: int | None = None,
+    rerun: bool = False,
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -252,6 +253,7 @@ def build_script_content(
     time_part   = f" --time-multiplier {boost_time}"     if boost_time   and boost_time   > 1 else ""
     memory_part = f" --memory-multiplier {boost_memory}" if boost_memory and boost_memory > 1 else ""
     boost_parts = time_part + memory_part
+    rerun_flag  = " --rerun" if rerun else ""
 
     if module == "preprocessing":
         ref_part       = f" {ref_flag}" if ref_flag else ""
@@ -260,7 +262,7 @@ def build_script_content(
         return header + (
             f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
             f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}{fraction_part}{nonpareil_part}{boost_parts}\n"
-            f"ehio preprocessing --output -b {q(batch_name)} -l {q(output_dir)}\n"
+            f"ehio preprocessing --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             "_EHIO_SUCCESS=1\n"
         )
 
@@ -268,7 +270,7 @@ def build_script_content(
         return header + (
             f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
             f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
-            f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}\n"
+            f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             "_EHIO_SUCCESS=1\n"
         )
 
@@ -277,7 +279,7 @@ def build_script_content(
         return header + (
             f"ehio quantifying --input -b {q(batch_name)} -f {q(tsv_file)} --bins-file {q(bins_file)}\n"
             f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
-            f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}\n"
+            f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             "_EHIO_SUCCESS=1\n"
         )
 
@@ -431,6 +433,7 @@ def scan_module(
             ppr_nonpareil=ppr_nonpareil,
             boost_time=boost_time,
             boost_memory=boost_memory,
+            rerun=do_rerun,
         )
 
         if do_rerun:

@@ -315,6 +315,9 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     else:
         _info(f"Transferring {len(files_to_transfer)} file(s) to {user}@{host}:{remote_dir} ...")
         with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+            if getattr(args, "rerun", False):
+                xfer.remove_remote_dir(remote_dir)
+                _info(f"Deleted remote directory {remote_dir} for rerun.")
             n = xfer.upload_flat(
                 files_to_transfer, remote_dir,
                 verbose=getattr(args, "verbose", False),
@@ -513,6 +516,9 @@ def _run_binning_output(args: argparse.Namespace) -> int:
 
         _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
         with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+            if getattr(args, "rerun", False):
+                xfer.remove_remote_dir(remote_dir)
+                _info(f"Deleted remote directory {remote_dir} for rerun.")
             n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
         _info(f"Transferred {n} file(s) to {remote_dir}.")
 
@@ -719,6 +725,9 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
 
         _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
         with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+            if getattr(args, "rerun", False):
+                xfer.remove_remote_dir(remote_dir)
+                _info(f"Deleted remote directory {remote_dir} for rerun.")
             n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
         _info(f"Transferred {n} file(s) to {remote_dir}.")
 
@@ -789,6 +798,8 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Local drakkar output directory. Default: current directory.")
         g.add_argument("--remote-dir", "-r", metavar="DIR",
             help="Remote base directory for file transfer.")
+        g.add_argument("--rerun", action="store_true",
+            help="Delete the remote archive directory before uploading (use when rerunning a batch).")
 
     # ------------------------------------------------------------------
     # preprocessing
