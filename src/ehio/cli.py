@@ -653,45 +653,36 @@ def cmd_quantifying(args: argparse.Namespace) -> int:
 
 def _run_quantifying_input(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
-    from ehio.drakkar import write_bins_file, write_sample_file, verify_input_files
+    from ehio.drakkar import write_bins_file, write_quality_file, write_sample_file, verify_input_files
 
-    token         = _resolve_token(args)
-    base_id       = _require_cfg("MAG_BASE")
-    batch_table   = _require_cfg("MAG_DMB_BATCH")
-    entry_table   = _require_cfg("MAG_DMB_ENTRY")
-    mag_table     = _require_cfg("MAG_ENTRY")
+    token       = _resolve_token(args)
+    base_id     = _require_cfg("MAG_BASE")
+    batch_table = _require_cfg("MAG_DMB_BATCH")
+    mag_table   = _require_cfg("MAG_ENTRY")
+    entry_table = _require_cfg("MAG_DMB_ENTRY")
 
-    batch_code_field  = _require_cfg("MAG_DMB_BATCH_CODE")
-    entry_batch_field = _require_cfg("MAG_DMB_ENTRY_BATCH")
-    entry_code_field  = _require_cfg("MAG_DMB_ENTRY_CODE")
-    mag_list_field    = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
-    mag_url_field     = _require_cfg("MAG_ENTRY_URL_FASTA")
-    reads1_field      = _conf(args, "reads1_field", "MAG_DMB_ENTRY_READS1", required=True)
-    reads2_field      = _conf(args, "reads2_field", "MAG_DMB_ENTRY_READS2", required=True)
+    batch_code_field      = _require_cfg("MAG_DMB_BATCH_CODE")
+    mag_list_field        = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
+    entry_list_field      = _require_cfg("MAG_DMB_BATCH_LIST_ENTRY")
+    mag_name_field        = _require_cfg("MAG_ENTRY_NAME")
+    mag_completeness_fld  = _require_cfg("MAG_ENTRY_CHECKM_COMPLETENESS")
+    mag_contamination_fld = _require_cfg("MAG_ENTRY_CHECKM_CONTAMINATION")
+    mag_url_field         = _require_cfg("MAG_ENTRY_URL_FASTA")
+    entry_code_field      = _require_cfg("MAG_DMB_ENTRY_CODE")
+    reads1_field          = _require_cfg("MAG_DMB_ENTRY_READS1")
+    reads2_field          = _require_cfg("MAG_DMB_ENTRY_READS2")
 
     _info(f"Looking up batch '{args.batch}'...")
     client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record, entries = client.fetch_batch_and_entries(
-        batch_table=batch_table,
-        batch_code_field=batch_code_field,
-        batch_code=args.batch,
-        entry_table=entry_table,
-        entry_batch_field=entry_batch_field,
-    )
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
     if batch_record is None:
         _die(f"Batch '{args.batch}' not found.")
-    _info(f"Found {len(entries)} sample entries for batch '{args.batch}'.")
-    if not entries:
-        _die(f"No sample entries found for batch '{args.batch}'.")
 
-    # Fetch MAG records linked to this batch for the bins file
+    # Fetch MAG records from MAG_ENTRY
     mag_rec_ids = batch_record.get("fields", {}).get(mag_list_field, [])
     if not mag_rec_ids:
-        _die(
-            f"No MAG records linked in field {mag_list_field} of batch '{args.batch}'. "
-            "Ensure MAG_DMB_BATCH_LIST_MAGS is populated in Airtable."
-        )
-    _info(f"Fetching {len(mag_rec_ids)} MAG record(s) from {mag_table}...")
+        _die(f"No MAG records linked in field {mag_list_field} of batch '{args.batch}'.")
+    _info(f"Fetching {len(mag_rec_ids)} MAG record(s)...")
     mag_records = []
     for rec_id in mag_rec_ids:
         if isinstance(rec_id, str) and rec_id.startswith("rec"):
@@ -701,13 +692,36 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     if not mag_records:
         _die(f"Could not fetch any MAG records for batch '{args.batch}'.")
 
-    bins_path = Path(args.bins_file)
-    n_bins = write_bins_file(mag_records, bins_path, bins_field=mag_url_field)
-    _info(f"Wrote {n_bins} MAG paths to {bins_path}")
+    quality_path = Path(args.quality_file)
+    n_quality = write_quality_file(
+        mag_records, quality_path,
+        name_field=mag_name_field,
+        completeness_field=mag_completeness_fld,
+        contamination_field=mag_contamination_fld,
+    )
+    _info(f"Wrote {n_quality} rows to {quality_path}")
 
-    reads_path = Path(args.sample_file)
+    mags_path = Path(args.mags_file)
+    n_mags = write_bins_file(mag_records, mags_path, bins_field=mag_url_field)
+    _info(f"Wrote {n_mags} MAG URLs to {mags_path}")
+
+    # Fetch entry records from MAG_DMB_ENTRY
+    entry_rec_ids = batch_record.get("fields", {}).get(entry_list_field, [])
+    if not entry_rec_ids:
+        _die(f"No entry records linked in field {entry_list_field} of batch '{args.batch}'.")
+    _info(f"Fetching {len(entry_rec_ids)} entry record(s)...")
+    entry_records = []
+    for rec_id in entry_rec_ids:
+        if isinstance(rec_id, str) and rec_id.startswith("rec"):
+            rec = client.fetch_record_by_id(entry_table, rec_id)
+            if rec:
+                entry_records.append(rec)
+    if not entry_records:
+        _die(f"Could not fetch any entry records for batch '{args.batch}'.")
+
+    reads_path = Path(args.reads_file)
     n_reads = write_sample_file(
-        entries,
+        entry_records,
         reads_path,
         sample_field=entry_code_field,
         reads1_field=reads1_field,
@@ -715,17 +729,17 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     )
     _info(f"Wrote {n_reads} read entries to {reads_path}")
 
-    missing_reads = verify_input_files(entries, entry_code_field, [reads1_field, reads2_field])
+    missing_reads = verify_input_files(entry_records, entry_code_field, [reads1_field, reads2_field])
     if missing_reads:
         for sample, path in missing_reads:
             print(f"  WARNING: [{sample}] reads file not found: {path}", file=sys.stderr)
 
-    missing_bins = verify_input_files(mag_records, mag_url_field, [mag_url_field])
-    if missing_bins:
-        for _, path in missing_bins:
+    missing_mags = verify_input_files(mag_records, mag_url_field, [mag_url_field])
+    if missing_mags:
+        for _, path in missing_mags:
             print(f"  WARNING: MAG FASTA not found: {path}", file=sys.stderr)
 
-    total_missing = len(missing_reads) + len(missing_bins)
+    total_missing = len(missing_reads) + len(missing_mags)
     if total_missing:
         _die(f"{total_missing} input file(s) missing — fix paths in Airtable before launching drakkar.")
     return 0
@@ -962,14 +976,12 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_batch(p_qnt)
     _add_token(p_qnt)
     _add_verbose(p_qnt)
-    p_qnt.add_argument("--sample-file", "-f", default="samples.tsv", metavar="PATH",
-        help="Output reads sample file for drakkar (input mode). Default: samples.tsv.")
-    p_qnt.add_argument("--bins-file", default="bins.txt", metavar="PATH",
-        help="Output MAG bins path file for drakkar (input mode). Default: bins.txt.")
-    p_qnt.add_argument("--reads1-field", metavar="FIELD",
-        help="Field ID for R1 reads URL (overrides MAG_DMB_ENTRY_READS1).")
-    p_qnt.add_argument("--reads2-field", metavar="FIELD",
-        help="Field ID for R2 reads URL (overrides MAG_DMB_ENTRY_READS2).")
+    p_qnt.add_argument("--mags-file", default="mags.tsv", metavar="PATH",
+        help="Output MAG URLs file for drakkar (input mode). Default: mags.tsv.")
+    p_qnt.add_argument("--reads-file", default="reads.tsv", metavar="PATH",
+        help="Output reads sample file for drakkar (input mode). Default: reads.tsv.")
+    p_qnt.add_argument("--quality-file", default="quality.tsv", metavar="PATH",
+        help="Output MAG quality file for drakkar (input mode). Default: quality.tsv.")
     _add_sftp_overrides(p_qnt)
     p_qnt.set_defaults(func=cmd_quantifying)
 

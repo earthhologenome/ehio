@@ -79,6 +79,43 @@ def verify_input_files(
     return missing
 
 
+def write_quality_file(
+    records: list[dict[str, Any]],
+    path: Path,
+    name_field: str,
+    completeness_field: str,
+    contamination_field: str,
+) -> int:
+    """Write a MAG quality TSV for drakkar profiling.
+
+    Columns: genome, completeness, contamination
+    Returns the number of rows written.
+    """
+    def _val(v: object) -> object:
+        if isinstance(v, list):
+            v = v[0] if v else ""
+        return v if v is not None else ""
+
+    rows = []
+    for rec in records:
+        fields = rec.get("fields", rec)
+        genome = str(_val(fields.get(name_field, ""))).strip()
+        if not genome:
+            continue
+        rows.append({
+            "genome":        genome,
+            "completeness":  _val(fields.get(completeness_field, "")),
+            "contamination": _val(fields.get(contamination_field, "")),
+        })
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["genome", "completeness", "contamination"], delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)
+
+
 def write_bins_file(
     records: list[dict[str, Any]],
     path: Path,

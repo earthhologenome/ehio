@@ -9,6 +9,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.0] - 2026-05-04
+
+### Changed
+
+- `ehio quantifying --input` now fetches MAG records by linked IDs from `MAG_DMB_BATCH_LIST_MAGS` and entry records by linked IDs from `MAG_DMB_BATCH_LIST_ENTRY`, replacing the formula-based entry scan.
+- Output files renamed: `{batch}_mags.tsv` (MAG URLs, no header), `{batch}_reads.tsv` (sample/rawreads1/rawreads2), `{batch}_quality.tsv` (genome/completeness/contamination).
+- `drakkar profiling` command now includes `-a {ani_threshold}` (from `MAG_DMB_BATCH_ANI`), `-t {profiling_type}` (from `MAG_DMB_BATCH_TYPE`, lowercased), and `-q {quality_file}`.
+
+### Added
+
+- New `write_quality_file` helper in `drakkar.py` writes the MAG quality TSV from `MAG_ENTRY_NAME`, `MAG_ENTRY_CHECKM_COMPLETENESS`, `MAG_ENTRY_CHECKM_CONTAMINATION`.
+
 ## [0.2.17] - 2026-05-03
 
 ### Changed

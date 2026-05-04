@@ -190,6 +190,8 @@ def build_script_content(
     boost_memory: int | None = None,
     rerun: bool = False,
     resume: bool = False,
+    ani_threshold: str = "",
+    profiling_type: str = "",
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -278,11 +280,20 @@ def build_script_content(
         )
 
     if module == "quantifying":
-        bins_file  = f"{run_dir}/{batch_name}_bins.txt"
-        input_step = "" if resume else f"ehio quantifying --input -b {q(batch_name)} -f {q(tsv_file)} --bins-file {q(bins_file)}\n"
+        mags_file    = f"{run_dir}/{batch_name}_mags.tsv"
+        reads_file   = f"{run_dir}/{batch_name}_reads.tsv"
+        quality_file = f"{run_dir}/{batch_name}_quality.tsv"
+        ani_part     = f" -a {q(ani_threshold)}"   if ani_threshold  else ""
+        type_part    = f" -t {q(profiling_type)}"  if profiling_type else ""
+        input_step   = "" if resume else (
+            f"ehio quantifying --input -b {q(batch_name)}"
+            f" --mags-file {q(mags_file)}"
+            f" --reads-file {q(reads_file)}"
+            f" --quality-file {q(quality_file)}\n"
+        )
         return header + (
             input_step
-            + f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(bins_file)} -R {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
+            + f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(mags_file)} -R {q(reads_file)}{ani_part}{type_part} -q {q(quality_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
             + f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             + "_EHIO_SUCCESS=1\n"
         )
@@ -310,9 +321,14 @@ def _generate_input_files(module: str, batch_name: str, run_dir: str, token: str
         cmd = [sys.executable, "-m", "ehio", "binning", "--input",
                "-b", batch_name, "-f", tsv_path]
     elif module == "quantifying":
-        bins_path = str(Path(run_dir) / f"{batch_name}_bins.txt")
+        mags_path    = str(Path(run_dir) / f"{batch_name}_mags.tsv")
+        reads_path   = str(Path(run_dir) / f"{batch_name}_reads.tsv")
+        quality_path = str(Path(run_dir) / f"{batch_name}_quality.tsv")
         cmd = [sys.executable, "-m", "ehio", "quantifying", "--input",
-               "-b", batch_name, "-f", tsv_path, "--bins-file", bins_path]
+               "-b", batch_name,
+               "--mags-file", mags_path,
+               "--reads-file", reads_path,
+               "--quality-file", quality_path]
     else:
         raise ValueError(f"Unknown module: {module}")
 
@@ -429,6 +445,20 @@ def scan_module(
                 file=sys.stderr,
             )
 
+        ani_threshold  = ""
+        profiling_type = ""
+        if module == "quantifying":
+            ani_field  = str(cfg.get("MAG_DMB_BATCH_ANI")  or "").strip()
+            type_field = str(cfg.get("MAG_DMB_BATCH_TYPE") or "").strip()
+            if ani_field:
+                raw = record.get("fields", {}).get(ani_field)
+                if raw is not None:
+                    ani_threshold = str(raw).strip()
+            if type_field:
+                raw = record.get("fields", {}).get(type_field)
+                if raw:
+                    profiling_type = str(raw).strip().lower()
+
         script_content = build_script_content(
             module, batch_name, run_dir, output_dir, profile, error_status, ref_flag,
             ehio_conda_env=ehio_conda_env,
@@ -439,6 +469,8 @@ def scan_module(
             boost_memory=boost_memory,
             rerun=do_rerun,
             resume=do_resume,
+            ani_threshold=ani_threshold,
+            profiling_type=profiling_type,
         )
 
         if do_rerun:
