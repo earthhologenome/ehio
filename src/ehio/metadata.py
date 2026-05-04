@@ -266,6 +266,41 @@ def parse_drakkar_cataloging_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
     return _parse_tsv_keyed(tsv_path, key_col="assembly", col_map=_CATALOGING_COL_MAP)
 
 
+_PROFILING_GENOMES_COL_MAP: dict[str, str] = {
+    "mapping_percentage": "mapping_rate",
+}
+
+
+def parse_profiling_genomes_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
+    """Read a drakkar profiling_genomes.tsv summary, keyed by sample.
+
+    Returns {sample_code: {"mapping_rate": value, ...}}.
+    """
+    return _parse_tsv_keyed(tsv_path, key_col="sample", col_map=_PROFILING_GENOMES_COL_MAP)
+
+
+def parse_dereplicating_tsv(tsv_path: Path) -> int | None:
+    """Read a drakkar dereplicating.tsv and return output_bin_number.
+
+    Returns the integer value, or None if the file or column is missing.
+    """
+    if not tsv_path.exists():
+        return None
+    try:
+        with tsv_path.open(newline="") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            for row in reader:
+                raw = (row.get("output_bin_number") or "").strip()
+                if raw:
+                    try:
+                        return int(float(raw))
+                    except ValueError:
+                        return None
+    except OSError:
+        pass
+    return None
+
+
 def write_output_tsv(
     sample_metrics: dict[str, dict[str, Any]],
     tsv_path: Path,

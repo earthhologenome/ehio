@@ -749,9 +749,10 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     """Parse profiling metadata from drakkar output, update Airtable, transfer files."""
     from ehio.airtable import AirtableClient
     from ehio.metadata import (
-        collect_quantifying_metadata,
         build_entry_update,
         write_quantifying_output_tsv,
+        parse_profiling_genomes_tsv,
+        parse_dereplicating_tsv,
         QUANTIFYING_METRIC_KEYS,
     )
     from ehio.transfer import SFTPTransfer
@@ -789,13 +790,18 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
         if fld_id:
             field_map[metric_key] = fld_id
 
+    profiling_tsv = local_root / "profiling_genomes.tsv"
+    per_sample = parse_profiling_genomes_tsv(profiling_tsv)
+    if not per_sample:
+        _info(f"profiling_genomes.tsv not found or empty at {profiling_tsv}; no mapping rates to write.")
+
     all_metrics: dict[str, dict] = {}
     updates: list[dict] = []
     for entry in entries:
         sample = str(entry.get("fields", {}).get(entry_code_field, "")).strip()
         if not sample:
             continue
-        metrics = collect_quantifying_metadata(sample, local_root)
+        metrics = per_sample.get(sample, {})
         all_metrics[sample] = metrics
         payload = build_entry_update(entry["id"], metrics, field_map)
         if payload["fields"]:
@@ -815,10 +821,15 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     else:
         _info("No mapping metrics found to update.")
 
-    final_dir = local_root / "profiling" / "final"
+    # Genomes-type output: profiling_genomes/final/counts.tsv + bases.tsv
+    # Pangenomes-type output path and files differ — to be wired when implemented.
+    final_dir = local_root / "profiling_genomes" / "final"
     if not final_dir.is_dir():
         _info(f"Final output directory not found ({final_dir}); skipping transfer.")
     else:
+        import gzip as _gzip
+        import shutil as _shutil
+
         host     = _conf(args, "host",     "SFTP_HOST",     required=True)
         user     = _conf(args, "user",     "SFTP_USER",     required=True)
         port     = int(_conf(args, "port", "SFTP_PORT") or 22)
@@ -827,17 +838,34 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
         remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
         remote_dir  = f"{remote_base.rstrip('/')}/DMB/{args.batch}"
 
-        import shutil as _shutil
-        if tsv_out is not None and tsv_out.exists():
-            _shutil.copy2(tsv_out, final_dir / tsv_out.name)
+        gz_files: list[Path] = []
+        for src_name, dest_name in [
+            ("counts.tsv", f"{args.batch}_counts.tsv.gz"),
+            ("bases.tsv",  f"{args.batch}_bases.tsv.gz"),
+        ]:
+            src = final_dir / src_name
+            if not src.exists():
+                _info(f"  {src_name} not found in {final_dir} — skipping.")
+                continue
+            gz = final_dir / dest_name
+            with src.open("rb") as _fin, _gzip.open(gz, "wb") as _fout:
+                _shutil.copyfileobj(_fin, _fout)
+            gz_files.append(gz)
+            _info(f"  Compressed {src_name} → {dest_name}")
 
-        _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
-        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
-            if getattr(args, "rerun", False):
-                xfer.remove_remote_dir(remote_dir)
-                _info(f"Deleted remote directory {remote_dir} for rerun.")
-            n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
-        _info(f"Transferred {n} file(s) to {remote_dir}.")
+        if gz_files:
+            _info(f"Transferring {len(gz_files)} file(s) to {user}@{host}:{remote_dir} ...")
+            n = 0
+            try:
+                with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+                    if getattr(args, "rerun", False):
+                        xfer.remove_remote_dir(remote_dir)
+                        _info(f"Deleted remote directory {remote_dir} for rerun.")
+                    n = xfer.upload_flat(gz_files, remote_dir, verbose=getattr(args, "verbose", False))
+            finally:
+                for _gz in gz_files:
+                    _gz.unlink(missing_ok=True)
+            _info(f"Transferred {n} file(s) to {remote_dir}.")
 
         cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
         if cleanup not in ("false", "0", "no"):
@@ -847,10 +875,19 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     batch_fields: dict = {}
     ehio_version_field    = str(cfg.get("MAG_DMB_BATCH_EHIO_VERSION")    or "").strip()
     drakkar_version_field = str(cfg.get("MAG_DMB_BATCH_DRAKKAR_VERSION") or "").strip()
+    derep_mags_field      = str(cfg.get("MAG_DMB_BATCH_DEREP_MAGS")      or "").strip()
     if ehio_version_field:
         batch_fields[ehio_version_field] = __version__
     if drakkar_version_field:
         batch_fields[drakkar_version_field] = _get_drakkar_version()
+    if derep_mags_field:
+        derep_tsv   = local_root / "dereplicating.tsv"
+        derep_count = parse_dereplicating_tsv(derep_tsv)
+        if derep_count is not None:
+            batch_fields[derep_mags_field] = derep_count
+            _info(f"Dereplicated MAGs: {derep_count}")
+        else:
+            _info(f"dereplicating.tsv not found or output_bin_number missing at {derep_tsv}.")
 
     done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
     batch_status_field = _require_cfg("MAG_DMB_BATCH_STATUS")

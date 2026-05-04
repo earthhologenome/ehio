@@ -9,6 +9,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.2] - 2026-05-04
+
+### Added
+
+- `parse_profiling_genomes_tsv`: reads `profiling_genomes.tsv` and extracts `mapping_percentage` per sample → `MAG_DMB_ENTRY_MAPPING_RATE`.
+- `parse_dereplicating_tsv`: reads `dereplicating.tsv` and extracts `output_bin_number` → `MAG_DMB_BATCH_DEREP_MAGS`.
+
+### Changed
+
+- Quantifying output now locates drakkar results under `profiling_genomes/final/` (was `profiling/final/`).
+- `counts.tsv` and `bases.tsv` are gzipped and renamed to `{batch}_counts.tsv.gz` / `{batch}_bases.tsv.gz` before transfer to `DMB/{batch}/`; only these two files are uploaded (whole-directory upload removed).
+- Batch-level `MAG_DMB_BATCH_DEREP_MAGS` and per-entry `MAG_DMB_ENTRY_MAPPING_RATE` are now populated from drakkar summary TSVs instead of flagstat files.
+
 ## [0.3.1] - 2026-05-04
 
 ### Changed
