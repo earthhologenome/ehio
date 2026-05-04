@@ -142,13 +142,13 @@ MAG_DMB_BATCH_LIST_MAGS: "fldR7UBwTItriazqA" # Field in MAG_DMB_BATCH with the l
 MAG_DMB_BATCH_LIST_PPR: "fldz9tQw209jKUDuW" # Field in MAG_DMB_BATCH with the linked MAG_PPR records of the batch, i.e. a list of MAG_PPR_ID (for processing and logging)
 MAG_DMB_BATCH_BOOST_TIME: "fldoDeP1xpEKl144d" # Field in MAG_DMB_BATCH with the time boost value passed to drakkar (for processing)
 MAG_DMB_BATCH_BOOST_MEMORY: "fldAMqZtYYTHQG15r" # Field in MAG_DMB_BATCH with the memory boost value passed to drakkar (for processing)
+MAG_DMB_BATCH_DEREP_MAGS: "fldzP0UvbMGPnPlYg" # Field in MAG_DMB_BATCH with the number of dereplicated MAG records in the batch, i.e. a list of MAG_ENTRY_ID (for processing and logging; leave empty if unused)
 
 MAG_DMB_ENTRY_ID: "fldGIAejYpkpaws1a" # Field in  MAG_DMB_ENTRY with the entry record ID (for processing and logging)
 MAG_DMB_ENTRY_CODE: "fldbfDFaVIO7OHzN4" # Field in  MAG_DMB_ENTRY with the entry code (primary key, for processing and logging)
 MAG_DMB_ENTRY_BATCH: "fld10ns3lKacZUB5C"  # Field in  MAG_DMB_ENTRY with the linked batch record ID, i.e. MAG_DMB_BATCH_ID (for processing)
+MAG_DMB_ENTRY_PPR: "fldUFSnaBL95qI4LR"  # Field in  MAG_DMB_ENTRY with the linked MAG_PPR record ID, i.e. MAG_PPR_ID (for processing)
 MAG_DMB_ENTRY_MAPPING_RATE: "fldl7n9sXo2h8mL1C" # Field in  MAG_DMB_ENTRY with the mapping rate of the reads to the bins (for logging)
-MAG_DMB_ENTRY_READS1: "fld57KxJyO0x3WHl1"  # Field in MAG_DMB_ENTRY with the preprocessed forward reads URL (for input)
-MAG_DMB_ENTRY_READS2: "fld67YsnZ1Bhav0zH"  # Field in MAG_DMB_ENTRY with the preprocessed reverse reads URL (for input)
 
 MAG_PPR_ID: "fldKEkQ56TyeDU4mS" # Field in MAG_PPR with the entry record ID (for processing and logging)
 MAG_PPR_CODE: "fldzHlOx3WUE1cFie" # Field in MAG_PPR with the entry code (primary key, for processing and logging)
