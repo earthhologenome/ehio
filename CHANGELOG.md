@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.3] - 2026-05-04
+
+### Changed
+
+- Quantifying output now creates new `MAG_DMB_ENTRY` records instead of updating pre-existing ones. Each record is linked to the batch (`MAG_DMB_ENTRY_BATCH`) and its corresponding PPR record (`MAG_DMB_ENTRY_PPR`), with `MAG_DMB_ENTRY_MAPPING_RATE` populated from `profiling_genomes.tsv`.
+
 ## [0.3.2] - 2026-05-04
 
 ### Added

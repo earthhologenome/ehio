@@ -749,11 +749,9 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     """Parse profiling metadata from drakkar output, update Airtable, transfer files."""
     from ehio.airtable import AirtableClient
     from ehio.metadata import (
-        build_entry_update,
         write_quantifying_output_tsv,
         parse_profiling_genomes_tsv,
         parse_dereplicating_tsv,
-        QUANTIFYING_METRIC_KEYS,
     )
     from ehio.transfer import SFTPTransfer
 
@@ -761,10 +759,14 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     base_id     = _require_cfg("MAG_BASE")
     batch_table = _require_cfg("MAG_DMB_BATCH")
     entry_table = _require_cfg("MAG_DMB_ENTRY")
+    ppr_table   = _require_cfg("MAG_PPR")
 
     batch_code_field  = _require_cfg("MAG_DMB_BATCH_CODE")
+    ppr_list_field    = _require_cfg("MAG_DMB_BATCH_LIST_PPR")
+    ppr_ehi_field     = _require_cfg("MAG_PPR_EHI")
     entry_batch_field = _require_cfg("MAG_DMB_ENTRY_BATCH")
-    entry_code_field  = _require_cfg("MAG_DMB_ENTRY_CODE")
+    entry_ppr_field   = _require_cfg("MAG_DMB_ENTRY_PPR")
+    entry_rate_field  = str(cfg.get("MAG_DMB_ENTRY_MAPPING_RATE") or "").strip()
 
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
@@ -772,54 +774,61 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
 
     _info(f"Looking up batch '{args.batch}' in Airtable...")
     client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record, entries = client.fetch_batch_and_entries(
-        batch_table=batch_table,
-        batch_code_field=batch_code_field,
-        batch_code=args.batch,
-        entry_table=entry_table,
-        entry_batch_field=entry_batch_field,
-    )
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
     if batch_record is None:
         _die(f"Batch '{args.batch}' not found.")
-    if not entries:
-        _die(f"No entries found for batch '{args.batch}'.")
 
-    field_map: dict[str, str] = {}
-    for metric_key, config_key in QUANTIFYING_METRIC_KEYS.items():
-        fld_id = str(cfg.get(config_key) or "").strip()
-        if fld_id:
-            field_map[metric_key] = fld_id
+    # Fetch PPR records linked to this batch
+    ppr_rec_ids = batch_record.get("fields", {}).get(ppr_list_field, [])
+    if not ppr_rec_ids:
+        _die(f"No PPR records linked in field {ppr_list_field} of batch '{args.batch}'.")
+    _info(f"Fetching {len(ppr_rec_ids)} PPR record(s)...")
+    ppr_records = []
+    for rec_id in ppr_rec_ids:
+        if isinstance(rec_id, str) and rec_id.startswith("rec"):
+            rec = client.fetch_record_by_id(ppr_table, rec_id)
+            if rec:
+                ppr_records.append(rec)
+    if not ppr_records:
+        _die(f"Could not fetch any PPR records for batch '{args.batch}'.")
 
+    # Parse per-sample mapping rates from drakkar output
     profiling_tsv = local_root / "profiling_genomes.tsv"
     per_sample = parse_profiling_genomes_tsv(profiling_tsv)
     if not per_sample:
-        _info(f"profiling_genomes.tsv not found or empty at {profiling_tsv}; no mapping rates to write.")
+        _info(f"profiling_genomes.tsv not found or empty at {profiling_tsv}; mapping rates will be empty.")
 
+    # Create MAG_DMB_ENTRY records — one per PPR record
+    batch_rec_id = batch_record["id"]
+    records_to_create: list[dict] = []
     all_metrics: dict[str, dict] = {}
-    updates: list[dict] = []
-    for entry in entries:
-        sample = str(entry.get("fields", {}).get(entry_code_field, "")).strip()
-        if not sample:
-            continue
-        metrics = per_sample.get(sample, {})
-        all_metrics[sample] = metrics
-        payload = build_entry_update(entry["id"], metrics, field_map)
-        if payload["fields"]:
-            updates.append(payload)
+    for ppr_rec in ppr_records:
+        ehi_raw = ppr_rec.get("fields", {}).get(ppr_ehi_field, "")
+        if isinstance(ehi_raw, list):
+            ehi_raw = ehi_raw[0] if ehi_raw else ""
+        ehi = str(ehi_raw).strip()
+        metrics = per_sample.get(ehi, {})
+        all_metrics[ehi] = metrics
+        rec_fields: dict = {
+            entry_batch_field: [batch_rec_id],
+            entry_ppr_field:   [ppr_rec["id"]],
+        }
+        if entry_rate_field:
+            rate = metrics.get("mapping_rate")
+            if rate is not None:
+                rec_fields[entry_rate_field] = rate
+        records_to_create.append(rec_fields)
+
+    if records_to_create:
+        _info(f"Creating {len(records_to_create)} MAG_DMB_ENTRY records...")
+        client.create_records(entry_table, records_to_create)
+        _info("MAG_DMB_ENTRY records created.")
 
     run_base = str(cfg.get("RUN_BASE") or "").strip()
-    tsv_out: Path | None = None
     if run_base:
         tsv_out = Path(run_base) / args.batch / f"{args.batch}_output.tsv"
         write_quantifying_output_tsv(all_metrics, tsv_out)
         _info(f"Output summary written to {tsv_out}")
-
-    if updates:
-        _info(f"Updating {len(updates)} entry records in Airtable...")
-        client.update_records(entry_table, updates)
-        _info("Airtable update complete.")
-    else:
-        _info("No mapping metrics found to update.")
 
     # Genomes-type output: profiling_genomes/final/counts.tsv + bases.tsv
     # Pangenomes-type output path and files differ — to be wired when implemented.
