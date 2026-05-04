@@ -21,7 +21,8 @@ EHI_ASB_ENTRY:  "tblG6ZIvkYN844I97"  # Assembly/binning entry table (EHI_BASE)
 EHI_GENOME:     "tbl7QOk2HKrZatIfG"  # Reference genome table (MAG_BASE)
 MAG_DMB_BATCH:  "tblvPsCiNanM7NeQp"  # Dereplication/mapping batch table (MAG_BASE)
 MAG_DMB_ENTRY:  "tblWDyQmM9rQ9wq57"  # Dereplication/mapping entry table (MAG_BASE)
-MAG_ENTRY: "tblMzd3oyaJhdeQcs"       # MAG genome table (MAG_BASE)
+MAG_ENTRY:      "tblMzd3oyaJhdeQcs"  # MAG genome table (MAG_BASE)
+MAG_PPR:        "tblkmD4y0fZ6P8XRf"  # MAG preprocessing table (MAG_BASE) 
 
 # ---- Preprocessing module -------------------------------------------------
 # Input: fetch raw reads from EHI_PPR_ENTRY, write a drakkar sample file
@@ -138,7 +139,7 @@ MAG_DMB_BATCH_DREP_TRHESHOLD: "fldZhjmUfIJdDoDw5" # Field in MAG_DMB_BATCH with 
 MAG_DMB_BATCH_EHIO_VERSION: "fldQlMBHcZxEPA3Qo" # Field in MAG_DMB_BATCH with the ehio version used for profiling (for logging)
 MAG_DMB_BATCH_DRAKKAR_VERSION: "fldc3hlc2e21Ypsyl" # Field in MAG_DMB_BATCH with the drakkar version used for profiling (for logging)
 MAG_DMB_BATCH_LIST_MAGS: "fldR7UBwTItriazqA" # Field in MAG_DMB_BATCH with the linked MAG records of the batch, i.e. a list of MAG_ENTRY_ID (for processing and logging)
-MAG_DMB_BATCH_LIST_ENTRY: "fldDM08HXSmMOJcQq" # Field in MAG_DMB_BATCH with the linked MAG_DMB_ENTRY records of the batch, i.e. a list of MAG_DMB_ENTRY_ID (for processing and logging)
+MAG_DMB_BATCH_LIST_PPR: "fldz9tQw209jKUDuW" # Field in MAG_DMB_BATCH with the linked MAG_PPR records of the batch, i.e. a list of MAG_PPR_ID (for processing and logging)
 MAG_DMB_BATCH_BOOST_TIME: "fldoDeP1xpEKl144d" # Field in MAG_DMB_BATCH with the time boost value passed to drakkar (for processing)
 MAG_DMB_BATCH_BOOST_MEMORY: "fldAMqZtYYTHQG15r" # Field in MAG_DMB_BATCH with the memory boost value passed to drakkar (for processing)
 
@@ -148,6 +149,12 @@ MAG_DMB_ENTRY_BATCH: "fld10ns3lKacZUB5C"  # Field in  MAG_DMB_ENTRY with the lin
 MAG_DMB_ENTRY_MAPPING_RATE: "fldl7n9sXo2h8mL1C" # Field in  MAG_DMB_ENTRY with the mapping rate of the reads to the bins (for logging)
 MAG_DMB_ENTRY_READS1: "fld57KxJyO0x3WHl1"  # Field in MAG_DMB_ENTRY with the preprocessed forward reads URL (for input)
 MAG_DMB_ENTRY_READS2: "fld67YsnZ1Bhav0zH"  # Field in MAG_DMB_ENTRY with the preprocessed reverse reads URL (for input)
+
+MAG_PPR_ID: "fldKEkQ56TyeDU4mS" # Field in MAG_PPR with the entry record ID (for processing and logging)
+MAG_PPR_CODE: "fldzHlOx3WUE1cFie" # Field in MAG_PPR with the entry code (primary key, for processing and logging)
+MAG_PPR_EHI: "flds92MuRBX7ecKUK" # Field in MAG_PPR with the linked EHI record ID, i.e. EHI_PPR_ENTRY_ID (for processing and logging)
+MAG_PPR_READS1: "fld92nfITR1mMKXjc" # Field in MAG_PPR with the preprocessed forward reads URL (for input)
+MAG_PPR_READS2: "fldPwaMMW43G7J6vO" # Field in MAG_PPR with the preprocessed reverse reads URL (for input)
 
 # ---- SFTP settings --------------------------------------------------------
 SFTP_HOST: "io.erda.dk"

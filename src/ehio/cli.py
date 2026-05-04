@@ -659,18 +659,18 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     base_id     = _require_cfg("MAG_BASE")
     batch_table = _require_cfg("MAG_DMB_BATCH")
     mag_table   = _require_cfg("MAG_ENTRY")
-    entry_table = _require_cfg("MAG_DMB_ENTRY")
+    ppr_table   = _require_cfg("MAG_PPR")
 
     batch_code_field      = _require_cfg("MAG_DMB_BATCH_CODE")
     mag_list_field        = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
-    entry_list_field      = _require_cfg("MAG_DMB_BATCH_LIST_ENTRY")
+    ppr_list_field        = _require_cfg("MAG_DMB_BATCH_LIST_PPR")
     mag_name_field        = _require_cfg("MAG_ENTRY_NAME")
     mag_completeness_fld  = _require_cfg("MAG_ENTRY_CHECKM_COMPLETENESS")
     mag_contamination_fld = _require_cfg("MAG_ENTRY_CHECKM_CONTAMINATION")
     mag_url_field         = _require_cfg("MAG_ENTRY_URL_FASTA")
-    entry_code_field      = _require_cfg("MAG_DMB_ENTRY_CODE")
-    reads1_field          = _require_cfg("MAG_DMB_ENTRY_READS1")
-    reads2_field          = _require_cfg("MAG_DMB_ENTRY_READS2")
+    ppr_ehi_field         = _require_cfg("MAG_PPR_EHI")
+    reads1_field          = _require_cfg("MAG_PPR_READS1")
+    reads2_field          = _require_cfg("MAG_PPR_READS2")
 
     _info(f"Looking up batch '{args.batch}'...")
     client = AirtableClient(api_key=token, base_id=base_id)
@@ -705,31 +705,31 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     n_mags = write_bins_file(mag_records, mags_path, bins_field=mag_url_field)
     _info(f"Wrote {n_mags} MAG URLs to {mags_path}")
 
-    # Fetch entry records from MAG_DMB_ENTRY
-    entry_rec_ids = batch_record.get("fields", {}).get(entry_list_field, [])
-    if not entry_rec_ids:
-        _die(f"No entry records linked in field {entry_list_field} of batch '{args.batch}'.")
-    _info(f"Fetching {len(entry_rec_ids)} entry record(s)...")
-    entry_records = []
-    for rec_id in entry_rec_ids:
+    # Fetch PPR records from MAG_PPR
+    ppr_rec_ids = batch_record.get("fields", {}).get(ppr_list_field, [])
+    if not ppr_rec_ids:
+        _die(f"No PPR records linked in field {ppr_list_field} of batch '{args.batch}'.")
+    _info(f"Fetching {len(ppr_rec_ids)} PPR record(s)...")
+    ppr_records = []
+    for rec_id in ppr_rec_ids:
         if isinstance(rec_id, str) and rec_id.startswith("rec"):
-            rec = client.fetch_record_by_id(entry_table, rec_id)
+            rec = client.fetch_record_by_id(ppr_table, rec_id)
             if rec:
-                entry_records.append(rec)
-    if not entry_records:
-        _die(f"Could not fetch any entry records for batch '{args.batch}'.")
+                ppr_records.append(rec)
+    if not ppr_records:
+        _die(f"Could not fetch any PPR records for batch '{args.batch}'.")
 
     reads_path = Path(args.reads_file)
     n_reads = write_sample_file(
-        entry_records,
+        ppr_records,
         reads_path,
-        sample_field=entry_code_field,
+        sample_field=ppr_ehi_field,
         reads1_field=reads1_field,
         reads2_field=reads2_field,
     )
     _info(f"Wrote {n_reads} read entries to {reads_path}")
 
-    missing_reads = verify_input_files(entry_records, entry_code_field, [reads1_field, reads2_field])
+    missing_reads = verify_input_files(ppr_records, ppr_ehi_field, [reads1_field, reads2_field])
     if missing_reads:
         for sample, path in missing_reads:
             print(f"  WARNING: [{sample}] reads file not found: {path}", file=sys.stderr)

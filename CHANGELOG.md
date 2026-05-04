@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.1] - 2026-05-04
+
+### Changed
+
+- Reads for the quantifying input are now sourced from `MAG_PPR` (via `MAG_DMB_BATCH_LIST_PPR`) instead of `MAG_DMB_ENTRY`. Sample name comes from `MAG_PPR_EHI`; reads from `MAG_PPR_READS1` / `MAG_PPR_READS2`.
+
 ## [0.3.0] - 2026-05-04
 
 ### Changed
