@@ -131,6 +131,8 @@ MAG_ENTRY_URL_FASTA: "fldN9Dh6FXWjV8cOZ" # Field in MAG_ENTRY with the URL or pa
 MAG_DMB_BATCH_ID: "fld1YZGIAqQB19sw8" # Field in MAG_DMB_BATCH  with the batch record ID (for processing and logging)
 MAG_DMB_BATCH_CODE: "fldr36ymPFWzln8dr" # Field in MAG_DMB_BATCH with the batch code (primary key, for processing and logging)
 MAG_DMB_BATCH_DATE: "fld6vUZLQCVHEV98d" # Field in MAG_DMB_BATCH with the batch date (for logging)
+MAG_DMB_BATCH_ANI: "fldZhjmUfIJdDoDw5" # Field in MAG_DMB_BATCH with the ANI threshold used for clustering the MAGs (for logging)
+MAG_DMB_BATCH_TYPE: "fld8RrzDLPGBknh9D" # Field in MAG_DMB_BATCH with the batch type (e.g. "genome, pangenome", for processing)
 MAG_DMB_BATCH_STATUS: "fldryNfc7YGJot4t6" # Field in MAG_DMB_BATCH with the batch status (for scanning, processing and logging)
 MAG_DMB_BATCH_DREP_TRHESHOLD: "fldZhjmUfIJdDoDw5" # Field in MAG_DMB_BATCH with the dRep threshold used for dereplication (for logging)
 MAG_DMB_BATCH_EHIO_VERSION: "fldQlMBHcZxEPA3Qo" # Field in MAG_DMB_BATCH with the ehio version used for profiling (for logging)
