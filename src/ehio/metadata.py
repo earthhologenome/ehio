@@ -599,3 +599,154 @@ BINNING_METRIC_KEYS: dict[str, str] = {
 QUANTIFYING_METRIC_KEYS: dict[str, str] = {
     "mapping_rate": "MAG_DMB_ENTRY_MAPPING_RATE",
 }
+
+
+# ---------------------------------------------------------------------------
+# Annotating parsers
+# ---------------------------------------------------------------------------
+
+def _parse_gtdb_classification(classification: str) -> dict[str, str | None]:
+    """Split a GTDB-Tk classification string into per-rank values.
+
+    Input:  'd__Bacteria;p__Actinomycetota;...;s__'
+    Output: {'domain': 'Bacteria', ..., 'species': None}
+    Empty ranks (e.g. 's__') are returned as None.
+    """
+    rank_prefixes = [
+        ("d__", "domain"),
+        ("p__", "phylum"),
+        ("c__", "class_"),
+        ("o__", "order"),
+        ("f__", "family"),
+        ("g__", "genus"),
+        ("s__", "species"),
+    ]
+    result: dict[str, str | None] = {rank: None for _, rank in rank_prefixes}
+    for part in classification.split(";"):
+        part = part.strip()
+        for prefix, rank in rank_prefixes:
+            if part.startswith(prefix):
+                val = part[len(prefix):]
+                result[rank] = val if val else None
+                break
+    return result
+
+
+def parse_genome_taxonomy_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
+    """Read annotating/genome_taxonomy.tsv.
+
+    Returns {user_genome + '.fa': {metric_key: value, ...}}.
+    Taxonomy ranks, GTDB FastANI reference, ANI and AF are extracted.
+    """
+    result: dict[str, dict[str, Any]] = {}
+    if not tsv_path.exists():
+        return result
+    try:
+        with tsv_path.open(newline="") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            for row in reader:
+                user_genome = (row.get("user_genome") or "").strip()
+                if not user_genome:
+                    continue
+                genome_key = user_genome + ".fa"
+                classification = (row.get("classification") or "").strip()
+                taxonomy = _parse_gtdb_classification(classification)
+
+                def _flt(col: str) -> float | None:
+                    v = (row.get(col) or "").strip()
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        return None
+
+                result[genome_key] = {
+                    **taxonomy,
+                    "gtdb_fastani":     (row.get("closest_genome_reference") or "").strip() or None,
+                    "gtdb_closest_ani": _flt("closest_genome_ani"),
+                    "gtdb_closest_af":  _flt("closest_genome_af"),
+                }
+    except OSError:
+        pass
+    return result
+
+
+def parse_annotation_tsv(tsv_path: Path) -> dict[str, Any]:
+    """Parse a per-genome annotation TSV from annotating/final/{mag_code}.tsv.
+
+    Returns coding_density, genes_number, genes_unannotated, genes_kegg.
+    Genome length is estimated as sum of max(end) per contig; gene length
+    is abs(end - start) per gene.  Unannotated = no kegg, ec, pfam, or cazy.
+    """
+    result: dict[str, Any] = {
+        "coding_density":   None,
+        "genes_number":     None,
+        "genes_unannotated": None,
+        "genes_kegg":       None,
+    }
+    if not tsv_path.exists():
+        return result
+    contig_max_end: dict[str, int] = {}
+    total_gene_length = 0
+    total_genes = 0
+    unannotated = 0
+    kegg_count = 0
+    try:
+        with tsv_path.open(newline="") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            for row in reader:
+                gene = (row.get("gene") or "").strip()
+                if not gene:
+                    continue
+                contig = gene.rsplit("_", 1)[0]
+                try:
+                    start = int(row.get("start") or 0)
+                    end   = int(row.get("end")   or 0)
+                except (ValueError, TypeError):
+                    start, end = 0, 0
+                total_gene_length += abs(end - start)
+                contig_max_end[contig] = max(contig_max_end.get(contig, 0), end)
+                total_genes += 1
+                if not any([
+                    (row.get("kegg")  or "").strip(),
+                    (row.get("ec")    or "").strip(),
+                    (row.get("pfam")  or "").strip(),
+                    (row.get("cazy")  or "").strip(),
+                ]):
+                    unannotated += 1
+                if (row.get("kegg") or "").strip():
+                    kegg_count += 1
+        if total_genes > 0:
+            genome_length = sum(contig_max_end.values())
+            result["genes_number"]      = total_genes
+            result["genes_unannotated"] = unannotated
+            result["genes_kegg"]        = kegg_count
+            if genome_length > 0:
+                result["coding_density"] = round(total_gene_length / genome_length, 6)
+    except OSError:
+        pass
+    return result
+
+
+ANNOTATING_TAXONOMY_KEYS: dict[str, str] = {
+    "domain":  "MAG_ENTRY_DOMAIN",
+    "phylum":  "MAG_ENTRY_PHYLUM",
+    "class_":  "MAG_ENTRY_CLASS",
+    "order":   "MAG_ENTRY_ORDER",
+    "family":  "MAG_ENTRY_FAMILY",
+    "genus":   "MAG_ENTRY_GENUS",
+    "species": "MAG_ENTRY_SPECIES",
+}
+
+ANNOTATING_GTDB_KEYS: dict[str, str] = {
+    "gtdb_fastani":     "MAG_ENTRY_GTDB_FASTANI",
+    "gtdb_closest_ani": "MAG_ENTRY_GTDB_CLOSEST_ANI",
+    "gtdb_closest_af":  "MAG_ENTRY_GTDB_CLOSEST_AF",
+}
+
+ANNOTATING_FUNC_KEYS: dict[str, str] = {
+    "coding_density":    "MAG_ENTRY_CODING_DENSITY",
+    "genes_number":      "MAG_ENTRY_GENES_NUMBER",
+    "genes_unannotated": "MAG_ENTRY_GENES_NUMBER_UNANNOTATED",
+    "genes_kegg":        "MAG_ENTRY_GENES_KEGG_NUMBER",
+    "annotated":         "MAG_ENTRY_ANNOTATED",
+}

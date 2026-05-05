@@ -9,6 +9,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.4] - 2026-05-05
+
+### Added
+
+- `ehio annotating` subcommand with `--input` and `--output` modes.
+  - `--input`: fetches linked MAG records for the batch, skips any where `MAG_ENTRY_ANNOTATED` is already `true`, and writes the remaining genome paths (one per line) to `--annotation-file`. Accepts `--annotation-dir` to locate the dereplicated FASTA files.
+  - `--output`: parses `annotating/genome_taxonomy.tsv` (GTDB-Tk classification per genome), per-genome annotation TSVs from `annotating/final/`, and uploads taxonomy/tree files to `DMB/{batch}/` and compressed per-genome TSVs to `ANN/{batch}/` via SFTP. Updates `MAG_ENTRY` in Airtable with taxonomy ranks, GTDB closest-genome metadata, coding density, gene counts, and sets `MAG_ENTRY_ANNOTATED = true` for each processed genome.
+- New metadata parsers in `ehio.metadata`: `parse_genome_taxonomy_tsv`, `_parse_gtdb_classification`, `parse_annotation_tsv`.
+- New config keys: `MAG_ENTRY_DOMAIN`, `MAG_ENTRY_PHYLUM`, `MAG_ENTRY_CLASS`, `MAG_ENTRY_ORDER`, `MAG_ENTRY_FAMILY`, `MAG_ENTRY_GENUS`, `MAG_ENTRY_SPECIES`, `MAG_ENTRY_GTDB_FASTANI`, `MAG_ENTRY_GTDB_CLOSEST_ANI`, `MAG_ENTRY_GTDB_CLOSEST_AF`, `MAG_ENTRY_CODING_DENSITY`, `MAG_ENTRY_GENES_NUMBER`, `MAG_ENTRY_GENES_NUMBER_UNANNOTATED`, `MAG_ENTRY_GENES_KEGG_NUMBER`, `MAG_ENTRY_ANNOTATED`.
+
+### Changed
+
+- Generated quantifying scripts now include two `drakkar annotating` steps after `ehio quantifying --output`: taxonomy annotation (`--annotation-type taxonomy`, always runs) followed by functional annotation (`--annotation-type function`, only for unannotated MAGs), with `ehio annotating --input` in between to build the filtered genome paths file. `ehio annotating --output` runs last to upload results and update Airtable.
+- `ehio binning --output` now sets `MAG_ENTRY_ANNOTATED = false` when creating new `MAG_ENTRY` records, marking freshly binned genomes as not yet functionally annotated.
+
 ## [0.3.3] - 2026-05-04
 
 ### Changed

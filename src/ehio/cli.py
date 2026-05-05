@@ -545,10 +545,11 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         elif not mag_base_id:
             _info("MAG_BASE not configured; skipping MAG creation.")
         else:
-            mag_table        = _require_cfg("MAG_ENTRY")
-            mag_client       = AirtableClient(api_key=token, base_id=mag_base_id)
-            mag_name_fld     = str(cfg.get("MAG_ENTRY_NAME")     or "").strip()
-            mag_assembly_fld = str(cfg.get("MAG_ENTRY_ASSEMBLY") or "").strip()
+            mag_table          = _require_cfg("MAG_ENTRY")
+            mag_client         = AirtableClient(api_key=token, base_id=mag_base_id)
+            mag_name_fld       = str(cfg.get("MAG_ENTRY_NAME")       or "").strip()
+            mag_assembly_fld   = str(cfg.get("MAG_ENTRY_ASSEMBLY")   or "").strip()
+            mag_annotated_fld  = str(cfg.get("MAG_ENTRY_ANNOTATED")  or "").strip()
             mag_field_map: dict[str, str] = {}
             for _mk, _ck in BIN_METRIC_KEYS.items():
                 _fid = str(cfg.get(_ck) or "").strip()
@@ -581,6 +582,8 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                     rec_fields[mag_name_fld] = genome
                 if mag_assembly_fld:
                     rec_fields[mag_assembly_fld] = assembly_code
+                if mag_annotated_fld:
+                    rec_fields[mag_annotated_fld] = False
                 for metric, fld_id in mag_field_map.items():
                     val = bin_row.get(metric)
                     if val is not None:
@@ -911,6 +914,213 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# annotating
+# ---------------------------------------------------------------------------
+
+def cmd_annotating(args: argparse.Namespace) -> int:
+    if args.input:
+        return _run_annotating_input(args)
+    return _run_annotating_output(args)
+
+
+def _run_annotating_input(args: argparse.Namespace) -> int:
+    """Check which MAGs need functional annotation and write their paths to a file."""
+    from ehio.airtable import AirtableClient
+
+    token       = _resolve_token(args)
+    base_id     = _require_cfg("MAG_BASE")
+    batch_table = _require_cfg("MAG_DMB_BATCH")
+    mag_table   = _require_cfg("MAG_ENTRY")
+
+    batch_code_field = _require_cfg("MAG_DMB_BATCH_CODE")
+    mag_list_field   = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
+    mag_name_field   = _require_cfg("MAG_ENTRY_NAME")
+    annotated_field  = str(cfg.get("MAG_ENTRY_ANNOTATED") or "").strip()
+
+    ann_dir  = Path(args.annotation_dir).resolve()
+    out_file = Path(args.annotation_file)
+
+    _info(f"Looking up batch '{args.batch}' in Airtable...")
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    if batch_record is None:
+        _die(f"Batch '{args.batch}' not found.")
+
+    mag_rec_ids = batch_record.get("fields", {}).get(mag_list_field, [])
+    if not mag_rec_ids:
+        _die(f"No MAG records linked in field {mag_list_field} of batch '{args.batch}'.")
+    _info(f"Fetching {len(mag_rec_ids)} MAG record(s)...")
+
+    paths_to_annotate: list[str] = []
+    for rec_id in mag_rec_ids:
+        if not (isinstance(rec_id, str) and rec_id.startswith("rec")):
+            continue
+        rec = client.fetch_record_by_id(mag_table, rec_id)
+        if not rec:
+            continue
+        fields = rec.get("fields", {})
+        if annotated_field and fields.get(annotated_field):
+            continue  # already annotated — skip
+        name = str(fields.get(mag_name_field, "") or "").strip()
+        if not name:
+            continue
+        paths_to_annotate.append(str(ann_dir / name))
+
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    with out_file.open("w", encoding="utf-8") as fh:
+        for p in paths_to_annotate:
+            fh.write(p + "\n")
+    _info(f"Wrote {len(paths_to_annotate)} MAG path(s) to {out_file} ({len(mag_rec_ids) - len(paths_to_annotate)} already annotated, skipped).")
+    return 0
+
+
+def _run_annotating_output(args: argparse.Namespace) -> int:
+    """Parse annotation results, update MAG_ENTRY in Airtable, transfer files."""
+    import gzip as _gzip
+    import shutil as _shutil
+
+    from ehio.airtable import AirtableClient
+    from ehio.metadata import (
+        parse_genome_taxonomy_tsv,
+        parse_annotation_tsv,
+        build_entry_update,
+        ANNOTATING_TAXONOMY_KEYS,
+        ANNOTATING_GTDB_KEYS,
+        ANNOTATING_FUNC_KEYS,
+    )
+    from ehio.transfer import SFTPTransfer
+
+    token       = _resolve_token(args)
+    base_id     = _require_cfg("MAG_BASE")
+    batch_table = _require_cfg("MAG_DMB_BATCH")
+    mag_table   = _require_cfg("MAG_ENTRY")
+
+    batch_code_field = _require_cfg("MAG_DMB_BATCH_CODE")
+    mag_list_field   = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
+    mag_name_field   = _require_cfg("MAG_ENTRY_NAME")
+
+    local_root = Path(args.local_dir).resolve()
+    if not local_root.is_dir():
+        _die(f"Local directory not found: {local_root}")
+
+    ann_dir = local_root / "annotating"
+    if not ann_dir.is_dir():
+        _die(f"Annotating output directory not found: {ann_dir}")
+
+    _info(f"Looking up batch '{args.batch}' in Airtable...")
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    if batch_record is None:
+        _die(f"Batch '{args.batch}' not found.")
+
+    # Fetch linked MAG records and key them by MAG_ENTRY_NAME
+    mag_rec_ids = batch_record.get("fields", {}).get(mag_list_field, [])
+    if not mag_rec_ids:
+        _die(f"No MAG records linked in field {mag_list_field} of batch '{args.batch}'.")
+    _info(f"Fetching {len(mag_rec_ids)} MAG record(s)...")
+    mag_by_name: dict[str, dict] = {}
+    for rec_id in mag_rec_ids:
+        if isinstance(rec_id, str) and rec_id.startswith("rec"):
+            rec = client.fetch_record_by_id(mag_table, rec_id)
+            if rec:
+                name = str(rec.get("fields", {}).get(mag_name_field, "") or "").strip()
+                if name:
+                    mag_by_name[name] = rec
+
+    # Build field_map covering taxonomy, GTDB, and functional metrics
+    all_metric_keys = {**ANNOTATING_TAXONOMY_KEYS, **ANNOTATING_GTDB_KEYS, **ANNOTATING_FUNC_KEYS}
+    field_map: dict[str, str] = {}
+    for metric_key, config_key in all_metric_keys.items():
+        fld_id = str(cfg.get(config_key) or "").strip()
+        if fld_id:
+            field_map[metric_key] = fld_id
+
+    # Parse genome_taxonomy.tsv
+    taxonomy_tsv = ann_dir / "genome_taxonomy.tsv"
+    taxonomy_data = parse_genome_taxonomy_tsv(taxonomy_tsv)
+    if not taxonomy_data:
+        _info(f"genome_taxonomy.tsv not found or empty at {taxonomy_tsv}.")
+
+    # Parse per-genome annotation TSVs from annotating/final/
+    final_dir = ann_dir / "final"
+    annotation_data: dict[str, dict] = {}
+    if final_dir.is_dir():
+        for tsv_file in sorted(final_dir.glob("*.tsv")):
+            mag_key = tsv_file.stem + ".fa"
+            annotation_data[mag_key] = parse_annotation_tsv(tsv_file)
+
+    # Build Airtable update payloads
+    updates: list[dict] = []
+    for genome_name, rec in mag_by_name.items():
+        metrics: dict = {}
+        if genome_name in taxonomy_data:
+            metrics.update(taxonomy_data[genome_name])
+        if genome_name in annotation_data:
+            metrics.update(annotation_data[genome_name])
+            metrics["annotated"] = True  # mark as functionally annotated
+        if not metrics:
+            continue
+        payload = build_entry_update(rec["id"], metrics, field_map)
+        if payload["fields"]:
+            updates.append(payload)
+
+    if updates:
+        _info(f"Updating {len(updates)} MAG_ENTRY records in Airtable...")
+        client.update_records(mag_table, updates)
+        _info("Airtable update complete.")
+    else:
+        _info("No annotation metrics found to update.")
+
+    host        = _conf(args, "host",       "SFTP_HOST",        required=True)
+    user        = _conf(args, "user",       "SFTP_USER",        required=True)
+    port        = int(_conf(args, "port",   "SFTP_PORT") or 22)
+    identity    = _conf(args, "identity",   "SFTP_IDENTITY") or None
+    remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
+
+    # Upload genome_taxonomy.tsv + tree files to DMB/{batch}/
+    dmb_remote = f"{remote_base.rstrip('/')}/DMB/{args.batch}"
+    dmb_files: list[Path] = []
+    for fname in ("genome_taxonomy.tsv", "bacteria.tree", "archaea.tree"):
+        p = ann_dir / fname
+        if p.exists():
+            dmb_files.append(p)
+        else:
+            _info(f"  {fname} not found in {ann_dir} — skipping.")
+
+    if dmb_files:
+        _info(f"Uploading {len(dmb_files)} file(s) to {user}@{host}:{dmb_remote} ...")
+        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+            n = xfer.upload_flat(dmb_files, dmb_remote, verbose=getattr(args, "verbose", False))
+        _info(f"Uploaded {n} file(s) to {dmb_remote}.")
+
+    # Gzip per-genome TSVs and upload to ANN/{batch}/
+    ann_remote = f"{remote_base.rstrip('/')}/ANN/{args.batch}"
+    gz_files: list[Path] = []
+    if final_dir.is_dir():
+        for tsv_file in sorted(final_dir.glob("*.tsv")):
+            gz = Path(str(tsv_file) + ".gz")
+            with tsv_file.open("rb") as _fin, _gzip.open(gz, "wb") as _fout:
+                _shutil.copyfileobj(_fin, _fout)
+            gz_files.append(gz)
+
+    if gz_files:
+        _info(f"Uploading {len(gz_files)} compressed annotation file(s) to {ann_remote} ...")
+        n_ann = 0
+        try:
+            with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+                if getattr(args, "rerun", False):
+                    xfer.remove_remote_dir(ann_remote)
+                    _info(f"Deleted remote directory {ann_remote} for rerun.")
+                n_ann = xfer.upload_flat(gz_files, ann_remote, verbose=getattr(args, "verbose", False))
+        finally:
+            for _gz in gz_files:
+                _gz.unlink(missing_ok=True)
+        _info(f"Uploaded {n_ann} compressed annotation file(s) to {ann_remote}.")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -1030,6 +1240,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Output MAG quality file for drakkar (input mode). Default: quality.tsv.")
     _add_sftp_overrides(p_qnt)
     p_qnt.set_defaults(func=cmd_quantifying)
+
+    # ------------------------------------------------------------------
+    # annotating
+    # ------------------------------------------------------------------
+    p_ann = sub.add_parser(
+        "annotating",
+        help="Input/output for the genome annotation workflow.",
+        description=(
+            "Input mode:  check MAG_ENTRY_ANNOTATED for each linked MAG and write\n"
+            "             a paths file for the genomes that still need annotation.\n"
+            "Output mode: parse GTDB-Tk taxonomy and per-genome functional annotation\n"
+            "             results, update MAG_ENTRY records in Airtable, upload\n"
+            "             taxonomy/tree files to DMB/{batch} and compressed per-genome\n"
+            "             TSVs to ANN/{batch} via SFTP."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    _add_mode(p_ann)
+    _add_batch(p_ann)
+    _add_token(p_ann)
+    _add_verbose(p_ann)
+    p_ann.add_argument("--annotation-file", "-f", default="annotation.tsv", metavar="PATH",
+        help="Output paths file for drakkar annotation (input mode). Default: annotation.tsv.")
+    p_ann.add_argument("--annotation-dir", "-d", default=".", metavar="DIR",
+        help="Directory containing the dereplicated genome FASTA files (input mode).")
+    _add_sftp_overrides(p_ann)
+    p_ann.set_defaults(func=cmd_annotating)
 
     # ------------------------------------------------------------------
     # scanning

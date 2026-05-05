@@ -124,6 +124,7 @@ MAG_ENTRY_GTDB_CLOSEST_AF: "fldDT4VsnW4kN5Utk" # Field in MAG_ENTRY with the ali
 MAG_ENTRY_CHECKM_COMPLETENESS: "fldcFmtnC7wvC05iZ" # Field in MAG_ENTRY with the CheckM completeness of the MAG (for logging)
 MAG_ENTRY_CHECKM_CONTAMINATION: "fldDwHfLHtjaCL12Q" # Field in MAG_ENTRY with the CheckM contamination of the MAG (for logging)
 MAG_ENTRY_URL_FASTA: "fldN9Dh6FXWjV8cOZ" # Field in MAG_ENTRY with the URL or path to the MAG fasta file (for processing and logging)
+MAG_ENTRY_ANNOTATED: "fldlUPEBUKd0PYBHy" # Field in MAG_ENTRY with the annotation status of the MAG (for processing and logging)
 
 # ---- Quantifying module ---------------------------------------------------
 # Input: fetch bin paths and reads from MAG_DMB_ENTRY, write a bins file and a reads sample file
@@ -148,7 +149,7 @@ MAG_DMB_ENTRY_ID: "fldGIAejYpkpaws1a" # Field in  MAG_DMB_ENTRY with the entry r
 MAG_DMB_ENTRY_CODE: "fldbfDFaVIO7OHzN4" # Field in  MAG_DMB_ENTRY with the entry code (primary key, for processing and logging)
 MAG_DMB_ENTRY_BATCH: "fld10ns3lKacZUB5C"  # Field in  MAG_DMB_ENTRY with the linked batch record ID, i.e. MAG_DMB_BATCH_ID (for processing)
 MAG_DMB_ENTRY_PPR: "fldUFSnaBL95qI4LR"  # Field in  MAG_DMB_ENTRY with the linked MAG_PPR record ID, i.e. MAG_PPR_ID (for processing)
-MAG_DMB_ENTRY_MAPPING_RATE: "fldl7n9sXo2h8mL1C" # Field in  MAG_DMB_ENTRY with the mapping rate of the reads to the bins (for logging)
+MAG_DMB_ENTRY_MAPPING_RATE: "fldn1if8rjOPiSwmZ" # Field in  MAG_DMB_ENTRY with the mapping rate of the reads to the bins (for logging)
 
 MAG_PPR_ID: "fldKEkQ56TyeDU4mS" # Field in MAG_PPR with the entry record ID (for processing and logging)
 MAG_PPR_CODE: "fldzHlOx3WUE1cFie" # Field in MAG_PPR with the entry code (primary key, for processing and logging)

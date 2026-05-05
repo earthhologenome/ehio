@@ -291,10 +291,16 @@ def build_script_content(
             f" --reads-file {q(reads_file)}"
             f" --quality-file {q(quality_file)}\n"
         )
+        derep_genomes_dir  = f"{output_dir}/profiling_genomes/drep/dereplicated_genomes"
+        annotation_file    = f"{run_dir}/{batch_name}_annotation.tsv"
         return header + (
             input_step
             + f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(mags_file)} -R {q(reads_file)}{ani_part}{type_part} -q {q(quality_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
             + f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
+            + f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
+            + f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}\n"
+            + f"{drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type function\n"
+            + f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             + "_EHIO_SUCCESS=1\n"
         )
 
