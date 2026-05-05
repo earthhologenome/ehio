@@ -187,10 +187,13 @@ RUN_BASE: "/projects/ehi/data/RUN"
 SCANNING_TRIGGER_STATUS: "Ready"     # Batch status value that triggers a launch
 SCANNING_RESUME_STATUS: "Resume"     # Same as Ready — signals an error was fixed and the job should continue from the Snakemake checkpoint
 SCANNING_RERUN_STATUS: "Rerun"       # Deletes the run and output directories and starts from scratch
-SCANNING_LAUNCHED_STATUS: "Running"  # Status written back to the batch record after launching
-SCANNING_STOPPED_STATUS: "Stopped"  # Status written when a running batch is killed via ehio stop
-PROCESSING_DONE_STATUS: "Done"       # Status written back to the batch record after output processing completes
-PROCESSING_ERROR_STATUS: "Error"     # Status written back to the batch record if drakkar fails
+SCANNING_LAUNCHED_STATUS: "Running"          # Status written back to the batch record after launching
+SCANNING_STOPPED_STATUS: "Stopped"          # Status written when a running batch is killed via ehio stop
+PROCESSING_DONE_STATUS: "Done"              # Status written back to the batch record after output processing completes
+PROCESSING_ERROR_STATUS: "Error"            # Status written back to the batch record if drakkar fails
+QUANTIFYING_RUNNING_STATUS: "Quantifying"  # Status set at the start of the quantifying script (overrides Running)
+ANNOTATING_TAXONOMY_STATUS: "Annotating taxonomy"  # Status set after quantifying output, before taxonomy annotation
+ANNOTATING_FUNCTION_STATUS: "Annotating function"  # Status set after taxonomy annotation, before functional annotation
 CLEANUP_OUTPUT_DIR: "false"           # Delete the output directory (PPR/ASB/DMB batch folder) after successful transfer (true/false)
 
 DRAKKAR_PROFILE: "slurm"             # Drakkar workflow profile passed to every drakkar command

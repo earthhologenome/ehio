@@ -9,6 +9,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.5] - 2026-05-05
+
+### Added
+
+- New config keys: `QUANTIFYING_RUNNING_STATUS` (default `"Quantifying"`), `ANNOTATING_TAXONOMY_STATUS` (default `"Annotating taxonomy"`), `ANNOTATING_FUNCTION_STATUS` (default `"Annotating function"`).
+
+### Changed
+
+- Generated quantifying scripts now `cd` to the output directory immediately after `mkdir -p`, ensuring drakkar always runs from `DMB/{batch}/` regardless of where the screen session was launched from.
+- Quantifying batch status now transitions through explicit stages: `Quantifying` (script start) → `Annotating taxonomy` (after `ehio quantifying --output`) → `Annotating function` (after taxonomy annotation) → `Done` (after `ehio annotating --output`). Inline `ehio set-status` calls in the generated script drive these transitions.
+- `ehio annotating --output` now marks the batch status to `Done` (`PROCESSING_DONE_STATUS`) at the end.
+- All generated scripts (`cd` fix) now apply to preprocessing and binning modules too.
+
 ## [0.3.4] - 2026-05-05
 
 ### Added

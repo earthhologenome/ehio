@@ -1117,6 +1117,15 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
                 _gz.unlink(missing_ok=True)
         _info(f"Uploaded {n_ann} compressed annotation file(s) to {ann_remote}.")
 
+    done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    batch_status_field = str(cfg.get("MAG_DMB_BATCH_STATUS")   or "").strip()
+    if batch_status_field:
+        client.update_records(
+            batch_table,
+            [{"id": batch_record["id"], "fields": {batch_status_field: done_status}}],
+        )
+        _info(f"Batch '{args.batch}' status → '{done_status}'.")
+
     return 0
 
 

@@ -251,6 +251,7 @@ def build_script_content(
         "trap _on_exit EXIT\n"
         "\n"
         f"mkdir -p {q(run_dir)} {q(output_dir)}\n"
+        f"cd {q(output_dir)}\n"
     )
 
     time_part   = f" --time-multiplier {boost_time}"     if boost_time   and boost_time   > 1 else ""
@@ -291,13 +292,19 @@ def build_script_content(
             f" --reads-file {q(reads_file)}"
             f" --quality-file {q(quality_file)}\n"
         )
-        derep_genomes_dir  = f"{output_dir}/profiling_genomes/drep/dereplicated_genomes"
-        annotation_file    = f"{run_dir}/{batch_name}_annotation.tsv"
+        derep_genomes_dir   = f"{output_dir}/profiling_genomes/drep/dereplicated_genomes"
+        annotation_file     = f"{run_dir}/{batch_name}_annotation.tsv"
+        qfy_status          = str(cfg.get("QUANTIFYING_RUNNING_STATUS")  or "Quantifying").strip()
+        ann_tax_status      = str(cfg.get("ANNOTATING_TAXONOMY_STATUS")  or "Annotating taxonomy").strip()
+        ann_func_status     = str(cfg.get("ANNOTATING_FUNCTION_STATUS")  or "Annotating function").strip()
         return header + (
-            input_step
+            f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(qfy_status)}\n"
+            + input_step
             + f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(mags_file)} -R {q(reads_file)}{ani_part}{type_part} -q {q(quality_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
             + f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
+            + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_tax_status)}\n"
             + f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
+            + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_func_status)}\n"
             + f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}\n"
             + f"{drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type function\n"
             + f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
