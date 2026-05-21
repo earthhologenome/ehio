@@ -557,19 +557,27 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                     mag_field_map[_mk] = _fid
 
             remote_mag_dir = f"{remote_base.rstrip('/')}/MAG/{args.batch}"
+            _info(f"bin_metadata_csv: {bin_metadata_csv}")
+            _info(f"bin_paths_txt:    {bin_paths_txt} (exists: {bin_paths_txt.exists()})")
 
             # Collect FASTA files listed in all_bin_paths.txt
             bin_files: list[Path] = []
             if bin_paths_txt.exists():
-                for _line in bin_paths_txt.read_text().splitlines():
-                    _line = _line.strip()
-                    if _line:
-                        _p = local_root / _line
-                        if _p.exists():
-                            bin_files.append(_p)
+                raw_lines = [l.strip() for l in bin_paths_txt.read_text().splitlines() if l.strip()]
+                _info(f"all_bin_paths.txt contains {len(raw_lines)} path(s).")
+                for _line in raw_lines:
+                    _p = local_root / _line
+                    if _p.exists():
+                        bin_files.append(_p)
+                    else:
+                        _info(f"  FASTA not found (skipped): {_p}")
+                _info(f"{len(bin_files)} of {len(raw_lines)} FASTA file(s) resolved.")
+            else:
+                _info("all_bin_paths.txt not found; no FASTA files will be uploaded.")
 
             # Build and create MAG_ENTRY records
             bins_data = parse_bin_metadata_csv(bin_metadata_csv)
+            _info(f"Parsed {len(bins_data)} bin(s) from {bin_metadata_csv.name}.")
             records_to_create: list[dict] = []
             for bin_row in bins_data:
                 genome = bin_row.get("genome", "")
@@ -595,6 +603,8 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                 _info(f"Creating {len(records_to_create)} MAG_ENTRY records in Airtable...")
                 mag_client.create_records(mag_table, records_to_create)
                 _info("MAG_ENTRY records created.")
+            else:
+                _info("No MAG_ENTRY records to create (records_to_create is empty).")
 
             # Compress and upload FASTA files to MAG/{batch}/
             if bin_files:
