@@ -144,6 +144,7 @@ MAG_DMB_BATCH_LIST_PPR: "fldz9tQw209jKUDuW" # Field in MAG_DMB_BATCH with the li
 MAG_DMB_BATCH_BOOST_TIME: "fldoDeP1xpEKl144d" # Field in MAG_DMB_BATCH with the time boost value passed to drakkar (for processing)
 MAG_DMB_BATCH_BOOST_MEMORY: "fldAMqZtYYTHQG15r" # Field in MAG_DMB_BATCH with the memory boost value passed to drakkar (for processing)
 MAG_DMB_BATCH_DEREP_MAGS: "fldzP0UvbMGPnPlYg" # Field in MAG_DMB_BATCH with the number of dereplicated MAG records in the batch, i.e. a list of MAG_ENTRY_ID (for processing and logging; leave empty if unused)
+MAG_DMB_BATCH_FORCE_ANNOTATE: "fldKLTR9hA4okSx2Z" # Field in MAG_DMB_BATCH checkbox that forces functional re-annotation of all MAGs even if already annotated (leave empty if unused)
 
 MAG_DMB_ENTRY_ID: "fldGIAejYpkpaws1a" # Field in  MAG_DMB_ENTRY with the entry record ID (for processing and logging)
 MAG_DMB_ENTRY_CODE: "fldbfDFaVIO7OHzN4" # Field in  MAG_DMB_ENTRY with the entry code (primary key, for processing and logging)

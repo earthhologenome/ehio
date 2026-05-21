@@ -9,6 +9,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.6] - 2026-05-21
+
+### Fixed
+
+- `ehio annotating --input` now correctly writes paths as `{annotation_dir}/{mag_name}` using `MAG_ENTRY_NAME` (the dereplicated genome FASTA filename). Previously the function was using `MAG_ENTRY_URL_FASTA` for paths, which pointed to the wrong location.
+- Generated quantifying scripts now guard the `drakkar annotating --annotation-type function` call with `[ -s {annotation_file} ]`, so drakkar is skipped gracefully when all MAGs in the batch are already annotated (file is empty) instead of failing.
+
+### Added
+
+- New config key `MAG_DMB_BATCH_FORCE_ANNOTATE` (`fldKLTR9hA4okSx2Z`): a checkbox field on `MAG_DMB_BATCH`. When checked, `ehio annotating --input` ignores `MAG_ENTRY_ANNOTATED` and includes all MAGs in the batch in the annotation paths file, forcing a full functional re-annotation.
+
 ## [0.3.5] - 2026-05-05
 
 ### Added
