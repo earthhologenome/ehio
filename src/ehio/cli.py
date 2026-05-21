@@ -935,6 +935,9 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     batch_code_field = _require_cfg("MAG_DMB_BATCH_CODE")
     mag_list_field   = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
     mag_name_field   = _require_cfg("MAG_ENTRY_NAME")
+    annotated_field  = str(cfg.get("MAG_ENTRY_ANNOTATED") or "").strip()
+
+    force_reannotate = getattr(args, "rerun", False)
 
     ann_dir  = Path(args.annotation_dir).resolve()
     out_file = Path(args.annotation_file)
@@ -951,6 +954,7 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     _info(f"Fetching {len(mag_rec_ids)} MAG record(s)...")
 
     paths_to_annotate: list[str] = []
+    n_skipped = 0
     for rec_id in mag_rec_ids:
         if not (isinstance(rec_id, str) and rec_id.startswith("rec")):
             continue
@@ -958,6 +962,9 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
         if not rec:
             continue
         fields = rec.get("fields", {})
+        if not force_reannotate and annotated_field and fields.get(annotated_field):
+            n_skipped += 1
+            continue  # already annotated — skip
         name = str(fields.get(mag_name_field, "") or "").strip()
         if not name:
             continue
@@ -967,7 +974,10 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     with out_file.open("w", encoding="utf-8") as fh:
         for p in paths_to_annotate:
             fh.write(p + "\n")
-    _info(f"Wrote {len(paths_to_annotate)} MAG path(s) to {out_file}.")
+    if n_skipped:
+        _info(f"Wrote {len(paths_to_annotate)} MAG path(s) to {out_file} ({n_skipped} already annotated, skipped).")
+    else:
+        _info(f"Wrote {len(paths_to_annotate)} MAG path(s) to {out_file}.")
     return 0
 
 

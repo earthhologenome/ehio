@@ -305,7 +305,7 @@ def build_script_content(
             + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_tax_status)}\n"
             + f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
             + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_func_status)}\n"
-            + f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}\n"
+            + f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}{rerun_flag}\n"
             + f"[ -s {q(annotation_file)} ] && {drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type function\n"
             + f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             + "_EHIO_SUCCESS=1\n"

@@ -9,6 +9,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.8] - 2026-05-21
+
+### Changed
+
+- `ehio annotating --input` restores the `MAG_ENTRY_ANNOTATED` filter: MAGs already marked as annotated are skipped and the annotation file is left empty, which causes the `[ -s ]` guard in the generated script to skip `drakkar annotating --annotation-type function` gracefully (no error).
+- When the batch is launched with `Rerun` status, `--rerun` is now also passed to `ehio annotating --input`, bypassing the annotated filter so all MAGs are force-reannotated.
+
 ## [0.3.7] - 2026-05-21
 
 ### Changed
