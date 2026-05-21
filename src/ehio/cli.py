@@ -932,11 +932,9 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     batch_table = _require_cfg("MAG_DMB_BATCH")
     mag_table   = _require_cfg("MAG_ENTRY")
 
-    batch_code_field      = _require_cfg("MAG_DMB_BATCH_CODE")
-    mag_list_field        = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
-    mag_name_field        = _require_cfg("MAG_ENTRY_NAME")
-    annotated_field       = str(cfg.get("MAG_ENTRY_ANNOTATED") or "").strip()
-    force_annotate_field  = str(cfg.get("MAG_DMB_BATCH_FORCE_ANNOTATE") or "").strip()
+    batch_code_field = _require_cfg("MAG_DMB_BATCH_CODE")
+    mag_list_field   = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
+    mag_name_field   = _require_cfg("MAG_ENTRY_NAME")
 
     ann_dir  = Path(args.annotation_dir).resolve()
     out_file = Path(args.annotation_file)
@@ -946,13 +944,6 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
     if batch_record is None:
         _die(f"Batch '{args.batch}' not found.")
-
-    force_annotate = bool(
-        force_annotate_field
-        and batch_record.get("fields", {}).get(force_annotate_field)
-    )
-    if force_annotate:
-        _info("Force re-annotation enabled — annotated flag will be ignored.")
 
     mag_rec_ids = batch_record.get("fields", {}).get(mag_list_field, [])
     if not mag_rec_ids:
@@ -967,8 +958,6 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
         if not rec:
             continue
         fields = rec.get("fields", {})
-        if not force_annotate and annotated_field and fields.get(annotated_field):
-            continue  # already annotated — skip
         name = str(fields.get(mag_name_field, "") or "").strip()
         if not name:
             continue
@@ -978,7 +967,7 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     with out_file.open("w", encoding="utf-8") as fh:
         for p in paths_to_annotate:
             fh.write(p + "\n")
-    _info(f"Wrote {len(paths_to_annotate)} MAG path(s) to {out_file} ({len(mag_rec_ids) - len(paths_to_annotate)} already annotated, skipped).")
+    _info(f"Wrote {len(paths_to_annotate)} MAG path(s) to {out_file}.")
     return 0
 
 
@@ -1265,10 +1254,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "annotating",
         help="Input/output for the genome annotation workflow.",
         description=(
-            "Input mode:  check MAG_ENTRY_ANNOTATED for each linked MAG and write\n"
-            "             a paths file for the genomes that still need annotation.\n"
-            "             If MAG_DMB_BATCH_FORCE_ANNOTATE is checked on the batch,\n"
-            "             all MAGs are included regardless of annotated status.\n"
+            "Input mode:  write genome paths for all MAGs linked to the batch\n"
+            "             into a file for drakkar functional annotation.\n"
             "Output mode: parse GTDB-Tk taxonomy and per-genome functional annotation\n"
             "             results, update MAG_ENTRY records in Airtable, upload\n"
             "             taxonomy/tree files to DMB/{batch} and compressed per-genome\n"

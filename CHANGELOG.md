@@ -9,6 +9,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.7] - 2026-05-21
+
+### Changed
+
+- `ehio annotating --input` no longer filters MAGs by `MAG_ENTRY_ANNOTATED`. All MAGs linked to the batch are always written to the annotation paths file. drakkar's own Snakemake checkpointing skips previously-completed genomes, making the Airtable-side filter redundant and harmful (it caused an empty file whenever all MAGs had been annotated in a prior batch).
+- Removed `MAG_DMB_BATCH_FORCE_ANNOTATE` config key and the associated Airtable checkbox field (`fldKLTR9hA4okSx2Z`) added in 0.3.6 — no longer needed since the annotated filter is gone entirely.
+
 ## [0.3.6] - 2026-05-21
 
 ### Fixed
