@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.11] - 2026-05-22
+
+### Fixed
+
+- MAG creation during `ehio binning --output` no longer sets the `annotated` single-select field at creation time. The field is left unset (empty) for new records — only the annotating step sets it to `"true"`. Sending any explicit value (`False` or `"false"`) was rejected by Airtable.
+
 ## [0.3.10] - 2026-05-22
 
 ### Fixed

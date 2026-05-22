@@ -594,8 +594,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                     rec_fields[mag_name_fld] = genome
                 if mag_assembly_fld:
                     rec_fields[mag_assembly_fld] = assembly_code
-                if mag_annotated_fld:
-                    rec_fields[mag_annotated_fld] = "false"
+
                 for metric, fld_id in mag_field_map.items():
                     val = bin_row.get(metric)
                     if val is not None:
