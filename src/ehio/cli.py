@@ -314,15 +314,17 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         _info("No output files found to transfer; skipping SFTP upload.")
     else:
         _info(f"Transferring {len(files_to_transfer)} file(s) to {user}@{host}:{remote_dir} ...")
-        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+        _timeout = getattr(args, "connect_timeout", 300.0)
+        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
             if getattr(args, "rerun", False):
                 xfer.remove_remote_dir(remote_dir)
                 _info(f"Deleted remote directory {remote_dir} for rerun.")
-            n = xfer.upload_flat(
+            n_up, n_sk = xfer.upload_flat(
                 files_to_transfer, remote_dir,
                 verbose=getattr(args, "verbose", False),
             )
-        _info(f"Transferred {n} file(s) to {remote_dir}.")
+        _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
+        _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
 
     # Delete the output directory — only the RUN/{batch} directory is kept
     cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
@@ -528,12 +530,14 @@ def _run_binning_output(args: argparse.Namespace) -> int:
             _shutil.copy2(tsv_out, final_dir / tsv_out.name)
 
         _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
-        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+        _timeout = getattr(args, "connect_timeout", 300.0)
+        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
             if getattr(args, "rerun", False):
                 xfer.remove_remote_dir(remote_dir)
                 _info(f"Deleted remote directory {remote_dir} for rerun.")
-            n = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
-        _info(f"Transferred {n} file(s) to {remote_dir}.")
+            n_up, n_sk = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
+        _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
+        _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
 
         # --- Create MAG_ENTRY records and upload FASTA files ----------------
         bin_metadata_csv = final_dir / "all_bin_metadata.csv"
@@ -591,7 +595,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                 if mag_assembly_fld:
                     rec_fields[mag_assembly_fld] = assembly_code
                 if mag_annotated_fld:
-                    rec_fields[mag_annotated_fld] = False
+                    rec_fields[mag_annotated_fld] = "false"
                 for metric, fld_id in mag_field_map.items():
                     val = bin_row.get(metric)
                     if val is not None:
@@ -616,18 +620,19 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                         _shutil.copyfileobj(_fin, _fout)
                     gz_files.append(_gz)
                 _info(f"Uploading {len(gz_files)} compressed FASTA files to {remote_mag_dir} ...")
-                n_mag = 0
+                n_mag_up = n_mag_sk = 0
                 try:
-                    with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+                    with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
                         if getattr(args, "rerun", False):
                             xfer.remove_remote_dir(remote_mag_dir)
                             _info(f"Deleted remote MAG directory {remote_mag_dir} for rerun.")
-                        n_mag = xfer.upload_flat(gz_files, remote_mag_dir,
-                                                 verbose=getattr(args, "verbose", False))
+                        n_mag_up, n_mag_sk = xfer.upload_flat(gz_files, remote_mag_dir,
+                                                               verbose=getattr(args, "verbose", False))
                 finally:
                     for _gz in gz_files:
                         _gz.unlink(missing_ok=True)
-                _info(f"Uploaded {n_mag} compressed FASTA files to {remote_mag_dir}.")
+                _skip_msg = f", {n_mag_sk} already present (skipped)" if n_mag_sk else ""
+                _info(f"Uploaded {n_mag_up} compressed FASTA files to {remote_mag_dir}{_skip_msg}.")
 
         cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
         if cleanup not in ("false", "0", "no"):
@@ -877,17 +882,19 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
 
         if gz_files:
             _info(f"Transferring {len(gz_files)} file(s) to {user}@{host}:{remote_dir} ...")
-            n = 0
+            _timeout = getattr(args, "connect_timeout", 300.0)
+            n_up = n_sk = 0
             try:
-                with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+                with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
                     if getattr(args, "rerun", False):
                         xfer.remove_remote_dir(remote_dir)
                         _info(f"Deleted remote directory {remote_dir} for rerun.")
-                    n = xfer.upload_flat(gz_files, remote_dir, verbose=getattr(args, "verbose", False))
+                    n_up, n_sk = xfer.upload_flat(gz_files, remote_dir, verbose=getattr(args, "verbose", False))
             finally:
                 for _gz in gz_files:
                     _gz.unlink(missing_ok=True)
-            _info(f"Transferred {n} file(s) to {remote_dir}.")
+            _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
+            _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
 
         cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
         if cleanup not in ("false", "0", "no"):
@@ -1074,7 +1081,7 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
             metrics.update(taxonomy_data[genome_name])
         if genome_name in annotation_data:
             metrics.update(annotation_data[genome_name])
-            metrics["annotated"] = True  # mark as functionally annotated
+            metrics["annotated"] = "true"
         if not metrics:
             continue
         payload = build_entry_update(rec["id"], metrics, field_map)
@@ -1104,11 +1111,13 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         else:
             _info(f"  {fname} not found in {ann_dir} — skipping.")
 
+    _timeout = getattr(args, "connect_timeout", 300.0)
     if dmb_files:
         _info(f"Uploading {len(dmb_files)} file(s) to {user}@{host}:{dmb_remote} ...")
-        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
-            n = xfer.upload_flat(dmb_files, dmb_remote, verbose=getattr(args, "verbose", False))
-        _info(f"Uploaded {n} file(s) to {dmb_remote}.")
+        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
+            n_up, n_sk = xfer.upload_flat(dmb_files, dmb_remote, verbose=getattr(args, "verbose", False))
+        _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
+        _info(f"Uploaded {n_up} file(s) to {dmb_remote}{_skip_msg}.")
 
     # Gzip per-genome TSVs and upload to ANN/{batch}/
     ann_remote = f"{remote_base.rstrip('/')}/ANN/{args.batch}"
@@ -1122,17 +1131,18 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
 
     if gz_files:
         _info(f"Uploading {len(gz_files)} compressed annotation file(s) to {ann_remote} ...")
-        n_ann = 0
+        n_ann_up = n_ann_sk = 0
         try:
-            with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None) as xfer:
+            with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
                 if getattr(args, "rerun", False):
                     xfer.remove_remote_dir(ann_remote)
                     _info(f"Deleted remote directory {ann_remote} for rerun.")
-                n_ann = xfer.upload_flat(gz_files, ann_remote, verbose=getattr(args, "verbose", False))
+                n_ann_up, n_ann_sk = xfer.upload_flat(gz_files, ann_remote, verbose=getattr(args, "verbose", False))
         finally:
             for _gz in gz_files:
                 _gz.unlink(missing_ok=True)
-        _info(f"Uploaded {n_ann} compressed annotation file(s) to {ann_remote}.")
+        _skip_msg = f", {n_ann_sk} already present (skipped)" if n_ann_sk else ""
+        _info(f"Uploaded {n_ann_up} compressed annotation file(s) to {ann_remote}{_skip_msg}.")
 
     done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
     batch_status_field = str(cfg.get("MAG_DMB_BATCH_STATUS")   or "").strip()
@@ -1190,6 +1200,8 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Remote base directory for file transfer.")
         g.add_argument("--rerun", action="store_true",
             help="Delete the remote archive directory before uploading (use when rerunning a batch).")
+        g.add_argument("--connect-timeout", metavar="SECONDS", type=float, default=300.0,
+            help="SFTP connection timeout in seconds (default: 300).")
 
     # ------------------------------------------------------------------
     # preprocessing

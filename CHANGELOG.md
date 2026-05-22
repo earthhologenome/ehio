@@ -9,6 +9,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.10] - 2026-05-22
+
+### Fixed
+
+- MAG creation during `ehio binning --output` no longer fails with `INVALID_VALUE_FOR_COLUMN` for the `annotated` field. The field is a single-select (options `"true"` / `"false"`), so the code now sends the string `"false"` on record creation instead of a Python boolean `False`.
+- `ehio annotating --output` likewise sends the string `"true"` when marking a MAG as annotated, matching the single-select options.
+
 ## [0.3.8] - 2026-05-21
 
 ### Changed
