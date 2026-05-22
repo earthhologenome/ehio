@@ -168,7 +168,7 @@ class TestBuildScriptContent:
         )
         assert "ehio quantifying --input" in script
         assert "drakkar profiling" in script
-        assert "DMB001_bins.txt" in script
+        assert "DMB001_mags.tsv" in script
         assert "-B" in script
         assert "-R" in script
 
@@ -178,8 +178,8 @@ class TestBuildScriptContent:
             "quantifying", "DMB001", run,
             "/projects/ehi/data/DMB/DMB001", "slurm",
         )
-        assert f"{run}/DMB001.tsv" in script
-        assert f"{run}/DMB001_bins.txt" in script
+        assert f"{run}/DMB001_mags.tsv" in script
+        assert f"{run}/DMB001_reads.tsv" in script
 
     def test_unknown_module_raises(self):
         with pytest.raises(ValueError, match="Unknown module"):

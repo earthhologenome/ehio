@@ -178,6 +178,8 @@ def update_package_version(content: str, version: str) -> str:
         content,
         count=1,
     )
+    if count == 0:
+        return content  # version is sourced from package metadata; no line to update
     if count != 1:
         raise ReleaseError("Could not find a unique __version__ line in src/ehio/__init__.py.")
     return updated

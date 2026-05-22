@@ -9,6 +9,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.13] - 2026-05-22
+
+### Fixed
+
+- `ehio binning --output` no longer silently skips the MAG FASTA upload when killed during gzip compression. Files are now compressed and uploaded one at a time: each `.fa` is gzipped, transferred, and the temporary `.gz` is deleted before moving to the next file. This keeps disk usage minimal and makes partial uploads resumable — already-uploaded files are skipped on re-run via `skip_existing`.
+- `ehio binning --output` no longer creates duplicate `MAG_ENTRY` records when the output step is re-run after a failure (e.g. via "Resume"). Before creating records, all genome names are checked against the existing `MAG_ENTRY` table in batches of 100; genomes already present are skipped.
+
+### Added
+
+- `AirtableClient.fetch_existing_values`: queries a table for which values from a given list already exist in a field, using batched `OR(...)` formulas to stay within Airtable URL limits.
 ## [0.3.11] - 2026-05-22
 
 ### Fixed

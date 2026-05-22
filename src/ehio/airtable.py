@@ -104,3 +104,25 @@ class AirtableClient:
         if not fields_list:
             return []
         return self._table(table_name).batch_create(fields_list)
+
+    def fetch_existing_values(
+        self,
+        table_name: str,
+        field_id: str,
+        values: list[str],
+        batch_size: int = 100,
+    ) -> set[str]:
+        """Return which of `values` already exist in field_id of table_name.
+
+        Queries in batches to stay within Airtable formula URL limits.
+        """
+        existing: set[str] = set()
+        for i in range(0, len(values), batch_size):
+            batch = values[i : i + batch_size]
+            parts = [f'{{{field_id}}} = "{v}"' for v in batch]
+            formula = f"OR({', '.join(parts)})" if len(parts) > 1 else parts[0]
+            for rec in self._table(table_name).all(formula=formula):
+                val = str(rec.get("fields", {}).get(field_id, "") or "").strip()
+                if val:
+                    existing.add(val)
+        return existing

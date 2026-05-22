@@ -582,10 +582,25 @@ def _run_binning_output(args: argparse.Namespace) -> int:
             # Build and create MAG_ENTRY records
             bins_data = parse_bin_metadata_csv(bin_metadata_csv)
             _info(f"Parsed {len(bins_data)} bin(s) from {bin_metadata_csv.name}.")
+
+            # Check which genomes already have a MAG_ENTRY record to avoid duplicates on resume
+            existing_mag_names: set[str] = set()
+            if mag_name_fld:
+                all_genome_names = [str(r.get("genome", "")) for r in bins_data if r.get("genome")]
+                if all_genome_names:
+                    _info(f"Checking for existing MAG_ENTRY records ({len(all_genome_names)} genomes)...")
+                    existing_mag_names = mag_client.fetch_existing_values(
+                        mag_table, mag_name_fld, all_genome_names
+                    )
+                    if existing_mag_names:
+                        _info(f"Found {len(existing_mag_names)} existing MAG_ENTRY records — skipping those.")
+
             records_to_create: list[dict] = []
             for bin_row in bins_data:
                 genome = bin_row.get("genome", "")
                 if not genome:
+                    continue
+                if genome in existing_mag_names:
                     continue
                 genome_name   = genome.removesuffix(".fa").removesuffix(".fasta")
                 assembly_code = genome_name.split("_bin_")[0] if "_bin_" in genome_name else genome_name
@@ -607,29 +622,29 @@ def _run_binning_output(args: argparse.Namespace) -> int:
                 mag_client.create_records(mag_table, records_to_create)
                 _info("MAG_ENTRY records created.")
             else:
-                _info("No MAG_ENTRY records to create (records_to_create is empty).")
+                _info("No new MAG_ENTRY records to create.")
 
             # Compress and upload FASTA files to MAG/{batch}/
             if bin_files:
                 import gzip as _gzip
-                gz_files: list[Path] = []
-                for _fa in bin_files:
-                    _gz = Path(str(_fa) + ".gz")
-                    with _fa.open("rb") as _fin, _gzip.open(_gz, "wb") as _fout:
-                        _shutil.copyfileobj(_fin, _fout)
-                    gz_files.append(_gz)
-                _info(f"Uploading {len(gz_files)} compressed FASTA files to {remote_mag_dir} ...")
+                _info(f"Uploading {len(bin_files)} compressed FASTA files to {remote_mag_dir} ...")
                 n_mag_up = n_mag_sk = 0
-                try:
-                    with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
-                        if getattr(args, "rerun", False):
-                            xfer.remove_remote_dir(remote_mag_dir)
-                            _info(f"Deleted remote MAG directory {remote_mag_dir} for rerun.")
-                        n_mag_up, n_mag_sk = xfer.upload_flat(gz_files, remote_mag_dir,
-                                                               verbose=getattr(args, "verbose", False))
-                finally:
-                    for _gz in gz_files:
-                        _gz.unlink(missing_ok=True)
+                with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
+                    if getattr(args, "rerun", False):
+                        xfer.remove_remote_dir(remote_mag_dir)
+                        _info(f"Deleted remote MAG directory {remote_mag_dir} for rerun.")
+                    xfer._ensure_remote_dir(remote_mag_dir)
+                    for _fa in bin_files:
+                        _gz = Path(str(_fa) + ".gz")
+                        try:
+                            with _fa.open("rb") as _fin, _gzip.open(_gz, "wb") as _fout:
+                                _shutil.copyfileobj(_fin, _fout)
+                            _up, _sk = xfer.upload_flat([_gz], remote_mag_dir,
+                                                        verbose=getattr(args, "verbose", False))
+                            n_mag_up += _up
+                            n_mag_sk += _sk
+                        finally:
+                            _gz.unlink(missing_ok=True)
                 _skip_msg = f", {n_mag_sk} already present (skipped)" if n_mag_sk else ""
                 _info(f"Uploaded {n_mag_up} compressed FASTA files to {remote_mag_dir}{_skip_msg}.")
 
