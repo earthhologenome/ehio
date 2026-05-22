@@ -72,12 +72,14 @@ class SFTPTransfer:
         username: str,
         port: int = 22,
         key_path: str | None = None,
+        timeout: float = 300.0,
     ) -> None:
         _require_paramiko()
         self._host = host
         self._username = username
         self._port = port
         self._key_path = key_path or None
+        self._timeout = timeout
         self._client: paramiko.SSHClient | None = None
         self._sftp: paramiko.SFTPClient | None = None
 
@@ -88,6 +90,9 @@ class SFTPTransfer:
             "hostname": self._host,
             "username": self._username,
             "port": self._port,
+            "timeout": self._timeout,
+            "banner_timeout": self._timeout,
+            "auth_timeout": self._timeout,
         }
         if self._key_path:
             kwargs["key_filename"] = self._key_path
@@ -110,25 +115,43 @@ class SFTPTransfer:
             except FileNotFoundError:
                 self._sftp.mkdir(current)
 
+    def _remote_exists(self, remote_path: str) -> bool:
+        try:
+            self._sftp.stat(remote_path)
+            return True
+        except FileNotFoundError:
+            return False
+
     def upload(
         self,
         files: list[Path],
         base_dir: Path,
         remote_dir: str,
         verbose: bool = False,
-    ) -> int:
-        """Upload a list of files, preserving their path relative to base_dir."""
+        skip_existing: bool = True,
+    ) -> tuple[int, int]:
+        """Upload a list of files, preserving their path relative to base_dir.
+
+        Returns (uploaded, skipped) counts.
+        """
         remote_root = PurePosixPath(remote_dir)
-        count = 0
+        uploaded = 0
+        skipped = 0
         for file_path in sorted(files):
             rel = file_path.relative_to(base_dir)
             remote_path = str(remote_root / PurePosixPath(rel.as_posix()))
+            if skip_existing and self._remote_exists(remote_path):
+                skipped += 1
+                if verbose:
+                    print(f"  SKIP {file_path} (already exists remotely)", file=sys.stderr)
+                continue
             self._ensure_remote_dir(str(PurePosixPath(remote_path).parent))
+            size_mb = file_path.stat().st_size / (1024 * 1024)
             self._sftp.put(str(file_path), remote_path)
-            count += 1
+            uploaded += 1
             if verbose:
-                print(f"  PUT {file_path} -> {remote_path}", file=sys.stderr)
-        return count
+                print(f"  PUT {file_path} -> {remote_path} ({size_mb:.1f} MB)", file=sys.stderr)
+        return uploaded, skipped
 
     def upload_dir(
         self,
@@ -136,16 +159,18 @@ class SFTPTransfer:
         remote_dir: str,
         verbose: bool = False,
         include_suffixes: list[str] | None = None,
-    ) -> int:
+        skip_existing: bool = True,
+    ) -> tuple[int, int]:
         """Upload files under local_dir, preserving directory structure.
 
         include_suffixes: if given, only files whose names end with one of
         the listed strings are uploaded (e.g. [".bam", ".fq.gz", "_output.tsv"]).
+        Returns (uploaded, skipped) counts.
         """
         files = [p for p in sorted(local_dir.rglob("*")) if p.is_file()]
         if include_suffixes:
             files = [f for f in files if any(f.name.endswith(s) for s in include_suffixes)]
-        return self.upload(files, local_dir, remote_dir, verbose=verbose)
+        return self.upload(files, local_dir, remote_dir, verbose=verbose, skip_existing=skip_existing)
 
     def remove_remote_dir(self, remote_dir: str) -> None:
         """Recursively remove a remote directory and all its contents.
@@ -170,21 +195,30 @@ class SFTPTransfer:
         files: list[Path],
         remote_dir: str,
         verbose: bool = False,
-    ) -> int:
+        skip_existing: bool = True,
+    ) -> tuple[int, int]:
         """Upload a list of files directly into remote_dir, without subdirectories.
 
         All files land as remote_dir/{filename} regardless of their local location.
+        Returns (uploaded, skipped) counts.
         """
         self._ensure_remote_dir(remote_dir)
         remote_root = PurePosixPath(remote_dir)
-        count = 0
+        uploaded = 0
+        skipped = 0
         for file_path in sorted(files):
             remote_path = str(remote_root / file_path.name)
+            if skip_existing and self._remote_exists(remote_path):
+                skipped += 1
+                if verbose:
+                    print(f"  SKIP {file_path} (already exists remotely)", file=sys.stderr)
+                continue
+            size_mb = file_path.stat().st_size / (1024 * 1024)
             self._sftp.put(str(file_path), remote_path)
-            count += 1
+            uploaded += 1
             if verbose:
-                print(f"  PUT {file_path} -> {remote_path}", file=sys.stderr)
-        return count
+                print(f"  PUT {file_path} -> {remote_path} ({size_mb:.1f} MB)", file=sys.stderr)
+        return uploaded, skipped
 
     def __enter__(self) -> SFTPTransfer:
         self.connect()
