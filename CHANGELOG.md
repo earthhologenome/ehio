@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.14] - 2026-05-25
+
+### Fixed
+
+- `ehio annotating --output` no longer raises a 422 error when `closest_genome_reference` is `N/A` in `genome_taxonomy.tsv`. The string `"N/A"` is now treated as missing (converted to `None` and excluded from the Airtable payload) rather than being forwarded as a literal string to a numeric field.
+
 ## [0.3.13] - 2026-05-22
 
 ### Fixed
