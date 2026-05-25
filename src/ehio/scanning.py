@@ -294,16 +294,33 @@ def build_script_content(
         )
         derep_genomes_dir   = f"{output_dir}/profiling_genomes/drep/dereplicated_genomes"
         annotation_file     = f"{run_dir}/{batch_name}_annotation.tsv"
+        taxonomy_tsv        = f"{output_dir}/annotating/genome_taxonomy.tsv"
         qfy_status          = str(cfg.get("QUANTIFYING_RUNNING_STATUS")  or "Quantifying").strip()
         ann_tax_status      = str(cfg.get("ANNOTATING_TAXONOMY_STATUS")  or "Annotating taxonomy").strip()
         ann_func_status     = str(cfg.get("ANNOTATING_FUNCTION_STATUS")  or "Annotating function").strip()
+        if resume:
+            profiling_step = (
+                f"[ -d {q(derep_genomes_dir)} ] || "
+                f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(mags_file)} -R {q(reads_file)}{ani_part}{type_part} -q {q(quality_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
+            )
+            taxonomy_step = (
+                f"[ -f {q(taxonomy_tsv)} ] || "
+                f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
+            )
+        else:
+            profiling_step = (
+                f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(mags_file)} -R {q(reads_file)}{ani_part}{type_part} -q {q(quality_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
+            )
+            taxonomy_step = (
+                f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
+            )
         return header + (
             f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(qfy_status)}\n"
             + input_step
-            + f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(mags_file)} -R {q(reads_file)}{ani_part}{type_part} -q {q(quality_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
+            + profiling_step
             + f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_tax_status)}\n"
-            + f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
+            + taxonomy_step
             + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_func_status)}\n"
             + f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}{rerun_flag}\n"
             + f"[ -s {q(annotation_file)} ] && {drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type function\n"

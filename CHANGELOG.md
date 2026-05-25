@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.15] - 2026-05-25
+
+### Fixed
+
+- `ehio scan` (quantifying module, Resume mode) no longer re-runs `drakkar profiling` when the dereplicated genomes directory already exists, nor `drakkar annotating --annotation-type taxonomy` when `annotating/genome_taxonomy.tsv` already exists. Both steps are now skipped via bash existence guards (`[ -d ... ] ||` and `[ -f ... ] ||`), so a resume after a late-stage failure (e.g. during `ehio annotating --output`) goes straight to the steps that actually need retrying.
+
 ## [0.3.14] - 2026-05-25
 
 ### Fixed
