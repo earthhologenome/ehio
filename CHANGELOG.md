@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.18] - 2026-05-26
+
+### Fixed
+
+- Resume mode for the `quantifying` module now skips `ehio quantifying --output` (guarded by a `.qfy_output_done` sentinel file in the run directory) and `ehio annotating --input` (guarded by the annotation TSV being non-empty) in addition to the drakkar compute steps already guarded in 0.3.15. A Resume therefore only runs the steps that were not yet completed when the batch failed.
+
 ## [0.3.17] - 2026-05-26
 
 ### Fixed
