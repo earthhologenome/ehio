@@ -659,11 +659,10 @@ def parse_genome_taxonomy_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
                     except (ValueError, TypeError):
                         return None
 
-                _ref = (row.get("closest_genome_reference") or "").strip()
                 result[genome_key] = {
                     **taxonomy,
-                    "gtdb_fastani":     _ref if _ref and _ref != "N/A" else None,
-                    "gtdb_closest_ani": _flt("closest_genome_ani"),
+                    "gtdb_fastani":     _flt("closest_genome_ani"),
+                    "gtdb_closest_ani": _flt("closest_placement_ani"),
                     "gtdb_closest_af":  _flt("closest_genome_af"),
                 }
     except OSError:

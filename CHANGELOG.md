@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.17] - 2026-05-26
+
+### Fixed
+
+- `parse_genome_taxonomy_tsv` now reads `closest_genome_ani` (numeric) for `gtdb_fastani` instead of `closest_genome_reference` (text genome accession), fixing a 422 `INVALID_VALUE_FOR_COLUMN` error on the numeric `fastani_ani` Airtable field. `gtdb_closest_ani` now reads `closest_placement_ani` accordingly.
+
 ## [0.3.16] - 2026-05-26
 
 ### Fixed
