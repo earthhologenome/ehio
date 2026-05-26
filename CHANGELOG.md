@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.19] - 2026-05-26
+
+### Fixed
+
+- `ehio annotating --input` now scans the dereplicated genomes directory (`-d`) for `.fa` files as the authoritative source of MAGs to annotate, instead of deriving paths from the Airtable batch MAG list. Airtable is still queried to build the set of already-annotated MAG names (skipped unless `--rerun`), but the directory drives which genomes are actually included. This prevents an empty annotation file when all batch MAGs are already marked as annotated in Airtable from a previous batch.
+
 ## [0.3.18] - 2026-05-26
 
 ### Fixed

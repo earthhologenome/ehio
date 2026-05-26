@@ -979,13 +979,13 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     if batch_record is None:
         _die(f"Batch '{args.batch}' not found.")
 
+    # Build a set of already-annotated MAG names from Airtable
     mag_rec_ids = batch_record.get("fields", {}).get(mag_list_field, [])
     if not mag_rec_ids:
         _die(f"No MAG records linked in field {mag_list_field} of batch '{args.batch}'.")
-    _info(f"Fetching {len(mag_rec_ids)} MAG record(s)...")
+    _info(f"Fetching {len(mag_rec_ids)} MAG record(s) from Airtable...")
 
-    paths_to_annotate: list[str] = []
-    n_skipped = 0
+    annotated_names: set[str] = set()
     for rec_id in mag_rec_ids:
         if not (isinstance(rec_id, str) and rec_id.startswith("rec")):
             continue
@@ -993,13 +993,23 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
         if not rec:
             continue
         fields = rec.get("fields", {})
-        if not force_reannotate and annotated_field and fields.get(annotated_field):
-            n_skipped += 1
-            continue  # already annotated — skip
         name = str(fields.get(mag_name_field, "") or "").strip()
-        if not name:
+        if name and annotated_field and fields.get(annotated_field):
+            annotated_names.add(name)
+
+    # Scan the dereplicated genomes directory — it is the authoritative source
+    # of which MAGs actually exist and need annotation.
+    fa_files = sorted(ann_dir.glob("*.fa"))
+    if not fa_files:
+        _info(f"No .fa files found in {ann_dir}.")
+
+    paths_to_annotate: list[str] = []
+    n_skipped = 0
+    for fa_file in fa_files:
+        if not force_reannotate and fa_file.name in annotated_names:
+            n_skipped += 1
             continue
-        paths_to_annotate.append(str(ann_dir / name))
+        paths_to_annotate.append(str(fa_file))
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
     with out_file.open("w", encoding="utf-8") as fh:
