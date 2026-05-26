@@ -90,7 +90,19 @@ class AirtableClient:
         """Batch-update records. Each item must have 'id' and 'fields' keys."""
         if not updates:
             return
-        self._table(table_name).batch_update(updates)
+        try:
+            self._table(table_name).batch_update(updates)
+        except Exception:
+            # Retry one record at a time to surface which record and field caused the error.
+            for record in updates:
+                try:
+                    self._table(table_name).batch_update([record])
+                except Exception as exc:
+                    print(
+                        f"Failed to update record {record['id']}:\n  fields: {record['fields']}",
+                        file=sys.stderr,
+                    )
+                    raise exc
 
     def create_records(
         self,

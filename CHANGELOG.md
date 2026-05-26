@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.16] - 2026-05-26
+
+### Fixed
+
+- `AirtableClient.update_records` now retries failed batch updates one record at a time and prints the offending record ID and field values to stderr before re-raising. This makes `INVALID_VALUE_FOR_COLUMN` errors actionable instead of opaque.
+
 ## [0.3.15] - 2026-05-25
 
 ### Fixed
