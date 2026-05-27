@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.21] - 2026-05-26
+
+### Fixed
+
+- `ehio quantifying --output` now checks whether `MAG_DMB_ENTRY` records already exist for the batch before creating them. If any exist, creation is skipped and the remaining steps (SFTP transfer, `MAG_DMB_BATCH` metadata update) still run. This makes the command idempotent on Resume, preventing duplicate entry records when the batch previously failed after record creation but before completion.
+
 ## [0.3.20] - 2026-05-26
 
 ### Fixed

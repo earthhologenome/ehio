@@ -851,7 +851,11 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
                 rec_fields[entry_rate_field] = rate
         records_to_create.append(rec_fields)
 
-    if records_to_create:
+    _existing_formula = f'FIND("{batch_rec_id}", ARRAYJOIN({{{entry_batch_field}}}))'
+    _existing_entries = client._table(entry_table).all(formula=_existing_formula)
+    if _existing_entries:
+        _info(f"{len(_existing_entries)} MAG_DMB_ENTRY record(s) already exist for this batch — skipping creation.")
+    elif records_to_create:
         _info(f"Creating {len(records_to_create)} MAG_DMB_ENTRY records...")
         client.create_records(entry_table, records_to_create)
         _info("MAG_DMB_ENTRY records created.")
