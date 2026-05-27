@@ -994,7 +994,8 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
             continue
         fields = rec.get("fields", {})
         name = str(fields.get(mag_name_field, "") or "").strip()
-        if name and annotated_field and fields.get(annotated_field):
+        ann_val = str(fields.get(annotated_field) or "").strip().lower() if annotated_field else ""
+        if name and ann_val not in ("", "false", "0", "no"):
             annotated_names.add(name)
 
     # Scan the dereplicated genomes directory — it is the authoritative source

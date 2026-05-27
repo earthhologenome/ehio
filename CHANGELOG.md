@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.3.20] - 2026-05-26
+
+### Fixed
+
+- `ehio annotating --input` no longer treats the string `"false"` as annotated. The `MAG_ENTRY_ANNOTATED` field is a single-select in Airtable, so Python's truthy check incorrectly flagged `"false"` as truthy and skipped all MAGs. The check now explicitly treats `"false"`, `"0"`, `"no"`, and empty as unannotated.
+
 ## [0.3.19] - 2026-05-26
 
 ### Fixed
