@@ -192,6 +192,7 @@ def build_script_content(
     resume: bool = False,
     ani_threshold: str = "",
     profiling_type: str = "",
+    annotation_type: str = "all",
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -292,9 +293,13 @@ def build_script_content(
             f" --reads-file {q(reads_file)}"
             f" --quality-file {q(quality_file)}\n"
         )
-        derep_genomes_dir    = f"{output_dir}/profiling_genomes/drep/dereplicated_genomes"
-        annotation_file      = f"{run_dir}/{batch_name}_annotation.tsv"
-        taxonomy_tsv         = f"{output_dir}/annotating/genome_taxonomy.tsv"
+        derep_genomes_dir         = f"{output_dir}/profiling_genomes/drep/dereplicated_genomes"
+        annotation_file           = f"{run_dir}/{batch_name}_annotation.tsv"
+        annotation_clusters_file  = f"{run_dir}/{batch_name}_annotation_clusters.tsv"
+        taxonomy_tsv              = f"{output_dir}/annotating/genome_taxonomy.tsv"
+        # Map batch annotation type to drakkar --annotation-type flag
+        _ann_drakkar_map = {"kegg": "kegg", "genes": "genes", "all": "function"}
+        drakkar_ann_flag = _ann_drakkar_map.get(annotation_type.lower() if annotation_type else "all", "function")
         qfy_output_sentinel  = f"{run_dir}/.qfy_output_done"
         qfy_status           = str(cfg.get("QUANTIFYING_RUNNING_STATUS")  or "Quantifying").strip()
         ann_tax_status       = str(cfg.get("ANNOTATING_TAXONOMY_STATUS")  or "Annotating taxonomy").strip()
@@ -327,6 +332,10 @@ def build_script_content(
                 f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
             )
             ann_input_step = f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}{rerun_flag}\n"
+        clusters_step = (
+            f"[ -s {q(annotation_clusters_file)} ] && "
+            f"{drakkar_prefix}drakkar annotating -B {q(annotation_clusters_file)} -p {q(profile)}{boost_parts} --annotation-type clusters\n"
+        ) if annotation_type.lower() == "all" else ""
         return header + (
             f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(qfy_status)}\n"
             + input_step
@@ -336,7 +345,8 @@ def build_script_content(
             + taxonomy_step
             + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_func_status)}\n"
             + ann_input_step
-            + f"[ -s {q(annotation_file)} ] && {drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type function\n"
+            + f"[ -s {q(annotation_file)} ] && {drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type {q(drakkar_ann_flag)}\n"
+            + clusters_step
             + f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             + "_EHIO_SUCCESS=1\n"
         )
@@ -488,11 +498,13 @@ def scan_module(
                 file=sys.stderr,
             )
 
-        ani_threshold  = ""
-        profiling_type = ""
+        ani_threshold   = ""
+        profiling_type  = ""
+        annotation_type = "all"
         if module == "quantifying":
-            ani_field  = str(cfg.get("MAG_DMB_BATCH_ANI")  or "").strip()
-            type_field = str(cfg.get("MAG_DMB_BATCH_TYPE") or "").strip()
+            ani_field      = str(cfg.get("MAG_DMB_BATCH_ANI")             or "").strip()
+            type_field     = str(cfg.get("MAG_DMB_BATCH_TYPE")            or "").strip()
+            ann_type_field = str(cfg.get("MAG_DMB_BATCH_ANNOTATION_TYPE") or "").strip()
             if ani_field:
                 raw = record.get("fields", {}).get(ani_field)
                 if raw is not None:
@@ -501,6 +513,10 @@ def scan_module(
                 raw = record.get("fields", {}).get(type_field)
                 if raw:
                     profiling_type = str(raw).strip().lower()
+            if ann_type_field:
+                raw = record.get("fields", {}).get(ann_type_field)
+                if raw:
+                    annotation_type = str(raw).strip().lower()
 
         script_content = build_script_content(
             module, batch_name, run_dir, output_dir, profile, error_status, ref_flag,
@@ -514,6 +530,7 @@ def scan_module(
             resume=do_resume,
             ani_threshold=ani_threshold,
             profiling_type=profiling_type,
+            annotation_type=annotation_type,
         )
 
         if do_rerun:

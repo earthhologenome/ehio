@@ -9,6 +9,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.4.0] - 2026-06-03
+
+### Added
+
+- `MAG_DMB_BATCH` now supports an **Annotation type** field (`MAG_DMB_BATCH_ANNOTATION_TYPE`) with single-select options `kegg`, `genes`, and `all`, controlling which drakkar annotation tier is run per batch.
+  - `kegg` → `drakkar annotating --annotation-type kegg` (KEGG-only, lightest)
+  - `genes` → `drakkar annotating --annotation-type genes` (all gene-level annotation)
+  - `all` → `drakkar annotating --annotation-type function` (gene + cluster annotation)
+- Annotation skip logic now uses a hierarchy (`kegg ⊂ genes ⊂ all`): a MAG is only re-annotated when the requested tier is higher than its current status. A MAG with `genes` status requested for `all` is upgraded via `--annotation-type clusters` (avoiding redundant gene re-annotation) using a separate `_annotation_clusters.tsv` file.
+- `ehio annotating --output` now writes the annotation tier (`kegg`, `genes`, or `all`) to the `annotated` field in `MAG_ENTRY` instead of the old boolean `true`. Legacy `true` values are treated as equivalent to `all` for skip-logic purposes.
 ## [0.3.21] - 2026-05-26
 
 ### Fixed

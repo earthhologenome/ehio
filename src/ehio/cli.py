@@ -983,13 +983,30 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     if batch_record is None:
         _die(f"Batch '{args.batch}' not found.")
 
-    # Build a set of already-annotated MAG names from Airtable
+    # Read requested annotation type from batch record (kegg / genes / all)
+    ann_type_field = str(cfg.get("MAG_DMB_BATCH_ANNOTATION_TYPE") or "").strip()
+    requested_type = "all"
+    if ann_type_field:
+        raw = batch_record.get("fields", {}).get(ann_type_field)
+        if raw:
+            requested_type = str(raw).strip().lower()
+
+    # Annotation hierarchy: kegg ⊂ genes ⊂ all.
+    # "true" is treated as legacy equivalent of "all".
+    _sufficient: dict[str, set[str]] = {
+        "kegg":  {"kegg", "genes", "all", "true"},
+        "genes": {"genes", "all", "true"},
+        "all":   {"all", "true"},
+    }
+    sufficient_statuses = _sufficient.get(requested_type, {"all", "true"})
+
+    # Build per-MAG annotation status from Airtable
     mag_rec_ids = batch_record.get("fields", {}).get(mag_list_field, [])
     if not mag_rec_ids:
         _die(f"No MAG records linked in field {mag_list_field} of batch '{args.batch}'.")
     _info(f"Fetching {len(mag_rec_ids)} MAG record(s) from Airtable...")
 
-    annotated_names: set[str] = set()
+    mag_status: dict[str, str] = {}  # fa filename → annotated value
     for rec_id in mag_rec_ids:
         if not (isinstance(rec_id, str) and rec_id.startswith("rec")):
             continue
@@ -999,8 +1016,8 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
         fields = rec.get("fields", {})
         name = str(fields.get(mag_name_field, "") or "").strip()
         ann_val = str(fields.get(annotated_field) or "").strip().lower() if annotated_field else ""
-        if name and ann_val not in ("", "false", "0", "no"):
-            annotated_names.add(name)
+        if name:
+            mag_status[name] = ann_val
 
     # Scan the dereplicated genomes directory — it is the authoritative source
     # of which MAGs actually exist and need annotation.
@@ -1008,22 +1025,40 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     if not fa_files:
         _info(f"No .fa files found in {ann_dir}.")
 
-    paths_to_annotate: list[str] = []
+    paths_to_annotate: list[str] = []          # full annotation (kegg/genes/function)
+    paths_to_annotate_clusters: list[str] = []  # cluster-only upgrade (genes → all)
     n_skipped = 0
     for fa_file in fa_files:
-        if not force_reannotate and fa_file.name in annotated_names:
+        if force_reannotate:
+            paths_to_annotate.append(str(fa_file))
+            continue
+        ann_val = mag_status.get(fa_file.name, "")
+        if ann_val in sufficient_statuses:
             n_skipped += 1
             continue
-        paths_to_annotate.append(str(fa_file))
+        # MAG has "genes" status and "all" is requested: skip gene annotation,
+        # run cluster annotation only.
+        if requested_type == "all" and ann_val == "genes":
+            paths_to_annotate_clusters.append(str(fa_file))
+        else:
+            paths_to_annotate.append(str(fa_file))
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
     with out_file.open("w", encoding="utf-8") as fh:
         for p in paths_to_annotate:
             fh.write(p + "\n")
+
+    clusters_file = out_file.parent / (out_file.stem + "_clusters" + out_file.suffix)
+    with clusters_file.open("w", encoding="utf-8") as fh:
+        for p in paths_to_annotate_clusters:
+            fh.write(p + "\n")
+
+    msg_parts = [f"Wrote {len(paths_to_annotate)} MAG path(s) to {out_file}"]
+    if paths_to_annotate_clusters:
+        msg_parts.append(f"{len(paths_to_annotate_clusters)} cluster-only path(s) to {clusters_file}")
     if n_skipped:
-        _info(f"Wrote {len(paths_to_annotate)} MAG path(s) to {out_file} ({n_skipped} already annotated, skipped).")
-    else:
-        _info(f"Wrote {len(paths_to_annotate)} MAG path(s) to {out_file}.")
+        msg_parts.append(f"{n_skipped} already at '{requested_type}' level (skipped)")
+    _info(", ".join(msg_parts) + ".")
     return 0
 
 
@@ -1065,6 +1100,14 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
     if batch_record is None:
         _die(f"Batch '{args.batch}' not found.")
+
+    # Read annotation type written to Airtable status (kegg / genes / all)
+    ann_type_field = str(cfg.get("MAG_DMB_BATCH_ANNOTATION_TYPE") or "").strip()
+    annotation_type_value = "all"
+    if ann_type_field:
+        raw = batch_record.get("fields", {}).get(ann_type_field)
+        if raw:
+            annotation_type_value = str(raw).strip().lower()
 
     # Fetch linked MAG records and key them by MAG_ENTRY_NAME
     mag_rec_ids = batch_record.get("fields", {}).get(mag_list_field, [])
@@ -1110,7 +1153,7 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
             metrics.update(taxonomy_data[genome_name])
         if genome_name in annotation_data:
             metrics.update(annotation_data[genome_name])
-            metrics["annotated"] = "true"
+            metrics["annotated"] = annotation_type_value
         if not metrics:
             continue
         payload = build_entry_update(rec["id"], metrics, field_map)
