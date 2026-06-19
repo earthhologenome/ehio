@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.4.1] - 2026-06-19
+
+### Added
+
+- `ehio annotating --output` now uploads the unified `annotating/gene_annotations.tsv.xz` file and `profiling_genomes/checkm2/quality_report.tsv` to `Data/DMB/{batch}/`, alongside the existing `genome_taxonomy.tsv` and tree files. Missing files are skipped with a log message rather than failing.
+
 ## [0.4.0] - 2026-06-03
 
 ### Added

@@ -1176,12 +1176,18 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     # Upload genome_taxonomy.tsv + tree files to DMB/{batch}/
     dmb_remote = f"{remote_base.rstrip('/')}/DMB/{args.batch}"
     dmb_files: list[Path] = []
-    for fname in ("genome_taxonomy.tsv", "bacteria.tree", "archaea.tree"):
+    for fname in ("genome_taxonomy.tsv", "bacteria.tree", "archaea.tree", "gene_annotations.tsv.xz"):
         p = ann_dir / fname
         if p.exists():
             dmb_files.append(p)
         else:
             _info(f"  {fname} not found in {ann_dir} — skipping.")
+
+    checkm2_report = local_root / "profiling_genomes" / "checkm2" / "quality_report.tsv"
+    if checkm2_report.exists():
+        dmb_files.append(checkm2_report)
+    else:
+        _info(f"  {checkm2_report} not found — skipping.")
 
     _timeout = getattr(args, "connect_timeout", 300.0)
     if dmb_files:
