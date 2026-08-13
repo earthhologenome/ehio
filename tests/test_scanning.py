@@ -5,7 +5,14 @@ from __future__ import annotations
 import pytest
 from unittest.mock import patch, MagicMock
 
-from ehio.scanning import build_script_content, session_exists, MODULES, DRAKKAR_CMD
+from ehio.scanning import (
+    BatchLaunchError,
+    build_script_content,
+    session_exists,
+    _verify_reference,
+    MODULES,
+    DRAKKAR_CMD,
+)
 
 
 RUN_DIR = "/projects/ehi/data/RUN/PPR001"
@@ -128,15 +135,15 @@ class TestBuildScriptContent:
     def test_preprocessing_ref_flag_hardwired_raw(self):
         script = build_script_content(
             "preprocessing", "PPR001", RUN_DIR, OUT_DIR, "slurm",
-            ref_flag="-g 'https://example.com/ref.fna.gz'",
+            ref_flag="-r 'https://example.com/ref.fna.gz'",
         )
-        assert "-g 'https://example.com/ref.fna.gz'" in script
+        assert "-r 'https://example.com/ref.fna.gz'" in script
 
     def test_preprocessing_no_ref_flag_when_empty(self):
         script = self._script(module="preprocessing")
         drakkar_line = next(l for l in script.splitlines() if l.startswith("drakkar"))
         assert "-x" not in drakkar_line
-        assert "-g" not in drakkar_line
+        assert "-r" not in drakkar_line
 
     def test_binning_uses_cataloging(self):
         script = build_script_content(
@@ -304,3 +311,37 @@ class TestSessionExists:
     def test_empty_output(self):
         with patch("ehio.scanning.subprocess.run", return_value=self._mock_screen("")):
             assert session_exists("PPR001") is False
+
+
+# ---------------------------------------------------------------------------
+# reference genome verification
+# ---------------------------------------------------------------------------
+
+class TestVerifyReference:
+    URL = "https://ftp.ncbi.nlm.nih.gov/genomes/ref.fna.gz"
+
+    def _noop(self, msg: str) -> None:
+        pass
+
+    def test_downloadable_url_passes(self):
+        with patch("ehio.urls.check_url", return_value=None):
+            _verify_reference(self.URL, "G0001", "EHI_GENOME_URL_RAW", self._noop)
+
+    def test_broken_url_raises(self):
+        with patch("ehio.urls.check_url", return_value="HTTP 404 Not Found"):
+            with pytest.raises(BatchLaunchError) as exc:
+                _verify_reference(self.URL, "G0001", "EHI_GENOME_URL_RAW", self._noop)
+        assert "not downloadable" in str(exc.value)
+        assert "HTTP 404 Not Found" in str(exc.value)
+        assert "G0001" in str(exc.value)
+
+    def test_existing_local_path_passes(self, tmp_path):
+        ref = tmp_path / "ref.fna.gz"
+        ref.write_text("")
+        _verify_reference(str(ref), "G0001", "EHI_GENOME_URL_RAW", self._noop)
+
+    def test_missing_local_path_raises(self, tmp_path):
+        with pytest.raises(BatchLaunchError) as exc:
+            _verify_reference(str(tmp_path / "nope.fna.gz"), "G0001",
+                              "EHI_GENOME_URL_RAW", self._noop)
+        assert "not found" in str(exc.value)

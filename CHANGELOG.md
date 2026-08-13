@@ -5,9 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-13
+
+### Fixed
+
+- `ehio scanning` passed the raw reference genome to drakkar as `-g`, which `drakkar preprocessing` does not accept (`ERROR: unrecognized arguments: -g …`). The flag is now `-r`. The indexed reference flag (`-x`) is unchanged.
+
 ### Added
 
-- No unreleased changes yet.
+- `ehio scanning` now verifies that the reference genome of a preprocessing batch can actually be downloaded (`EHI_GENOME_URL_INDEXED` / `EHI_GENOME_URL_RAW`) before launching. A broken link, or a local reference path that does not exist, is reported as a controlled error, the batch status is set to `PROCESSING_ERROR_STATUS` and the scan moves on to the next batch instead of launching a run that would fail inside drakkar.
+- `ehio preprocessing --input` now verifies that every raw-read URL in `EHI_PPR_ENTRY` (`EHI_PPR_ENTRY_RAW_FILE_FORWARD` and `EHI_PPR_ENTRY_RAW_FILE_REVERSE`) can be downloaded, in addition to the existing check on local paths. Each unreachable URL is listed with its sample and the reason (e.g. `HTTP 404 Not Found`), and the command exits with a controlled error before drakkar starts. Pass `--no-url-check` to skip it.
+  - Checks only fetch the headers (or the first byte) of each file, run concurrently, and check duplicate URLs once. `sftp://` links, which cannot be probed anonymously, are skipped.
+- Every command now verifies the Airtable token (via `/meta/whoami`) before doing any work, so an invalid, expired or revoked token fails immediately with `Error: Airtable rejected the token (401 Unauthorized)…` instead of failing halfway through a run. The check costs one request per process, and a token without metadata scopes is still accepted.
+
+### Changed
+
+- Airtable request failures are now reported as controlled errors instead of raw `requests.exceptions.HTTPError` tracebacks. Each status gets an actionable message: 401 (bad token), 403 (missing scopes or base not in the token's access list), 404 (wrong base/table id in the config), 422 (field id or value does not match the schema), and 429 (rate limit). Airtable's own message is appended, and record-level failures still name the offending record and fields.
+- `ehio scanning` reports explicitly when a batch's screen session was launched but its Airtable status could not be updated, so the record can be corrected manually.
+- `fetch_record_by_id` no longer swallows permission and connection failures as "record not found" — only a genuine 404 returns `None`.
 
 ## [0.4.1] - 2026-06-19
 

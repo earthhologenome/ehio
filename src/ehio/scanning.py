@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ehio import config as cfg
-from ehio.airtable import AirtableClient
+from ehio.airtable import AirtableClient, AirtableError
 
 _PRIMARY_BASE = {
     "preprocessing": "EHI_BASE",
@@ -89,12 +89,19 @@ def launch_screen(session_name: str, script_path: str, token: str = "") -> None:
 # Script builder
 # ---------------------------------------------------------------------------
 
+class BatchLaunchError(Exception):
+    """A batch cannot be launched — reported and marked as Error, scan continues."""
+
+
 def _resolve_preprocessing_ref_flag(batch_record: dict, token: str, verbose: bool = False) -> str:
     """Return the drakkar reference flag for a preprocessing batch.
 
     Checks GENOME_ENTRY_URL_INDEXED first (-x, indexed tarball), then
-    GENOME_ENTRY_URL_RAW (-g, plain fasta).  Returns '' if no reference
+    GENOME_ENTRY_URL_RAW (-r, plain fasta).  Returns '' if no reference
     is configured or the linked genome record cannot be found.
+
+    Raises BatchLaunchError if the resolved reference cannot be downloaded
+    (remote URL) or does not exist (local path).
     """
     from ehio.airtable import AirtableClient
 
@@ -161,10 +168,12 @@ def _resolve_preprocessing_ref_flag(batch_record: dict, token: str, verbose: boo
 
     if indexed_url:
         _dbg(f"Using indexed reference: -x {indexed_url}")
+        _verify_reference(indexed_url, ref_rec_id, "EHI_GENOME_URL_INDEXED", _dbg)
         return f"-x {shlex.quote(indexed_url)}"
     if raw_url:
-        _dbg(f"Using raw reference: -g {raw_url}")
-        return f"-g {shlex.quote(raw_url)}"
+        _dbg(f"Using raw reference: -r {raw_url}")
+        _verify_reference(raw_url, ref_rec_id, "EHI_GENOME_URL_RAW", _dbg)
+        return f"-r {shlex.quote(raw_url)}"
 
     print(
         f"    [ref] WARNING: genome record {ref_rec_id!r} found but both "
@@ -172,6 +181,28 @@ def _resolve_preprocessing_ref_flag(batch_record: dict, token: str, verbose: boo
         file=sys.stderr,
     )
     return ""
+
+
+def _verify_reference(reference: str, genome_id: str, field_name: str, dbg) -> None:
+    """Raise BatchLaunchError if the reference genome cannot be downloaded/found."""
+    from ehio.urls import check_url, is_remote_url
+
+    if is_remote_url(reference):
+        dbg(f"Checking reference URL is downloadable: {reference}")
+        reason = check_url(reference)
+        if reason:
+            raise BatchLaunchError(
+                f"reference genome URL is not downloadable: {reference} ({reason}) "
+                f"— {field_name} of genome record {genome_id!r}"
+            )
+        dbg("Reference URL OK.")
+        return
+
+    if not Path(reference).exists():
+        raise BatchLaunchError(
+            f"reference genome file not found: {reference} "
+            f"— {field_name} of genome record {genome_id!r}"
+        )
 
 
 def build_script_content(
@@ -202,7 +233,7 @@ def build_script_content(
 
     run_dir    — /projects/ehi/data/RUN/{batch_code}  (samples.tsv, logs, .snakemake)
     output_dir — /projects/ehi/data/{PPR|ASB|DMB}/{batch_code}  (drakkar -o target)
-    ref_flag   — pre-resolved '-x url' or '-g url' for preprocessing; '' otherwise
+    ref_flag   — pre-resolved '-x url' or '-r url' for preprocessing; '' otherwise
     """
     if module not in DRAKKAR_CMD:
         raise ValueError(f"Unknown module: {module}")
@@ -392,6 +423,37 @@ def _generate_input_files(module: str, batch_name: str, run_dir: str, token: str
 # Per-module scan
 # ---------------------------------------------------------------------------
 
+def _mark_batch_error(
+    client: AirtableClient,
+    batch_table: str,
+    batch_status_field: str,
+    error_status: str,
+    record: dict,
+    module: str,
+    batch_name: str,
+    dry_run: bool = False,
+) -> None:
+    """Set a batch status to the error status, reporting (not raising) failures."""
+    if dry_run:
+        print(
+            f"  [{module}] {batch_name}: dry-run — status not set to '{error_status}'",
+            file=sys.stderr,
+        )
+        return
+    try:
+        client.update_records(
+            batch_table,
+            [{"id": record["id"], "fields": {batch_status_field: error_status}}],
+        )
+        print(f"  [{module}] {batch_name}: status → '{error_status}'", file=sys.stderr)
+    except AirtableError as exc:
+        print(
+            f"  [{module}] {batch_name}: WARNING — could not set status to "
+            f"'{error_status}': {exc}",
+            file=sys.stderr,
+        )
+
+
 def scan_module(
     module: str,
     token: str,
@@ -476,7 +538,15 @@ def scan_module(
 
         ref_flag = ""
         if module == "preprocessing":
-            ref_flag = _resolve_preprocessing_ref_flag(record, token, verbose=verbose)
+            try:
+                ref_flag = _resolve_preprocessing_ref_flag(record, token, verbose=verbose)
+            except BatchLaunchError as exc:
+                print(f"  [{module}] {batch_name}: ERROR — {exc}", file=sys.stderr)
+                _mark_batch_error(
+                    client, batch_table, batch_status_field, error_status,
+                    record, module, batch_name, dry_run=dry_run,
+                )
+                continue
             ref_desc = ref_flag if ref_flag else "(no reference)"
             print(f"  [{module}] {batch_name}: reference flag → {ref_desc}", file=sys.stderr)
 
@@ -568,10 +638,17 @@ def scan_module(
         script_path.chmod(0o755)
 
         launch_screen(batch_name, str(script_path), token=token)
-        client.update_records(
-            batch_table,
-            [{"id": record["id"], "fields": {batch_status_field: launched_status}}],
-        )
+        try:
+            client.update_records(
+                batch_table,
+                [{"id": record["id"], "fields": {batch_status_field: launched_status}}],
+            )
+        except AirtableError as exc:
+            raise AirtableError(
+                f"{exc}\n  The screen session for {batch_name} was launched, but its "
+                f"status in {batch_table} could not be set to '{launched_status}'. "
+                f"Fix the token permissions and set the status manually."
+            ) from exc
         print(f"  [{module}] {batch_name}: launched — script at {script_path}")
         launched += 1
 

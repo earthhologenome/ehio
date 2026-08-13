@@ -79,6 +79,36 @@ def verify_input_files(
     return missing
 
 
+def verify_remote_urls(
+    records: list[dict[str, Any]],
+    sample_field: str,
+    url_fields: list[str],
+    timeout: float = 20.0,
+) -> list[tuple[str, str, str]]:
+    """Check that every remote URL referenced in records can be downloaded.
+
+    Only headers (or the first byte) are fetched, and duplicate URLs are
+    checked once.  Local paths are ignored — verify_input_files covers those.
+    Returns a list of (sample, url, reason) triples for the unreachable URLs.
+    """
+    from ehio.urls import check_urls, is_remote_url
+
+    owners: list[tuple[str, str]] = []  # (sample, url)
+    for rec in records:
+        fields = rec.get("fields", rec)
+        sample = str(fields.get(sample_field, "")).strip()
+        for fld in url_fields:
+            raw = fields.get(fld, "")
+            if isinstance(raw, list):
+                raw = raw[0] if raw else ""
+            url = str(raw).strip()
+            if url and is_remote_url(url):
+                owners.append((sample, url))
+
+    failures = check_urls([url for _, url in owners], timeout=timeout)
+    return [(sample, url, failures[url]) for sample, url in owners if url in failures]
+
+
 def write_quality_file(
     records: list[dict[str, Any]],
     path: Path,

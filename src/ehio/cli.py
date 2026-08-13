@@ -59,6 +59,9 @@ def _conf(args: argparse.Namespace, cli_attr: str, config_key: str, required: bo
 
 
 def _resolve_token(args: argparse.Namespace) -> str:
+    """Return the Airtable token, after checking that Airtable accepts it."""
+    from ehio.airtable import AirtableError, verify_token
+
     token = (getattr(args, "airtable_token", None) or "").strip()
     if not token:
         token = os.environ.get("AIRTABLE_TOKEN", "").strip()
@@ -67,6 +70,10 @@ def _resolve_token(args: argparse.Namespace) -> str:
             "Airtable token not found. "
             "Provide --airtable-token or export AIRTABLE_TOKEN."
         )
+    try:
+        verify_token(token)
+    except AirtableError as exc:
+        _die(str(exc))
     return token
 
 
@@ -108,7 +115,7 @@ def cmd_preprocessing(args: argparse.Namespace) -> int:
 def _run_preprocessing_input(args: argparse.Namespace) -> int:
     """Fetch batch+entries from Airtable and write a drakkar sample TSV."""
     from ehio.airtable import AirtableClient
-    from ehio.drakkar import write_sample_file, verify_input_files
+    from ehio.drakkar import write_sample_file, verify_input_files, verify_remote_urls
 
     token       = _resolve_token(args)
     base_id     = _require_cfg("EHI_BASE")
@@ -152,6 +159,19 @@ def _run_preprocessing_input(args: argparse.Namespace) -> int:
         for sample, path in missing:
             print(f"  WARNING: [{sample}] file not found: {path}", file=sys.stderr)
         _die(f"{len(missing)} input file(s) missing — fix paths in Airtable before launching drakkar.")
+
+    if getattr(args, "no_url_check", False):
+        _info("Skipping raw-read URL check (--no-url-check).")
+    else:
+        _info("Checking that raw-read URLs are downloadable...")
+        unreachable = verify_remote_urls(entries, entry_code_field, [reads1_field, reads2_field])
+        if unreachable:
+            for sample, url, reason in unreachable:
+                print(f"  WARNING: [{sample}] URL not downloadable: {url} ({reason})", file=sys.stderr)
+            _die(
+                f"{len(unreachable)} raw-read URL(s) not downloadable — fix them in "
+                f"{entry_table} before launching drakkar."
+            )
     return 0
 
 
@@ -1301,6 +1321,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_verbose(p_pre)
     p_pre.add_argument("--sample-file", "-f", default="samples.tsv", metavar="PATH",
         help="Output sample info TSV for drakkar (input mode). Default: samples.tsv.")
+    p_pre.add_argument("--no-url-check", action="store_true",
+        help="Skip the download check on the raw-read URLs (input mode).")
     _add_sftp_overrides(p_pre)
     p_pre.set_defaults(func=cmd_preprocessing)
 
@@ -1636,12 +1658,18 @@ def cmd_update(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def main(argv: Sequence[str] | None = None) -> int:
+    from ehio.airtable import AirtableError
+
     parser = _build_parser()
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):
         parser.print_help()
         return 0
-    return args.func(args)
+    try:
+        return args.func(args)
+    except AirtableError as exc:
+        _die(str(exc))
+        return 1
 
 
 if __name__ == "__main__":

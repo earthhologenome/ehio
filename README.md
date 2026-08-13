@@ -80,6 +80,27 @@ export AIRTABLE_TOKEN="patXXXXXXXXXXXXXX"
 
 or pass it per command with `--airtable-token`.
 
+Every command validates the token against Airtable before doing any work, so an
+invalid, expired or revoked token stops the command immediately:
+
+```
+Error: Airtable rejected the token (401 Unauthorized): it is invalid, expired or revoked.
+```
+
+A token that Airtable accepts can still lack access to a given base or table. In
+that case the failing operation reports what was denied and why, instead of
+raising a traceback:
+
+```
+Error: Airtable denied permission to update records in table tblXXXX of base appXXXX
+(403 Forbidden). The token is recognised but not allowed to do this: check that it has
+the data.records:read and data.records:write scopes, and that appXXXX is in the token's
+list of accessible bases.
+```
+
+The token needs the `data.records:read` and `data.records:write` scopes, and both
+`EHI_BASE` and `MAG_BASE` must be added to its list of accessible bases.
+
 ---
 
 ## Airtable database structure
@@ -112,7 +133,7 @@ Bridges the preprocessing step. Connects to `EHI_BASE` only.
 
 | Direction | What it does |
 |-----------|-------------|
-| `--input` | Looks up the batch in `EHI_PPR_BATCH`, follows the linked field to `EHI_PPR_ENTRY`, and writes a Drakkar sample info TSV with columns `sample`, `reads1`, `reads2`, `reference`. |
+| `--input` | Looks up the batch in `EHI_PPR_BATCH`, follows the linked field to `EHI_PPR_ENTRY`, and writes a Drakkar sample info TSV with columns `sample`, `reads1`, `reads2`, `reference`. Local read paths must exist and remote read URLs must be downloadable, otherwise the command fails before Drakkar starts (`--no-url-check` skips the download check). |
 | `--output` | Transfers the `preprocessing/final/` directory to SFTP and marks all entry records as processed in `EHI_PPR_ENTRY`. |
 
 ```bash
@@ -167,9 +188,10 @@ ehio quantifying --output -b DMB001 --local-dir /projects/DMB001
 Polls all three batch tables for records whose status field matches `SCANNING_TRIGGER_STATUS` (default: `ready`). For each pending batch it finds:
 
 1. Checks whether a `screen` session named after the batch already exists — skips if so.
-2. Creates a detached `screen` session: `screen -dmS BATCH_NAME bash -c "..."`.
-3. The session runs the full `ehio --input` + `drakkar` command chain.
-4. Updates the batch record status to `SCANNING_LAUNCHED_STATUS` (default: `running`).
+2. For preprocessing batches, resolves the reference genome (`-x` indexed tarball, else `-r` raw fasta) and verifies it can be downloaded; if not, the batch is marked `PROCESSING_ERROR_STATUS` and skipped instead of being launched.
+3. Creates a detached `screen` session: `screen -dmS BATCH_NAME bash -c "..."`.
+4. The session runs the full `ehio --input` + `drakkar` command chain.
+5. Updates the batch record status to `SCANNING_LAUNCHED_STATUS` (default: `running`).
 
 ```bash
 # Scan all three modules
@@ -231,7 +253,7 @@ Airtable (EHI_BASE / MAG_BASE)
 ## CLI reference
 
 ```
-ehio preprocessing  --input  -b BATCH [-f samples.tsv] [overrides...]
+ehio preprocessing  --input  -b BATCH [-f samples.tsv] [--no-url-check] [overrides...]
 ehio preprocessing  --output -b BATCH [-l LOCAL_DIR]   [overrides...]
 
 ehio binning        --input  -b BATCH [-f samples.tsv] [overrides...]

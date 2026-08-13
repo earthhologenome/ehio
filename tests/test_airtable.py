@@ -15,6 +15,16 @@ from tests.conftest import BATCH_RECORD, ENTRY_RECORDS
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _http_error(status: int, message: str = "denied"):
+    """Return an HTTPError shaped like the ones pyairtable raises."""
+    from requests.exceptions import HTTPError
+
+    response = MagicMock()
+    response.status_code = status
+    response.json.return_value = {"error": {"type": "TEST", "message": message}}
+    return HTTPError(f"{status} Client Error", response=response)
+
+
 def _make_client(base_id: str = "appTEST"):
     """Return an AirtableClient with a mocked underlying Api."""
     with patch("ehio.airtable._AVAILABLE", True), \
@@ -162,3 +172,124 @@ class TestUpdateRecords:
         client, mock_api = _make_client()
         client.update_records("tblPPR_ENTRY", [])
         mock_api.table.return_value.batch_update.assert_not_called()
+
+    def test_forbidden_raises_airtable_error_without_retrying(self):
+        from ehio.airtable import AirtableError
+
+        client, mock_api = _make_client(base_id="appXYZ")
+        mock_api.table.return_value.batch_update.side_effect = _http_error(403)
+
+        with pytest.raises(AirtableError) as excinfo:
+            client.update_records("tblPPR_ENTRY", [
+                {"id": "recX", "fields": {"fldA": "val"}},
+                {"id": "recY", "fields": {"fldA": "val"}},
+            ])
+        assert "403" in str(excinfo.value)
+        assert "appXYZ" in str(excinfo.value)
+        # One attempt only: a permission error is not per-record.
+        assert mock_api.table.return_value.batch_update.call_count == 1
+
+    def test_field_error_names_the_failing_record(self):
+        from ehio.airtable import AirtableError
+
+        client, mock_api = _make_client()
+        mock_api.table.return_value.batch_update.side_effect = _http_error(
+            422, "Unknown field name"
+        )
+
+        with pytest.raises(AirtableError) as excinfo:
+            client.update_records("tblPPR_ENTRY", [{"id": "recX", "fields": {"fldA": "v"}}])
+        message = str(excinfo.value)
+        assert "recX" in message
+        assert "Unknown field name" in message
+
+
+# ---------------------------------------------------------------------------
+# Error handling on reads
+# ---------------------------------------------------------------------------
+
+class TestReadErrors:
+    def test_unauthorized_read_raises_airtable_error(self):
+        from ehio.airtable import AirtableError
+
+        client, mock_api = _make_client()
+        mock_api.table.return_value.all.side_effect = _http_error(401)
+
+        with pytest.raises(AirtableError) as excinfo:
+            client.fetch_pending_batches("tblX", "fldY", "Ready")
+        assert "401" in str(excinfo.value)
+
+    def test_missing_record_still_returns_none(self):
+        client, mock_api = _make_client()
+        mock_api.table.return_value.get.side_effect = _http_error(404)
+
+        assert client.fetch_record_by_id("tblX", "recMISSING") is None
+
+    def test_forbidden_record_lookup_raises(self):
+        from ehio.airtable import AirtableError
+
+        client, mock_api = _make_client()
+        mock_api.table.return_value.get.side_effect = _http_error(403)
+
+        with pytest.raises(AirtableError):
+            client.fetch_record_by_id("tblX", "recX")
+
+
+# ---------------------------------------------------------------------------
+# verify_token
+# ---------------------------------------------------------------------------
+
+class TestVerifyToken:
+    def test_empty_token_raises(self):
+        from ehio.airtable import AirtableError, verify_token
+
+        with patch("ehio.airtable._AVAILABLE", True):
+            with pytest.raises(AirtableError):
+                verify_token("   ")
+
+    def test_valid_token_calls_whoami_once_per_process(self):
+        from ehio.airtable import verify_token
+
+        with patch("ehio.airtable._AVAILABLE", True), \
+             patch("ehio.airtable._VERIFIED_TOKENS", set()), \
+             patch("ehio.airtable.Api") as mock_api_cls:
+            verify_token("patGOOD")
+            verify_token("patGOOD")
+            assert mock_api_cls.return_value.whoami.call_count == 1
+
+    def test_invalid_token_raises_with_actionable_message(self):
+        from ehio.airtable import AirtableError, verify_token
+
+        with patch("ehio.airtable._AVAILABLE", True), \
+             patch("ehio.airtable._VERIFIED_TOKENS", set()), \
+             patch("ehio.airtable.Api") as mock_api_cls:
+            mock_api_cls.return_value.whoami.side_effect = _http_error(
+                401, "Invalid authentication token"
+            )
+            with pytest.raises(AirtableError) as excinfo:
+                verify_token("patBAD")
+        message = str(excinfo.value)
+        assert "401" in message
+        assert "AIRTABLE_TOKEN" in message
+
+    def test_token_without_metadata_scope_is_accepted(self):
+        """whoami may 403 for a token with no meta scopes — records still work."""
+        from ehio.airtable import verify_token
+
+        with patch("ehio.airtable._AVAILABLE", True), \
+             patch("ehio.airtable._VERIFIED_TOKENS", set()), \
+             patch("ehio.airtable.Api") as mock_api_cls:
+            mock_api_cls.return_value.whoami.side_effect = _http_error(403)
+            verify_token("patNOSCOPE")  # must not raise
+
+    def test_unreachable_api_raises(self):
+        from ehio.airtable import AirtableError, verify_token
+        from requests.exceptions import ConnectionError as RequestsConnectionError
+
+        with patch("ehio.airtable._AVAILABLE", True), \
+             patch("ehio.airtable._VERIFIED_TOKENS", set()), \
+             patch("ehio.airtable.Api") as mock_api_cls:
+            mock_api_cls.return_value.whoami.side_effect = RequestsConnectionError("no route")
+            with pytest.raises(AirtableError) as excinfo:
+                verify_token("patOFFLINE")
+        assert "Could not reach" in str(excinfo.value)
