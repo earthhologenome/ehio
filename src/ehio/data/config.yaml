@@ -37,6 +37,7 @@ EHI_PPR_BATCH_EHIO_VERSION: "fld6h9dtLWrLIdxHk" # Field in EHI_PPR_BATCH with th
 EHI_PPR_BATCH_DRAKKAR_VERSION: "fldQXFuzvLSpM9BIQ" # Field in EHI_PPR_BATCH with the drakkar version used for preprocessing (for logging)
 EHI_PPR_BATCH_BOOST_TIME: "fldwB7NVjqdyzmbSr" # Field in EHI_PPR_BATCH with the time boost value passed to drakkar (for processing)
 EHI_PPR_BATCH_BOOST_MEMORY: "fldxmytMjHeuCO0hP" # Field in EHI_PPR_BATCH with the memory boost value passed to drakkar (for processing)
+EHI_PPR_BATCH_ERROR_FILES: "fldYTr2xu1zL6LiwK" # Attachment field in EHI_PPR_BATCH where the drakkar failure report is uploaded on error (leave empty if unused)
 
 EHI_PPR_ENTRY_ID: "fld9c9LFKKxKSKJ1U"  # Field in EHI_PPR_ENTRY with the entry record ID (for logging)
 EHI_PPR_ENTRY_CODE: "fldNGN3g6Lvqo4ySR" # Field in EHI_PPR_ENTRY with the entry code (primary key, for logging)
@@ -62,10 +63,23 @@ EHI_PPR_ENTRY_NONPAREIL_LRSTAR: "fldD7bxg9zjsytjnO" # Field in EHI_PPR_ENTRY wit
 EHI_PPR_ENTRY_NONPAREIL_DIVERSITY: "fldkf6rvVabQI0bcK" # Field in EHI_PPR_ENTRY with the Nonpareil diversity of the preprocessed reads (for logging)
 
 EHI_GENOME_ID: "fldcZWcu2ybJobGO4" # Field in EHI_GENOME with the reference genome record ID (for logging)
-EHI_GENOME_CODE: "fldNRG6HScrWuDn5i" # Field in EHI_GENOME with the reference genome code (primary key, for logging)
-EHI_GENOME_INDEX_STATUS: "fldZRnO9nA3DfJ4iL" # Field in EHI_GENOME with the reference genome indexing status (for processing and logging) 
+EHI_GENOME_CODE: "fldNRG6HScrWuDn5i" # Field in EHI_GENOME with the reference genome code (primary key, for processing and logging)
+EHI_GENOME_INDEX_STATUS: "fldZRnO9nA3DfJ4iL" # Field in EHI_GENOME with the reference genome indexing status (read-only; ehio writes EHI_GENOME_INDEXED instead)
 EHI_GENOME_URL_INDEXED: "fldWXsYf6OlpWxUUQ" # Field in EHI_GENOME with the URL or path to the indexed genome, tar.gz (for processing and logging)
 EHI_GENOME_URL_RAW: "fldZ6V4yVA4dPtsIJ" # Field in  EHI_GENOME with the URL or path to the raw genome assembly, fna.gz (for logging)
+
+# Reference genome indexing.
+# A batch whose genome has no EHI_GENOME_URL_INDEXED runs with drakkar -r, which
+# rebuilds the Bowtie2 index from the raw FASTA. 'ehio preprocessing --output'
+# archives that index, uploads it to {SFTP_REMOTE_BASE}/{SFTP_REMOTE_REFERENCE_DIR}/{code}.tar.gz
+# and flags the genome as indexed, so every later batch on the same host uses -x.
+# The flag lives in the master reference genome table, which is in its own base.
+SFTP_REMOTE_REFERENCE_DIR: "REF"  # Subfolder of SFTP_REMOTE_BASE holding the indexed genomes
+EHI_GENOME_INDEX_BASE: "app6ADWyLxBkDcqYX"   # Base holding the master reference genome table
+EHI_GENOME_INDEX_TABLE: "tbl1t5vnst50DjT9A"  # Master reference genome table (writable)
+EHI_GENOME_INDEX_CODE: "Code"                # Field (id or name) in that table with the genome code, used to find the record
+EHI_GENOME_INDEXED: "fldLbMhCwARPB131W"      # Field in that table set once the index is on ERDA
+EHI_GENOME_INDEXED_VALUE: "YES"              # Value written to EHI_GENOME_INDEXED
 
 # ---- Binning module -------------------------------------------------------
 # Input: fetch preprocessed reads from EHI_ASB_ENTRY, write a drakkar sample file
@@ -81,6 +95,7 @@ EHI_ASB_BATCH_EHIO_VERSION: "fldehAA7O6ndnOqMQ" # Field in EHI_ASB_BATCH with th
 EHI_ASB_BATCH_DRAKKAR_VERSION: "fldWvZyrMKf3DRKgD" # Field in EHI_ASB_BATCH with the drakkar version used for cataloging (for logging)
 EHI_ASB_BATCH_BOOST_TIME: "fldAWH3ThmXdLmXNO" # Field in EHI_ASB_BATCH with the time boost value passed to drakkar (for processing)
 EHI_ASB_BATCH_BOOST_MEMORY: "fld097CY62eALUWBp" # Field in EHI_ASB_BATCH with the memory boost value passed to drakkar (for processing)
+EHI_ASB_BATCH_ERROR_FILES: "" # Attachment field in EHI_ASB_BATCH where the drakkar failure report is uploaded on error (leave empty if unused)
 
 EHI_ASB_ENTRY_ID: "fld7Nj5uaCBktk00s"  # Field in EHI_ASB_ENTRY with the entry record ID (for processing and logging)
 EHI_ASB_ENTRY_CODE: "fldr9ObDHV3TWAu8n" # Field in EHI_ASB_ENTRY with the entry code (primary key, for processing and logging)
@@ -144,6 +159,7 @@ MAG_DMB_BATCH_ANNOTATION_TYPE: "fldfjIvIcr9km5aXg" # Field in MAG_DMB_BATCH with
 MAG_DMB_BATCH_LIST_PPR: "fldz9tQw209jKUDuW" # Field in MAG_DMB_BATCH with the linked MAG_PPR records of the batch, i.e. a list of MAG_PPR_ID (for processing and logging)
 MAG_DMB_BATCH_BOOST_TIME: "fldoDeP1xpEKl144d" # Field in MAG_DMB_BATCH with the time boost value passed to drakkar (for processing)
 MAG_DMB_BATCH_BOOST_MEMORY: "fldAMqZtYYTHQG15r" # Field in MAG_DMB_BATCH with the memory boost value passed to drakkar (for processing)
+MAG_DMB_BATCH_ERROR_FILES: "" # Attachment field in MAG_DMB_BATCH where the drakkar failure report is uploaded on error (leave empty if unused)
 MAG_DMB_BATCH_DEREP_MAGS: "fldzP0UvbMGPnPlYg" # Field in MAG_DMB_BATCH with the number of dereplicated MAG records in the batch, i.e. a list of MAG_ENTRY_ID (for processing and logging; leave empty if unused)
 
 MAG_DMB_ENTRY_ID: "fldGIAejYpkpaws1a" # Field in  MAG_DMB_ENTRY with the entry record ID (for processing and logging)

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import csv
+import os
 import pytest
 from pathlib import Path
 
-from ehio.drakkar import write_sample_file, write_bins_file, verify_input_files
+from ehio.drakkar import (
+    find_failure_report,
+    verify_input_files,
+    write_bins_file,
+    write_sample_file,
+)
 from tests.conftest import ENTRY_RECORDS
 
 
@@ -277,3 +283,46 @@ class TestVerifyInputFiles:
         )
         assert len(missing) == 1
         assert missing[0][1] == r2
+
+
+# ---------------------------------------------------------------------------
+# find_failure_report
+# ---------------------------------------------------------------------------
+
+class TestFindFailureReport:
+    def _report(self, directory: Path, run_id: str, mtime: float | None = None) -> Path:
+        path = directory / f"drakkar_{run_id}_failures.tsv"
+        path.write_text("rule\tsample\n")
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
+        return path
+
+    def test_none_when_directory_is_empty(self, tmp_path: Path):
+        assert find_failure_report(tmp_path) is None
+
+    def test_none_when_directory_does_not_exist(self, tmp_path: Path):
+        assert find_failure_report(tmp_path / "absent") is None
+
+    def test_finds_single_report(self, tmp_path: Path):
+        report = self._report(tmp_path, "20260814-101500")
+        assert find_failure_report(tmp_path) == report
+
+    def test_other_drakkar_files_are_ignored(self, tmp_path: Path):
+        (tmp_path / "drakkar_20260814-101500.yaml").write_text("x")
+        (tmp_path / "drakkar_20260814-101500_resources.yaml").write_text("x")
+        assert find_failure_report(tmp_path) is None
+
+    def test_returns_newest_of_several_reports(self, tmp_path: Path):
+        old = self._report(tmp_path, "20260814-101500", mtime=1_000_000)
+        new = self._report(tmp_path, "20260814-113000", mtime=2_000_000)
+        assert find_failure_report(tmp_path) == new
+        assert old.exists()
+
+    def test_since_filters_out_older_reports(self, tmp_path: Path):
+        self._report(tmp_path, "20260814-101500", mtime=1_000_000)
+        assert find_failure_report(tmp_path, since=1_500_000) is None
+
+    def test_since_keeps_reports_of_the_current_run(self, tmp_path: Path):
+        self._report(tmp_path, "20260814-101500", mtime=1_000_000)
+        fresh = self._report(tmp_path, "20260814-113000", mtime=2_000_000)
+        assert find_failure_report(tmp_path, since=1_500_000) == fresh

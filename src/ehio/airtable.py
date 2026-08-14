@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import sys
+from pathlib import Path
 from typing import Any
 
 try:
@@ -24,6 +26,9 @@ except ImportError:  # requests ships with pyairtable; only hit if that is missi
 TOKEN_HINT = (
     "Provide a valid token with --airtable-token or export AIRTABLE_TOKEN."
 )
+
+# Airtable rejects uploadAttachment payloads above 5 MB of base64 content.
+ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024
 
 
 class AirtableError(RuntimeError):
@@ -145,6 +150,7 @@ class AirtableClient:
     def __init__(self, api_key: str, base_id: str) -> None:
         _require()
         self._api = Api(api_key, use_field_ids=True)
+        self._api_key = api_key
         self._base_id = base_id
 
     def _table(self, table_name: str):
@@ -219,6 +225,22 @@ class AirtableClient:
         except Exception:
             return None
 
+    def fetch_records_by_value(
+        self,
+        table_name: str,
+        field: str,
+        value: str,
+    ) -> list[dict[str, Any]]:
+        """Return all records of table_name where `field` equals `value`.
+
+        `field` may be a field id or a field name — both work in an Airtable
+        formula, which matters for tables whose field ids are not in the config.
+        """
+        formula = f'{{{field}}} = "{value}"'
+        return self._guard(
+            "read", table_name, self._table(table_name).all, formula=formula
+        )
+
     def fetch_pending_batches(
         self,
         batch_table: str,
@@ -284,6 +306,64 @@ class AirtableClient:
             self._table(table_name).batch_create,
             fields_list,
         )
+
+    def upload_attachment(
+        self,
+        table_name: str,
+        record_id: str,
+        field_id: str,
+        path: str | Path,
+        content_type: str = "text/tab-separated-values",
+    ) -> None:
+        """Attach a local file to an attachment field of a single record.
+
+        Uses Airtable's uploadAttachment endpoint, which appends the file to
+        whatever the field already holds instead of replacing it.  The file is
+        sent base64-encoded, so it must stay under ATTACHMENT_MAX_BYTES.
+        """
+        try:
+            import requests
+        except ImportError as exc:  # pragma: no cover - requests ships with pyairtable
+            raise AirtableError(
+                "The requests package is required to upload attachments. "
+                "Run: pip install requests"
+            ) from exc
+
+        file_path = Path(path)
+        try:
+            content = base64.b64encode(file_path.read_bytes()).decode("ascii")
+        except OSError as exc:
+            raise AirtableError(f"Could not read {file_path} to upload it: {exc}") from exc
+        if len(content) > ATTACHMENT_MAX_BYTES:
+            raise AirtableError(
+                f"{file_path.name} is too large to attach to Airtable "
+                f"(limit {ATTACHMENT_MAX_BYTES // (1024 * 1024)} MB encoded)."
+            )
+
+        url = (
+            "https://content.airtable.com/v0/"
+            f"{self._base_id}/{record_id}/{field_id}/uploadAttachment"
+        )
+        try:
+            response = requests.post(
+                url,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={
+                    "contentType": content_type,
+                    "file": content,
+                    "filename": file_path.name,
+                },
+                timeout=120,
+            )
+            response.raise_for_status()
+        except (HTTPError, RequestException) as exc:
+            raise AirtableError(
+                _explain(
+                    exc, action="upload an attachment to",
+                    base_id=self._base_id, table_name=table_name,
+                )
+                + f"\n  Record: {record_id}\n  Field: {field_id}\n  File: {file_path}"
+            ) from exc
 
     def fetch_existing_values(
         self,

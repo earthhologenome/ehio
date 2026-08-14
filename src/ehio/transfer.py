@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
+from typing import Any, Callable
 
 try:
     import paramiko
@@ -121,6 +122,45 @@ class SFTPTransfer:
             return True
         except FileNotFoundError:
             return False
+
+    def remote_exists(self, remote_path: str) -> bool:
+        """Return True if remote_path exists on the remote host."""
+        return self._remote_exists(remote_path)
+
+    def upload_stream(
+        self,
+        remote_path: str,
+        writer: Callable[[Any], None],
+        verbose: bool = False,
+    ) -> None:
+        """Create a remote file and let `writer` write its content into it.
+
+        Used for content that is generated on the fly (a tar archive of a
+        multi-GB reference index, say), so it never needs a temporary copy on
+        the local disk.  The data goes to a '.part' name and is renamed only
+        once the writer returns, so an interrupted transfer never leaves behind
+        a file that looks complete.
+        """
+        self._ensure_remote_dir(str(PurePosixPath(remote_path).parent))
+        part_path = f"{remote_path}.part"
+        if verbose:
+            print(f"  PUT <stream> -> {remote_path}", file=sys.stderr)
+        try:
+            handle = self._sftp.open(part_path, "wb")
+            handle.set_pipelined(True)
+            with handle:
+                writer(handle)
+        except BaseException:
+            try:
+                self._sftp.remove(part_path)
+            except OSError:
+                pass
+            raise
+        try:
+            self._sftp.remove(remote_path)
+        except OSError:
+            pass
+        self._sftp.rename(part_path, remote_path)
 
     def upload(
         self,

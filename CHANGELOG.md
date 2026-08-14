@@ -3,7 +3,21 @@
 All notable changes to ehio are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.4.3] - 2026-08-14
+
+### Added
+
+- Reference genomes that are not yet indexed on ERDA are now indexed once instead of once per batch. A preprocessing batch whose genome record has no `EHI_GENOME_URL_INDEXED` is launched with `-r`, so drakkar runs `bowtie2-build` on the raw FASTA — and the index it produced was then thrown away with the output directory. `ehio preprocessing --output` now archives that index (the reference FASTA plus the six Bowtie2 files, renamed to the genome code), uploads it to `{SFTP_REMOTE_BASE}/{SFTP_REMOTE_REFERENCE_DIR}/{genome_code}.tar.gz` and flags the genome record as indexed in the master reference genome table, so every later batch on the same host is launched with `-x` and skips `bowtie2-build` entirely.
+  - The archive is streamed straight into the SFTP connection, so a multi-GB index never needs a second copy on the local disk, and it is written under a `.part` name that is only renamed once the transfer completes.
+  - Nothing is uploaded when the batch had no reference, when the genome is already indexed, when the archive is already on ERDA (the genome is still flagged), or when no complete Bowtie2 index is found in the output directory. A failure at any point is reported as a warning and never fails the batch, whose own results are already transferred by then.
+  - New config keys: `SFTP_REMOTE_REFERENCE_DIR` (default `REF`), `EHI_GENOME_INDEX_BASE`, `EHI_GENOME_INDEX_TABLE`, `EHI_GENOME_INDEX_CODE`, `EHI_GENOME_INDEXED` and `EHI_GENOME_INDEXED_VALUE`.
+- The drakkar failure report of a failed batch is now attached to its Airtable batch record, so the source of the error is visible from the record itself without opening a terminal. When drakkar stops after failures it writes `drakkar_<run_id>_failures.tsv` (one row per failed job, with the failure category and a detail line) into the root of the output directory; the exit trap of the generated launch script now passes that directory to `ehio set-status`, which uploads the newest report to the batch's error files attachment field along with setting the error status.
+  - New config keys: `EHI_PPR_BATCH_ERROR_FILES` (set to the `error_files` field of `EHI_PPR_BATCH`), `EHI_ASB_BATCH_ERROR_FILES` and `MAG_DMB_BATCH_ERROR_FILES` (both empty — fill in a field id to enable the same for binning and quantifying).
+  - `ehio set-status` takes a new `--failures-dir DIR` (and `--failures-since EPOCH`, which ignores reports left by an earlier launch of the same batch). Reports already attached under the same filename are not attached twice, and a missing report, an unconfigured field or a failed upload is reported as a warning — the batch is still flagged as failed in Airtable.
+
+### Fixed
+
+- The `.err` file of a failed batch no longer ends at drakkar's `subprocess.CalledProcessError` traceback with no trace of what actually failed. drakkar merges the snakemake output (including its errors) into its own stdout, so everything explaining a failure went to `{batch}.out` while `{batch}.err` — the file that is normally inspected — only got the traceback. The exit trap of the generated launch script now appends a failure report to `{batch}.err` before setting the Airtable status: the last 80 lines of `{batch}.out` plus the last 40 lines of each log file referenced there (the `log:` entries snakemake prints for a failing rule, i.e. the SLURM job logs), and the path of the full log.
 
 ## [0.4.2] - 2026-08-13
 

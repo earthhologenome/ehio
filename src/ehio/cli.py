@@ -212,6 +212,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         write_output_tsv,
         PREPROCESSING_METRIC_KEYS,
     )
+    from ehio.reference import upload_reference_index
     from ehio.transfer import SFTPTransfer
 
     token       = _resolve_token(args)
@@ -345,6 +346,24 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
             )
         _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
         _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
+
+    # Archive the Bowtie2 index drakkar built for a not-yet-indexed reference
+    # genome and register it, so the next batch on this host is launched with -x.
+    # Runs before the cleanup below, which is where the index would be deleted.
+    try:
+        upload_reference_index(
+            batch_record, local_root, token,
+            host=host, user=user, port=port, identity=identity or None,
+            remote_base=remote_base,
+            timeout=getattr(args, "connect_timeout", 300.0),
+            verbose=getattr(args, "verbose", False),
+        )
+    except Exception as exc:  # noqa: BLE001 — the batch itself is already complete
+        print(
+            f"{ERROR}Warning:{RESET} the reference index of batch '{args.batch}' "
+            f"could not be uploaded: {exc}",
+            file=sys.stderr,
+        )
 
     # Delete the output directory — only the RUN/{batch} directory is kept
     cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
@@ -1443,7 +1462,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Directly sets the status field of a batch record.\n"
             "Called automatically by the .sh error trap on drakkar failure;\n"
-            "can also be used manually to correct a status."
+            "can also be used manually to correct a status.\n\n"
+            "With --failures-dir, the newest drakkar_<run_id>_failures.tsv found\n"
+            "in that directory is also attached to the batch's error files field,\n"
+            "so the cause of the failure is visible from Airtable."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -1454,6 +1476,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Batch code to look up.")
     p_ss.add_argument("--status", "-s", required=True, metavar="STATUS",
         help="New status value to write (e.g. Error, Done, Ready).")
+    p_ss.add_argument("--failures-dir", metavar="DIR",
+        help="drakkar output directory. Attaches the newest drakkar failure\n"
+             "report found there to the batch's error files field.")
+    p_ss.add_argument("--failures-since", metavar="EPOCH",
+        help="Ignore failure reports older than this Unix timestamp, so a\n"
+             "report left by an earlier launch is not attached again.")
     p_ss.add_argument("--airtable-token", metavar="TOKEN",
         help="Airtable personal access token. Overrides $AIRTABLE_TOKEN.")
     p_ss.set_defaults(func=cmd_set_status)
@@ -1528,16 +1556,59 @@ def _build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 _SET_STATUS_CFG = {
-    "preprocessing": ("EHI_BASE", "EHI_PPR_BATCH", "EHI_PPR_BATCH_CODE", "EHI_PPR_BATCH_STATUS"),
-    "binning":       ("EHI_BASE", "EHI_ASB_BATCH", "EHI_ASB_BATCH_CODE", "EHI_ASB_BATCH_STATUS"),
-    "quantifying":   ("MAG_BASE", "MAG_DMB_BATCH", "MAG_DMB_BATCH_CODE", "MAG_DMB_BATCH_STATUS"),
+    "preprocessing": ("EHI_BASE", "EHI_PPR_BATCH", "EHI_PPR_BATCH_CODE", "EHI_PPR_BATCH_STATUS", "EHI_PPR_BATCH_ERROR_FILES"),
+    "binning":       ("EHI_BASE", "EHI_ASB_BATCH", "EHI_ASB_BATCH_CODE", "EHI_ASB_BATCH_STATUS", "EHI_ASB_BATCH_ERROR_FILES"),
+    "quantifying":   ("MAG_BASE", "MAG_DMB_BATCH", "MAG_DMB_BATCH_CODE", "MAG_DMB_BATCH_STATUS", "MAG_DMB_BATCH_ERROR_FILES"),
 }
+
+
+def _upload_failure_report(
+    client,
+    batch_table: str,
+    batch_record: dict,
+    error_files_field: str,
+    failures_dir: str,
+    since: float | None = None,
+) -> None:
+    """Attach the newest drakkar failure report in failures_dir to the batch record.
+
+    Never raises: a batch that failed must still end up flagged as failed in
+    Airtable even when the report cannot be found or uploaded.
+    """
+    from ehio.airtable import AirtableError
+    from ehio.drakkar import find_failure_report
+
+    if not error_files_field:
+        return
+    try:
+        report = find_failure_report(failures_dir, since=since)
+    except OSError as exc:
+        print(f"  Warning: could not look for a drakkar failure report in "
+              f"{failures_dir}: {exc}", file=sys.stderr)
+        return
+    if report is None:
+        print(f"  No drakkar failure report found in {failures_dir}.", file=sys.stderr)
+        return
+
+    # Filenames carry the drakkar run id, so an already-attached report means
+    # this same failed run was reported before — do not attach it twice.
+    attached = batch_record.get("fields", {}).get(error_files_field) or []
+    if any(str(a.get("filename", "")) == report.name for a in attached if isinstance(a, dict)):
+        _info(f"Failure report '{report.name}' is already attached.")
+        return
+
+    try:
+        client.upload_attachment(batch_table, batch_record["id"], error_files_field, report)
+    except AirtableError as exc:
+        print(f"  Warning: could not attach {report.name}: {exc}", file=sys.stderr)
+        return
+    _info(f"Attached failure report '{report.name}'.")
 
 
 def cmd_set_status(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
 
-    base_cfg, table_cfg, code_cfg, status_cfg = _SET_STATUS_CFG[args.module]
+    base_cfg, table_cfg, code_cfg, status_cfg, error_files_cfg = _SET_STATUS_CFG[args.module]
 
     token            = _resolve_token(args)
     base_id          = _require_cfg(base_cfg)
@@ -1555,6 +1626,20 @@ def cmd_set_status(args: argparse.Namespace) -> int:
         [{"id": batch_record["id"], "fields": {status_field: args.status}}],
     )
     _info(f"Batch '{args.batch}' status → '{args.status}'.")
+
+    if args.failures_dir:
+        try:
+            since = float(args.failures_since) if args.failures_since else None
+        except ValueError:
+            since = None
+        _upload_failure_report(
+            client,
+            batch_table,
+            batch_record,
+            str(cfg.get(error_files_cfg) or "").strip(),
+            args.failures_dir,
+            since=since,
+        )
     return 0
 
 

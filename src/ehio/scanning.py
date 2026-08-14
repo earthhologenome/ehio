@@ -51,6 +51,11 @@ _BOOST_MEMORY_CFG = {
 }
 _RUN_BASE_CFG = "RUN_BASE"
 
+# Size of the failure report appended to the .err file when a batch fails.
+_FAILURE_TAIL_LINES     = 80   # lines of the .out file
+_FAILURE_LOG_FILES      = 5    # log files referenced in the .out file
+_FAILURE_JOB_TAIL_LINES = 40   # lines of each of those log files
+
 DRAKKAR_CMD = {
     "preprocessing": "preprocessing",
     "binning":       "cataloging",
@@ -96,87 +101,44 @@ class BatchLaunchError(Exception):
 def _resolve_preprocessing_ref_flag(batch_record: dict, token: str, verbose: bool = False) -> str:
     """Return the drakkar reference flag for a preprocessing batch.
 
-    Checks GENOME_ENTRY_URL_INDEXED first (-x, indexed tarball), then
-    GENOME_ENTRY_URL_RAW (-r, plain fasta).  Returns '' if no reference
+    Checks EHI_GENOME_URL_INDEXED first (-x, indexed tarball), then
+    EHI_GENOME_URL_RAW (-r, plain fasta).  Returns '' if no reference
     is configured or the linked genome record cannot be found.
 
     Raises BatchLaunchError if the resolved reference cannot be downloaded
     (remote URL) or does not exist (local path).
     """
-    from ehio.airtable import AirtableClient
+    from ehio.reference import genome_code, resolve_genome_record
 
     def _dbg(msg: str) -> None:
         if verbose:
             print(f"    [ref] {msg}", file=sys.stderr)
 
-    batch_ref_field    = str(cfg.get("EHI_PPR_BATCH_REFERENCE")  or "").strip()
-    ehi_base_id        = str(cfg.get("EHI_BASE")                  or "").strip()
-    genome_table       = str(cfg.get("EHI_GENOME")                or "").strip()
-    genome_indexed_fld = str(cfg.get("EHI_GENOME_URL_INDEXED")    or "").strip()
-    genome_raw_fld     = str(cfg.get("EHI_GENOME_URL_RAW")        or "").strip()
+    genome_indexed_fld = str(cfg.get("EHI_GENOME_URL_INDEXED") or "").strip()
+    genome_raw_fld     = str(cfg.get("EHI_GENOME_URL_RAW")     or "").strip()
 
-    if not batch_ref_field:
-        _dbg("EHI_PPR_BATCH_REFERENCE not configured — no reference flag.")
-        return ""
-
-    ref_value = batch_record.get("fields", {}).get(batch_ref_field)
-    _dbg(f"EHI_PPR_BATCH_REFERENCE field ({batch_ref_field}) raw value: {ref_value!r}")
-
-    if isinstance(ref_value, list):
-        ref_value = ref_value[0] if ref_value else None
-    if not ref_value:
-        _dbg("Reference field is empty — no reference flag.")
-        return ""
-
-    ref_rec_id = str(ref_value).strip()
-    _dbg(f"Resolved reference value: {ref_rec_id!r}")
-
-    if not (ehi_base_id and genome_table):
-        print("    [ref] WARNING: EHI_BASE or EHI_GENOME not configured.", file=sys.stderr)
-        return ""
-
-    genome_client = AirtableClient(api_key=token, base_id=ehi_base_id)
-
-    if ref_rec_id.startswith("rec"):
-        # Linked-record field — fetch the genome record directly by its record ID.
-        _dbg(f"Looking up genome record by ID: {ref_rec_id}")
-        genome_rec = genome_client.fetch_record_by_id(genome_table, ref_rec_id)
-    else:
-        # Text/formula field containing the genome code (e.g. "G0001") — search by code.
-        genome_code_fld = str(cfg.get("EHI_GENOME_CODE") or "").strip()
-        _dbg(f"Looking up genome record by code: {ref_rec_id!r} in field {genome_code_fld}")
-        if not genome_code_fld:
-            print("    [ref] WARNING: EHI_GENOME_CODE not configured.", file=sys.stderr)
-            return ""
-        formula = f'{{{genome_code_fld}}} = "{ref_rec_id}"'
-        records = genome_client._table(genome_table).all(formula=formula)
-        genome_rec = records[0] if records else None
-
+    genome_rec = resolve_genome_record(batch_record, token, dbg=_dbg)
     if not genome_rec:
-        print(
-            f"    [ref] WARNING: genome record {ref_rec_id!r} not found in "
-            f"EHI_GENOME ({genome_table}).",
-            file=sys.stderr,
-        )
         return ""
 
     genome_fields = genome_rec.get("fields", {})
-    indexed_url = str(genome_fields.get(genome_indexed_fld, "") or "").strip()
-    raw_url     = str(genome_fields.get(genome_raw_fld,     "") or "").strip()
+    ref_id        = genome_code(genome_rec) or genome_rec.get("id", "")
+    indexed_url   = str(genome_fields.get(genome_indexed_fld, "") or "").strip()
+    raw_url       = str(genome_fields.get(genome_raw_fld,     "") or "").strip()
     _dbg(f"EHI_GENOME_URL_INDEXED ({genome_indexed_fld}): {indexed_url!r}")
     _dbg(f"EHI_GENOME_URL_RAW     ({genome_raw_fld}):     {raw_url!r}")
 
     if indexed_url:
         _dbg(f"Using indexed reference: -x {indexed_url}")
-        _verify_reference(indexed_url, ref_rec_id, "EHI_GENOME_URL_INDEXED", _dbg)
+        _verify_reference(indexed_url, ref_id, "EHI_GENOME_URL_INDEXED", _dbg)
         return f"-x {shlex.quote(indexed_url)}"
     if raw_url:
         _dbg(f"Using raw reference: -r {raw_url}")
-        _verify_reference(raw_url, ref_rec_id, "EHI_GENOME_URL_RAW", _dbg)
+        _verify_reference(raw_url, ref_id, "EHI_GENOME_URL_RAW", _dbg)
         return f"-r {shlex.quote(raw_url)}"
 
     print(
-        f"    [ref] WARNING: genome record {ref_rec_id!r} found but both "
+        f"    [ref] WARNING: genome record {ref_id!r} found but both "
         "EHI_GENOME_URL_INDEXED and EHI_GENOME_URL_RAW are empty.",
         file=sys.stderr,
     )
@@ -275,9 +237,31 @@ def build_script_content(
         "\n"
         + conda_block +
         "_EHIO_SUCCESS=0\n"
+        # Only failure reports written after this point belong to this launch.
+        "_EHIO_STARTED=$(date +%s)\n"
+        # drakkar merges the snakemake stderr into its stdout, so the cause of a
+        # failure only ever reaches the .out file.  Copy the relevant tail (and
+        # the logs of the failing snakemake jobs) into the .err file, so the
+        # error report is self-contained.
+        "_ehio_report_failure() {\n"
+        f'    echo "" >&2\n'
+        f'    echo "=== ehio: {module} of {batch_name} failed ===" >&2\n'
+        f'    echo "--- last {_FAILURE_TAIL_LINES} lines of {out_file} ---" >&2\n'
+        f"    tail -n {_FAILURE_TAIL_LINES} {q(out_file)} >&2 2>/dev/null || true\n"
+        f"    _EHIO_LOGS=$(grep -hoE '/[^ ,:)]+\\.log' {q(out_file)} 2>/dev/null "
+        f"| tail -n {_FAILURE_LOG_FILES} | sort -u || true)\n"
+        '    for _EHIO_LOG in ${_EHIO_LOGS:-}; do\n'
+        '        [ -f "$_EHIO_LOG" ] || continue\n'
+        f'        echo "--- last {_FAILURE_JOB_TAIL_LINES} lines of $_EHIO_LOG ---" >&2\n'
+        f'        tail -n {_FAILURE_JOB_TAIL_LINES} "$_EHIO_LOG" >&2 2>/dev/null || true\n'
+        "    done\n"
+        f'    echo "=== ehio: end of failure report (full log: {out_file}) ===" >&2\n'
+        "}\n"
         "_on_exit() {\n"
         '    if [ "$_EHIO_SUCCESS" -ne 1 ]; then\n'
-        f"        ehio set-status --module {module} --batch {q(batch_name)} --status {q(error_status)}\n"
+        "        _ehio_report_failure || true\n"
+        f"        ehio set-status --module {module} --batch {q(batch_name)} --status {q(error_status)}"
+        f" --failures-dir {q(output_dir)} --failures-since \"$_EHIO_STARTED\"\n"
         "    fi\n"
         "}\n"
         "trap _on_exit EXIT\n"

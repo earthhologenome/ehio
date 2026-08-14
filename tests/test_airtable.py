@@ -293,3 +293,71 @@ class TestVerifyToken:
             with pytest.raises(AirtableError) as excinfo:
                 verify_token("patOFFLINE")
         assert "Could not reach" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# upload_attachment
+# ---------------------------------------------------------------------------
+
+class TestUploadAttachment:
+    def _report(self, tmp_path, text: str = "rule\tsample\nfastp\tEHI001\n"):
+        path = tmp_path / "drakkar_20260814-101500_failures.tsv"
+        path.write_text(text)
+        return path
+
+    def test_posts_base64_file_to_content_endpoint(self, tmp_path):
+        import base64
+
+        client, _ = _make_client(base_id="appTEST")
+        report = self._report(tmp_path)
+        with patch("requests.post") as mock_post:
+            client.upload_attachment("tblBATCH", "recBATCH", "fldERR", report)
+        url, = mock_post.call_args.args
+        assert url == (
+            "https://content.airtable.com/v0/appTEST/recBATCH/fldERR/uploadAttachment"
+        )
+        kwargs = mock_post.call_args.kwargs
+        assert kwargs["headers"]["Authorization"] == "Bearer patTEST"
+        assert kwargs["json"]["filename"] == report.name
+        assert kwargs["json"]["contentType"] == "text/tab-separated-values"
+        assert base64.b64decode(kwargs["json"]["file"]) == report.read_bytes()
+        mock_post.return_value.raise_for_status.assert_called_once()
+
+    def test_http_error_raises_airtable_error(self, tmp_path):
+        from ehio.airtable import AirtableError
+
+        client, _ = _make_client()
+        report = self._report(tmp_path)
+        with patch("requests.post") as mock_post:
+            mock_post.return_value.raise_for_status.side_effect = _http_error(
+                422, "Field is not an attachment field"
+            )
+            with pytest.raises(AirtableError) as excinfo:
+                client.upload_attachment("tblBATCH", "recBATCH", "fldERR", report)
+        message = str(excinfo.value)
+        assert "422" in message
+        assert "recBATCH" in message
+        assert report.name in message
+
+    def test_missing_file_raises_airtable_error(self, tmp_path):
+        from ehio.airtable import AirtableError
+
+        client, _ = _make_client()
+        with patch("requests.post") as mock_post:
+            with pytest.raises(AirtableError) as excinfo:
+                client.upload_attachment(
+                    "tblBATCH", "recBATCH", "fldERR", tmp_path / "absent.tsv"
+                )
+        mock_post.assert_not_called()
+        assert "Could not read" in str(excinfo.value)
+
+    def test_oversized_file_is_rejected_before_upload(self, tmp_path):
+        from ehio.airtable import ATTACHMENT_MAX_BYTES, AirtableError
+
+        client, _ = _make_client()
+        report = self._report(tmp_path, "x" * (ATTACHMENT_MAX_BYTES + 1))
+        with patch("requests.post") as mock_post:
+            with pytest.raises(AirtableError) as excinfo:
+                client.upload_attachment("tblBATCH", "recBATCH", "fldERR", report)
+        mock_post.assert_not_called()
+        assert "too large" in str(excinfo.value)

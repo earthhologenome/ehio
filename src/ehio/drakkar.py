@@ -109,6 +109,30 @@ def verify_remote_urls(
     return [(sample, url, failures[url]) for sample, url in owners if url in failures]
 
 
+FAILURE_REPORT_GLOB = "drakkar_*_failures.tsv"
+
+
+def find_failure_report(output_dir: str | Path, since: float | None = None) -> Path | None:
+    """Return the most recent drakkar failure report in output_dir, or None.
+
+    drakkar writes 'drakkar_{run_id}_failures.tsv' into the root of its output
+    directory when a workflow stops after failures.  A batch can run drakkar
+    several times (profiling, then annotating), each with its own run id, so
+    the newest report is the one describing the failure that just happened.
+
+    `since` is a Unix timestamp: reports older than it are ignored, which keeps
+    the report of an earlier, already-reported launch of the same batch from
+    being mistaken for the current one.
+    """
+    directory = Path(output_dir)
+    reports = [p for p in directory.glob(FAILURE_REPORT_GLOB) if p.is_file()]
+    if since is not None:
+        reports = [p for p in reports if p.stat().st_mtime >= since]
+    if not reports:
+        return None
+    return max(reports, key=lambda p: p.stat().st_mtime)
+
+
 def write_quality_file(
     records: list[dict[str, Any]],
     path: Path,

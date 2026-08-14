@@ -68,12 +68,45 @@ class TestBuildScriptContent:
         assert "--status" in script
         assert "Error" in script
 
+    def test_exit_trap_reports_failure_before_set_status(self):
+        script = self._script()
+        report_pos = script.index("_ehio_report_failure || true")
+        status_pos = script.index("ehio set-status")
+        assert report_pos < status_pos
+
+    def test_failure_report_tails_out_file(self):
+        script = self._script()
+        assert f"tail -n 80 {RUN_DIR}/PPR001.out" in script
+
+    def test_failure_report_tails_referenced_job_logs(self):
+        script = self._script()
+        assert "grep -hoE" in script
+        assert '.log' in script
+        assert 'tail -n 40 "$_EHIO_LOG"' in script
+
+    def test_failure_report_writes_to_stderr(self):
+        script = self._script()
+        report = script.split("_ehio_report_failure() {")[1].split("}\n")[0]
+        assert all(">&2" in line for line in report.splitlines()
+                   if line.strip().startswith(("echo", "tail")))
+
     def test_success_sentinel_set_after_output_step(self):
         script = self._script()
         assert "_EHIO_SUCCESS=1" in script
         output_pos  = script.index("ehio preprocessing --output")
         sentinel_pos = script.index("_EHIO_SUCCESS=1")
         assert sentinel_pos > output_pos
+
+    def test_exit_trap_passes_failures_dir_to_set_status(self):
+        script = self._script()
+        status_line = next(l for l in script.splitlines() if "ehio set-status" in l)
+        assert f"--failures-dir {OUT_DIR}" in status_line
+        assert '--failures-since "$_EHIO_STARTED"' in status_line
+
+    def test_start_timestamp_recorded_before_trap(self):
+        script = self._script()
+        assert "_EHIO_STARTED=$(date +%s)" in script
+        assert script.index("_EHIO_STARTED=$(date") < script.index("trap _on_exit EXIT")
 
     def test_error_status_is_configurable(self):
         script = self._script(error_status="Failed")

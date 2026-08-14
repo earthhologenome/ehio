@@ -134,7 +134,7 @@ Bridges the preprocessing step. Connects to `EHI_BASE` only.
 | Direction | What it does |
 |-----------|-------------|
 | `--input` | Looks up the batch in `EHI_PPR_BATCH`, follows the linked field to `EHI_PPR_ENTRY`, and writes a Drakkar sample info TSV with columns `sample`, `reads1`, `reads2`, `reference`. Local read paths must exist and remote read URLs must be downloadable, otherwise the command fails before Drakkar starts (`--no-url-check` skips the download check). |
-| `--output` | Transfers the `preprocessing/final/` directory to SFTP and marks all entry records as processed in `EHI_PPR_ENTRY`. |
+| `--output` | Transfers the `preprocessing/final/` directory to SFTP and marks all entry records as processed in `EHI_PPR_ENTRY`. If the batch ran against a raw reference genome, the Bowtie2 index Drakkar built is archived, uploaded to `{SFTP_REMOTE_BASE}/REF/{genome_code}.tar.gz` and the genome record is flagged as indexed, so later batches on the same host are launched with `-x`. |
 
 ```bash
 # Generate drakkar input file for batch PPR001
@@ -225,6 +225,8 @@ drakkar profiling -B OUTPUT_DIR/bins.txt -R OUTPUT_DIR/samples.tsv -o OUTPUT_DIR
 
 `OUTPUT_DIR` is constructed as `{MODULE_OUTPUT_BASE}/{BATCH_NAME}`.
 
+If any step fails, the exit trap of the launch script appends a failure report to `{BATCH}.err`, sets the batch status to `PROCESSING_ERROR_STATUS` and attaches drakkar's own failure report — `OUTPUT_DIR/drakkar_<run_id>_failures.tsv`, one row per failed job with its failure category — to the batch record, so the source of the error can be read straight from Airtable. The attachment field is configured per module with `EHI_PPR_BATCH_ERROR_FILES`, `EHI_ASB_BATCH_ERROR_FILES` and `MAG_DMB_BATCH_ERROR_FILES`; leave a key empty to disable uploading for that module.
+
 ---
 
 ## Overall data flow
@@ -263,6 +265,8 @@ ehio quantifying    --input  -b BATCH [-f samples.tsv] [--bins-file bins.txt] [o
 ehio quantifying    --output -b BATCH [-l LOCAL_DIR]   [overrides...]
 
 ehio scanning       [--module preprocessing|binning|quantifying] [--dry-run] [-v]
+
+ehio set-status     -m MODULE -b BATCH -s STATUS [--failures-dir DIR] [--failures-since EPOCH]
 
 ehio config         --view | --edit
 ```
