@@ -74,7 +74,7 @@ EHI_GENOME_URL_RAW: "fldZ6V4yVA4dPtsIJ" # Field in  EHI_GENOME with the URL or p
 # archives that index, uploads it to {SFTP_REMOTE_BASE}/{SFTP_REMOTE_REFERENCE_DIR}/{code}.tar.gz
 # and flags the genome as indexed, so every later batch on the same host uses -x.
 # The flag lives in the master reference genome table, which is in its own base.
-SFTP_REMOTE_REFERENCE_DIR: "REF"  # Subfolder of SFTP_REMOTE_BASE holding the indexed genomes
+SFTP_REMOTE_REFERENCE_DIR: "GEN"  # Subfolder of SFTP_REMOTE_BASE holding the indexed genomes
 EHI_GENOME_INDEX_BASE: "app6ADWyLxBkDcqYX"   # Base holding the master reference genome table
 EHI_GENOME_INDEX_TABLE: "tbl1t5vnst50DjT9A"  # Master reference genome table (writable)
 EHI_GENOME_INDEX_CODE: "Code"                # Field (id or name) in that table with the genome code, used to find the record

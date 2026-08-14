@@ -212,7 +212,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         write_output_tsv,
         PREPROCESSING_METRIC_KEYS,
     )
-    from ehio.reference import upload_reference_index
+    from ehio.reference import upload_reference_index_status
     from ehio.transfer import SFTPTransfer
 
     token       = _resolve_token(args)
@@ -350,24 +350,37 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     # Archive the Bowtie2 index drakkar built for a not-yet-indexed reference
     # genome and register it, so the next batch on this host is launched with -x.
     # Runs before the cleanup below, which is where the index would be deleted.
+    keep_for_reference = False
     try:
-        upload_reference_index(
+        ref_status = upload_reference_index_status(
             batch_record, local_root, token,
             host=host, user=user, port=port, identity=identity or None,
             remote_base=remote_base,
             timeout=getattr(args, "connect_timeout", 300.0),
             verbose=getattr(args, "verbose", False),
         )
+        keep_for_reference = ref_status == "ambiguous"
     except Exception as exc:  # noqa: BLE001 — the batch itself is already complete
+        keep_for_reference = True
         print(
             f"{ERROR}Warning:{RESET} the reference index of batch '{args.batch}' "
-            f"could not be uploaded: {exc}",
+            f"could not be uploaded: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+    # The index only exists inside the output directory, so deleting it below
+    # would make the failure unrecoverable — keep it and let the user retry.
+    if keep_for_reference:
+        print(
+            f"{ERROR}Warning:{RESET} keeping {local_root} so the reference index "
+            f"is not lost. Retry with:\n"
+            f"    ehio reference -b {args.batch} -l {local_root}",
             file=sys.stderr,
         )
 
     # Delete the output directory — only the RUN/{batch} directory is kept
     cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
-    if cleanup not in ("false", "0", "no"):
+    if not keep_for_reference and cleanup not in ("false", "0", "no"):
         _shutil.rmtree(local_root, ignore_errors=True)
         _info(f"Deleted output directory {local_root}.")
 
@@ -1305,7 +1318,7 @@ def _build_parser() -> argparse.ArgumentParser:
         p.add_argument("--verbose", "-v", action="store_true",
             help="Print additional progress details.")
 
-    def _add_sftp_overrides(p: argparse.ArgumentParser) -> None:
+    def _add_sftp_overrides(p: argparse.ArgumentParser, rerun: bool = True) -> None:
         g = p.add_argument_group("Output / transfer options")
         g.add_argument("--host",     metavar="HOST", help="SFTP host (overrides SFTP_HOST).")
         g.add_argument("--user", "-u", metavar="USER", help="SFTP username (overrides SFTP_USER).")
@@ -1315,8 +1328,9 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Local drakkar output directory. Default: current directory.")
         g.add_argument("--remote-dir", "-r", metavar="DIR",
             help="Remote base directory for file transfer.")
-        g.add_argument("--rerun", action="store_true",
-            help="Delete the remote archive directory before uploading (use when rerunning a batch).")
+        if rerun:
+            g.add_argument("--rerun", action="store_true",
+                help="Delete the remote archive directory before uploading (use when rerunning a batch).")
         g.add_argument("--connect-timeout", metavar="SECONDS", type=float, default=300.0,
             help="SFTP connection timeout in seconds (default: 300).")
 
@@ -1424,6 +1438,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory containing the dereplicated genome FASTA files (input mode).")
     _add_sftp_overrides(p_ann)
     p_ann.set_defaults(func=cmd_annotating)
+
+    # ------------------------------------------------------------------
+    # reference
+    # ------------------------------------------------------------------
+    p_ref = sub.add_parser(
+        "reference",
+        help="Upload the reference genome index of a finished preprocessing batch.",
+        description=(
+            "Archive the Bowtie2 index drakkar built for a batch, upload it to\n"
+            "{SFTP_REMOTE_BASE}/{SFTP_REMOTE_REFERENCE_DIR}/{genome_code}.tar.gz and\n"
+            "flag the genome as indexed. This is the last step of\n"
+            "'ehio preprocessing --output', repeated on its own for a batch whose\n"
+            "drakkar run is already finished — nothing is sent through snakemake again."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    _add_batch(p_ref)
+    _add_token(p_ref)
+    _add_verbose(p_ref)
+    p_ref.add_argument("--force", action="store_true",
+        help="Upload even when the genome is already flagged as indexed or the archive already exists.")
+    _add_sftp_overrides(p_ref, rerun=False)
+    p_ref.set_defaults(func=cmd_reference)
 
     # ------------------------------------------------------------------
     # scanning
@@ -1641,6 +1678,73 @@ def cmd_set_status(args: argparse.Namespace) -> int:
             since=since,
         )
     return 0
+
+
+def cmd_reference(args: argparse.Namespace) -> int:
+    """Upload the reference index of a finished batch, without rerunning drakkar.
+
+    'ehio preprocessing --output' does this as its last step, but a batch whose
+    upload was skipped or failed (before this existed, or because the transfer
+    broke) has a finished output directory and no index on ERDA.  This picks up
+    exactly that step, so nothing has to go through snakemake again.
+    """
+    from ehio.airtable import AirtableClient
+    from ehio.reference import upload_reference_index_status
+
+    token       = _resolve_token(args)
+    base_id     = _require_cfg("EHI_BASE")
+    batch_table = _require_cfg("EHI_PPR_BATCH")
+    batch_code_field = _require_cfg("EHI_PPR_BATCH_CODE")
+
+    local_root = Path(args.local_dir).resolve()
+    if not local_root.is_dir():
+        _die(f"Local directory not found: {local_root}")
+
+    _info(f"Looking up batch '{args.batch}' in Airtable...")
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    if batch_record is None:
+        _die(f"Batch '{args.batch}' not found in {batch_table}.")
+
+    host     = _conf(args, "host",     "SFTP_HOST",     required=True)
+    user     = _conf(args, "user",     "SFTP_USER",     required=True)
+    port     = int(_conf(args, "port", "SFTP_PORT") or 22)
+    identity = _conf(args, "identity", "SFTP_IDENTITY") or None
+    remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
+
+    status = upload_reference_index_status(
+        batch_record, local_root, token,
+        host=host, user=user, port=port, identity=identity,
+        remote_base=remote_base,
+        timeout=getattr(args, "connect_timeout", 300.0),
+        verbose=getattr(args, "verbose", False),
+        force=args.force,
+    )
+
+    if status == "uploaded":
+        return 0
+    if status == "already-indexed":
+        _info("Nothing to do. Pass --force to upload the index anyway.")
+        return 0
+
+    hints = {
+        "not-flagged": (
+            "The archive is on ERDA but the genome could not be flagged as indexed. "
+            "Check EHI_GENOME_INDEX_TABLE / EHI_GENOME_INDEXED in the config, then "
+            "rerun this command."
+        ),
+        "no-reference": f"Batch '{args.batch}' has no reference genome, so there is no index to upload.",
+        "no-code": "The genome record has no code, so the archive cannot be named.",
+        "no-index": (
+            f"No complete Bowtie2 index under {local_root}. Point -l at the drakkar "
+            "output directory of the batch (the one holding data/references), or at "
+            "that references directory itself. If the output directory was already "
+            "deleted, the index is gone and has to be rebuilt."
+        ),
+        "ambiguous": "Move the unrelated references out of the directory and rerun.",
+    }
+    print(f"{ERROR}Error:{RESET} {hints.get(status, status)}", file=sys.stderr)
+    return 1
 
 
 def cmd_scanning(args: argparse.Namespace) -> int:

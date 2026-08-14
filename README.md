@@ -134,7 +134,7 @@ Bridges the preprocessing step. Connects to `EHI_BASE` only.
 | Direction | What it does |
 |-----------|-------------|
 | `--input` | Looks up the batch in `EHI_PPR_BATCH`, follows the linked field to `EHI_PPR_ENTRY`, and writes a Drakkar sample info TSV with columns `sample`, `reads1`, `reads2`, `reference`. Local read paths must exist and remote read URLs must be downloadable, otherwise the command fails before Drakkar starts (`--no-url-check` skips the download check). |
-| `--output` | Transfers the `preprocessing/final/` directory to SFTP and marks all entry records as processed in `EHI_PPR_ENTRY`. If the batch ran against a raw reference genome, the Bowtie2 index Drakkar built is archived, uploaded to `{SFTP_REMOTE_BASE}/REF/{genome_code}.tar.gz` and the genome record is flagged as indexed, so later batches on the same host are launched with `-x`. |
+| `--output` | Transfers the `preprocessing/final/` directory to SFTP and marks all entry records as processed in `EHI_PPR_ENTRY`. If the batch ran against a raw reference genome, the Bowtie2 index Drakkar built is archived, uploaded to `{SFTP_REMOTE_BASE}/GEN/{genome_code}.tar.gz` and the genome record is flagged as indexed, so later batches on the same host are launched with `-x`. |
 
 ```bash
 # Generate drakkar input file for batch PPR001
@@ -146,6 +146,25 @@ drakkar preprocessing -f samples.tsv -o /projects/PPR001
 # Transfer results and update Airtable
 ehio preprocessing --output -b PPR001 --local-dir /projects/PPR001
 ```
+
+---
+
+### `ehio reference`
+
+Repeats the reference-index step of `ehio preprocessing --output` on its own, for a batch whose Drakkar run is already finished. Nothing goes through Snakemake again — the index Drakkar already built is archived, uploaded to `{SFTP_REMOTE_BASE}/{SFTP_REMOTE_REFERENCE_DIR}/{genome_code}.tar.gz` and the genome is flagged as indexed.
+
+```bash
+# Finish the reference upload of a batch whose output directory is still there
+ehio reference -b PPR001 -l /projects/ehi/data/PPR/PPR001
+
+# Or point -l straight at the references directory
+ehio reference -b PPR001 -l /projects/ehi/data/PPR/PPR001/data/references
+
+# Re-upload an index that is already on ERDA
+ehio reference -b PPR001 -l /projects/ehi/data/PPR/PPR001 --force
+```
+
+The command exits non-zero and says why when there is nothing to upload, so it can be used in a loop over batches. Because the index only exists inside the Drakkar output directory, `ehio preprocessing --output` now keeps that directory instead of deleting it when the reference upload fails, and prints the `ehio reference` line to retry with.
 
 ---
 
@@ -263,6 +282,8 @@ ehio binning        --output -b BATCH [-l LOCAL_DIR]   [overrides...]
 
 ehio quantifying    --input  -b BATCH [-f samples.tsv] [--bins-file bins.txt] [overrides...]
 ehio quantifying    --output -b BATCH [-l LOCAL_DIR]   [overrides...]
+
+ehio reference      -b BATCH [-l LOCAL_DIR] [--force] [overrides...]
 
 ehio scanning       [--module preprocessing|binning|quantifying] [--dry-run] [-v]
 

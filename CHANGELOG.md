@@ -3,6 +3,20 @@
 All notable changes to ehio are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.4] - 2026-08-14
+
+### Fixed
+
+- Reference genome indexes were uploaded to `{SFTP_REMOTE_BASE}/REF/`, but the genome tarballs on ERDA live in `Data/GEN/`. `SFTP_REMOTE_REFERENCE_DIR` now defaults to `GEN`, so an index uploaded by 0.4.3 into `Data/REF/` has to be moved by hand.
+- `ehio preprocessing --output` deleted the drakkar output directory even when the reference index upload had just failed, which destroyed the only copy of the index and left no way to retry short of rebuilding it. The output directory is now kept when the upload raised an error or found more than one reference, and the command prints the `ehio reference` line to retry with. The failing exception type is included in the warning.
+
+### Added
+
+- New `ehio reference -b BATCH [-l DIR]`, which performs only the reference-index step of `ehio preprocessing --output` — archive the index, upload it, flag the genome as indexed — for a batch whose drakkar run has already finished. Nothing is sent through snakemake again.
+  - `-l` accepts either the drakkar output directory or its `data/references` directory, so a batch whose output directory was partly cleaned up can still be finished from the index alone.
+  - `--force` re-uploads an index that is already on ERDA and ignores an existing indexed URL on the genome record.
+  - The command exits non-zero with the reason when there is nothing to upload (no reference on the batch, no complete index under `-l`, several references in the same directory, or the archive uploaded but the Airtable flag not written), so it can be run over a list of batches.
+
 ## [0.4.3] - 2026-08-14
 
 ### Added

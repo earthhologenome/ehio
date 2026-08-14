@@ -15,9 +15,11 @@ from ehio.reference import (
     flag_genome_indexed,
     genome_code,
     indexed_url,
+    locate_references_dir,
     resolve_genome_record,
     write_index_archive,
     upload_reference_index,
+    upload_reference_index_status,
 )
 
 
@@ -32,7 +34,7 @@ CONFIG = {
     "EHI_GENOME_INDEX_CODE":    "Code",
     "EHI_GENOME_INDEXED":       "fldINDEXED",
     "EHI_GENOME_INDEXED_VALUE": "YES",
-    "SFTP_REMOTE_REFERENCE_DIR": "REF",
+    "SFTP_REMOTE_REFERENCE_DIR": "GEN",
 }
 
 
@@ -258,7 +260,7 @@ class TestUploadReferenceIndex:
 
         assert result is True
         remote_path = xfer.upload_stream.call_args[0][0]
-        assert remote_path == "/EarthHologenomeInitiative/Data/REF/G0001.tar.gz"
+        assert remote_path == "/EarthHologenomeInitiative/Data/GEN/G0001.tar.gz"
         flag.assert_called_once_with("G0001", "tok")
 
     def test_streams_a_valid_archive(self, config, tmp_path):
@@ -319,3 +321,91 @@ class TestUploadReferenceIndex:
         result, flag = self._run(tmp_path, genome, xfer)
         assert result is False
         xfer.upload_stream.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# locate_references_dir
+# ---------------------------------------------------------------------------
+
+class TestLocateReferencesDir:
+    def test_prefers_the_drakkar_layout(self, tmp_path):
+        nested = tmp_path / "data" / "references"
+        nested.mkdir(parents=True)
+        assert locate_references_dir(tmp_path) == nested
+
+    def test_falls_back_to_the_directory_itself(self, tmp_path):
+        """'ehio reference -l' may be pointed straight at a references dir."""
+        assert locate_references_dir(tmp_path) == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# upload_reference_index_status — the outcomes 'ehio reference' reports on
+# ---------------------------------------------------------------------------
+
+class TestUploadReferenceIndexStatus:
+    BATCH = {"fields": {"fldBATCHREF": ["recG1"]}}
+
+    def _genome(self, url=""):
+        return {"id": "recG1", "fields": {"fldCODE": "G0001", "fldINDEXEDURL": url}}
+
+    def _run(self, tmp_path, genome, xfer, *, force=False, flagged=True):
+        with patch("ehio.reference.resolve_genome_record", return_value=genome), \
+             patch("ehio.reference.flag_genome_indexed", return_value=flagged), \
+             patch("ehio.transfer.SFTPTransfer") as transfer_cls:
+            transfer_cls.return_value.__enter__.return_value = xfer
+            return upload_reference_index_status(
+                self.BATCH, tmp_path, "tok",
+                host="io.erda.dk", user="me",
+                remote_base="/EarthHologenomeInitiative/Data",
+                force=force,
+            )
+
+    def test_uploaded(self, config, tmp_path):
+        _make_index(tmp_path / "data" / "references")
+        xfer = MagicMock()
+        xfer.remote_exists.return_value = False
+        assert self._run(tmp_path, self._genome(), xfer) == "uploaded"
+
+    def test_index_directly_under_local_root(self, config, tmp_path):
+        """A batch whose output dir is gone can be retried from the index alone."""
+        _make_index(tmp_path)
+        xfer = MagicMock()
+        xfer.remote_exists.return_value = False
+        assert self._run(tmp_path, self._genome(), xfer) == "uploaded"
+
+    def test_no_index(self, config, tmp_path):
+        assert self._run(tmp_path, self._genome(), MagicMock()) == "no-index"
+
+    def test_no_reference(self, config, tmp_path):
+        _make_index(tmp_path / "data" / "references")
+        assert self._run(tmp_path, None, MagicMock()) == "no-reference"
+
+    def test_no_code(self, config, tmp_path):
+        _make_index(tmp_path / "data" / "references")
+        genome = {"id": "recG1", "fields": {"fldINDEXEDURL": ""}}
+        assert self._run(tmp_path, genome, MagicMock()) == "no-code"
+
+    def test_ambiguous(self, config, tmp_path):
+        _make_index(tmp_path / "data" / "references", stem="reference")
+        _make_index(tmp_path / "data" / "references", stem="other")
+        assert self._run(tmp_path, self._genome(), MagicMock()) == "ambiguous"
+
+    def test_already_indexed(self, config, tmp_path):
+        _make_index(tmp_path / "data" / "references")
+        genome = self._genome(url="https://erda/G0001.tar.gz")
+        assert self._run(tmp_path, genome, MagicMock()) == "already-indexed"
+
+    def test_force_uploads_an_already_indexed_genome(self, config, tmp_path):
+        _make_index(tmp_path / "data" / "references")
+        xfer = MagicMock()
+        xfer.remote_exists.return_value = True
+        genome = self._genome(url="https://erda/G0001.tar.gz")
+        assert self._run(tmp_path, genome, xfer, force=True) == "uploaded"
+        xfer.upload_stream.assert_called_once()
+
+    def test_upload_without_the_flag_is_not_uploaded(self, config, tmp_path):
+        _make_index(tmp_path / "data" / "references")
+        xfer = MagicMock()
+        xfer.remote_exists.return_value = False
+        status = self._run(tmp_path, self._genome(), xfer, flagged=False)
+        assert status == "not-flagged"

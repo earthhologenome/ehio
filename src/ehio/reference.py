@@ -7,7 +7,7 @@ it: uploaded to ERDA and recorded in Airtable, every later batch on the same
 host is launched with -x and skips bowtie2-build entirely.
 
 This module closes that loop.  After a preprocessing batch finishes, it packs
-the index drakkar just built, streams it to {SFTP_REMOTE_BASE}/REF/{code}.tar.gz
+the index drakkar just built, streams it to {SFTP_REMOTE_BASE}/GEN/{code}.tar.gz
 and flags the genome record as indexed.
 """
 
@@ -34,7 +34,7 @@ BT2L_SUFFIXES = (".1.bt2l", ".2.bt2l", ".3.bt2l", ".4.bt2l", ".rev.1.bt2l", ".re
 # compress, so level 9 costs a lot of CPU on a multi-GB archive for very little.
 _COMPRESS_LEVEL = 6
 
-_DEFAULT_REMOTE_DIR = "REF"
+_DEFAULT_REMOTE_DIR = "GEN"
 _DEFAULT_CODE_FIELD = "Code"
 _DEFAULT_INDEXED_VALUE = "YES"
 
@@ -141,6 +141,21 @@ def indexed_url(genome_record: dict[str, Any]) -> str:
 # Index discovery and archiving
 # ---------------------------------------------------------------------------
 
+def locate_references_dir(local_root: Path) -> Path:
+    """Return the directory that holds the reference index under local_root.
+
+    Normally the drakkar output directory, whose index sits in
+    data/references; local_root may also be that references directory itself,
+    which is what 'ehio reference' is pointed at when the surrounding output
+    directory is already gone.
+    """
+    local_root = Path(local_root)
+    nested = local_root / "data" / "references"
+    if nested.is_dir():
+        return nested
+    return local_root
+
+
 def find_index_sets(references_dir: Path) -> list[tuple[Path, list[Path]]]:
     """Return every (fasta, index_files) pair found in a drakkar references dir.
 
@@ -237,8 +252,8 @@ def flag_genome_indexed(code: str, token: str) -> bool:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def upload_reference_index(
-    batch_record: dict[str, Any],
+def upload_reference_index_status(
+    batch_record: dict[str, Any] | None,
     local_root: Path,
     token: str,
     *,
@@ -249,23 +264,32 @@ def upload_reference_index(
     identity: str | None = None,
     timeout: float = 300.0,
     verbose: bool = False,
-) -> bool:
+    force: bool = False,
+) -> str:
     """Upload the Bowtie2 index a preprocessing batch built, and register it.
 
-    Does nothing when the batch ran against an already-indexed reference, when
-    it had no reference at all, or when no complete index is present under
-    local_root — all normal situations.  Must be called before the output
-    directory is cleaned up, since that is where the index lives.
+    Returns what happened, so the caller can tell a job that is genuinely done
+    from one that still needs the index:
 
-    Returns True when the genome ends up indexed on ERDA and flagged in Airtable.
+      'uploaded'        the archive is on ERDA and the genome is flagged
+      'not-flagged'     the archive is on ERDA but the flag was not written
+      'already-indexed' the genome already carries an indexed URL
+      'no-reference'    the batch has no reference genome
+      'no-code'         the genome record has no code to name the archive with
+      'no-index'        no complete Bowtie2 index under local_root
+      'ambiguous'       more than one index there, so the right one is unclear
+
+    Must be called before the output directory is cleaned up, since that is
+    where the index lives.  force=True re-uploads an index that is already on
+    ERDA and ignores an existing indexed URL.
     """
     from ehio.transfer import SFTPTransfer
 
     genome_record = resolve_genome_record(
-        batch_record, token, dbg=(lambda m: _info(f"[ref] {m}")) if verbose else _noop
+        batch_record or {}, token, dbg=(lambda m: _info(f"[ref] {m}")) if verbose else _noop
     )
     if genome_record is None:
-        return False
+        return "no-reference"
 
     code = genome_code(genome_record)
     if not code:
@@ -273,31 +297,31 @@ def upload_reference_index(
             "the genome record of this batch has no code (EHI_GENOME_CODE) — "
             "the reference index cannot be named and was not uploaded."
         )
-        return False
+        return "no-code"
 
-    if indexed_url(genome_record):
+    if indexed_url(genome_record) and not force:
         _info(f"Genome {code} is already indexed on ERDA; nothing to upload.")
-        return False
+        return "already-indexed"
 
-    references_dir = Path(local_root) / "data" / "references"
+    references_dir = locate_references_dir(local_root)
     index_sets = find_index_sets(references_dir)
     if not index_sets:
         _info(f"No Bowtie2 index found in {references_dir}; nothing to upload.")
-        return False
+        return "no-index"
     if len(index_sets) > 1:
         names = ", ".join(fasta.name for fasta, _ in index_sets)
         _warn(
             f"{references_dir} holds more than one reference index ({names}) — "
             f"cannot tell which one belongs to genome {code}; nothing uploaded."
         )
-        return False
+        return "ambiguous"
 
     fasta, index_files = index_sets[0]
     remote_dir  = f"{remote_base.rstrip('/')}/{str(cfg.get('SFTP_REMOTE_REFERENCE_DIR') or _DEFAULT_REMOTE_DIR).strip('/')}"
     remote_path = f"{remote_dir}/{code}.tar.gz"
 
     with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=timeout) as xfer:
-        if xfer.remote_exists(remote_path):
+        if xfer.remote_exists(remote_path) and not force:
             _info(f"{remote_path} already exists; skipping upload.")
         else:
             size_gb = (fasta.stat().st_size + sum(f.stat().st_size for f in index_files)) / (1024 ** 3)
@@ -308,14 +332,21 @@ def upload_reference_index(
             xfer.upload_stream(
                 remote_path,
                 lambda handle: write_index_archive(handle, fasta, index_files, code),
+                verbose=verbose,
             )
             _info(f"Reference index of genome {code} uploaded to {remote_path}.")
 
     try:
-        return flag_genome_indexed(code, token)
+        flagged = flag_genome_indexed(code, token)
     except AirtableError as exc:
         _warn(
             f"the reference index of genome {code} is on ERDA at {remote_path}, but "
             f"the genome record could not be flagged as indexed: {exc}"
         )
-        return False
+        return "not-flagged"
+    return "uploaded" if flagged else "not-flagged"
+
+
+def upload_reference_index(*args: Any, **kwargs: Any) -> bool:
+    """upload_reference_index_status, reduced to 'is the genome indexed now?'."""
+    return upload_reference_index_status(*args, **kwargs) == "uploaded"
