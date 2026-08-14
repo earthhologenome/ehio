@@ -124,6 +124,30 @@ class TestWriteIndexArchive:
         assert fasta == ">chr1\nACGT\n"
         assert first == b"index-.1.bt2"
 
+    def test_no_compresslevel_is_passed_to_tarfile(self, tmp_path):
+        """Python 3.11's tarfile.open forwards compresslevel to TarFile.__init__.
+
+        Only 3.12 and later pop it for stream modes, so passing one raises
+        TypeError on the interpreter the cluster runs.  This stands in for 3.11
+        by rejecting the keyword outright.
+        """
+        real_open = tarfile.open
+
+        def strict_open(*args, **kwargs):
+            if "compresslevel" in kwargs:
+                raise TypeError(
+                    "TarFile.__init__() got an unexpected keyword argument 'compresslevel'"
+                )
+            return real_open(*args, **kwargs)
+
+        _make_index(tmp_path)
+        fasta, files = find_index_sets(tmp_path)[0]
+        buffer = io.BytesIO()
+        with patch("ehio.reference.tarfile.open", side_effect=strict_open):
+            write_index_archive(buffer, fasta, files, "G0114")
+        with tarfile.open(fileobj=io.BytesIO(buffer.getvalue()), mode="r:gz") as tar:
+            assert "G0114.fna" in tar.getnames()
+
     def test_archive_is_readable_as_a_stream(self, tmp_path):
         """drakkar opens the tarball with tarfile — it must be a valid tar.gz."""
         _make_index(tmp_path)

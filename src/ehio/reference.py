@@ -13,6 +13,7 @@ and flags the genome record as indexed.
 
 from __future__ import annotations
 
+import gzip
 import sys
 import tarfile
 from pathlib import Path
@@ -187,14 +188,21 @@ def write_index_archive(
 
     Members are renamed to the genome code ({code}.fna, {code}.1.bt2, ...), the
     layout drakkar's extract_reference_index.py expects when the archive comes
-    back as -x.  Stream mode ('w|gz') is used so the archive never has to exist
-    on disk — multi-GB indexes go straight over the wire.
+    back as -x.  Stream mode ('w|') is used so the archive never has to exist on
+    disk — multi-GB indexes go straight over the wire.
+
+    The gzip layer is built here rather than left to tarfile's 'w|gz': only
+    Python 3.12 and later accept a compresslevel alongside a stream mode, and
+    passing one on 3.11 raises TypeError from TarFile.__init__.
     """
     stem = fasta.name[: -len(".fna")]
-    with tarfile.open(fileobj=fileobj, mode="w|gz", compresslevel=_COMPRESS_LEVEL) as tar:
-        tar.add(str(fasta), arcname=f"{code}.fna")
-        for path in index_files:
-            tar.add(str(path), arcname=f"{code}{path.name[len(stem):]}")
+    with gzip.GzipFile(
+        filename="", mode="wb", fileobj=fileobj, compresslevel=_COMPRESS_LEVEL
+    ) as gz:
+        with tarfile.open(fileobj=gz, mode="w|") as tar:
+            tar.add(str(fasta), arcname=f"{code}.fna")
+            for path in index_files:
+                tar.add(str(path), arcname=f"{code}{path.name[len(stem):]}")
 
 
 # ---------------------------------------------------------------------------

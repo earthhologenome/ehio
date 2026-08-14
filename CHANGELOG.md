@@ -3,6 +3,12 @@
 All notable changes to ehio are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.5] - 2026-08-14
+
+### Fixed
+
+- The reference index upload crashed with `TypeError: TarFile.__init__() got an unexpected keyword argument 'compresslevel'` on Python 3.11, which is what the cluster environment runs. `tarfile.open` only pops `compresslevel` for stream modes (`w|gz`) from Python 3.12 onwards; on 3.11 it forwards it to `TarFile.__init__`, which does not take it. The gzip layer is now built explicitly with `gzip.GzipFile`, so the compression level applies on every supported version. This is what left an empty `Data/REF` directory in 0.4.3: the upload was reached, the remote directory created, and the archive then failed on its first write.
+
 ## [0.4.4] - 2026-08-14
 
 ### Fixed
