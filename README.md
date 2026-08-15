@@ -183,6 +183,16 @@ drakkar cataloging -f samples.tsv -o /projects/ASB001
 ehio binning --output -b ASB001 --local-dir /projects/ASB001
 ```
 
+**Assembly type.** `EHI_ASB_BATCH_TYPE` on the batch record takes `Individual`, `Coassembly` or `Multicoverage`. The grouping itself always comes from the assembly codes of the entries — entries sharing a code are co-assembled by Drakkar — and the type declares what that grouping is meant to be:
+
+| Type | Effect |
+|------|--------|
+| `Individual` | One assembly per entry; each sample is mapped only to its own assembly. |
+| `Coassembly` | Entries sharing an assembly code are assembled together. |
+| `Multicoverage` | One assembly per entry, but every sample of the batch is mapped to every assembly before binning (`drakkar cataloging -c`). Requires one assembly code per entry — `ehio binning --input` refuses the batch if any code is shared, since Drakkar rejects `--multicoverage` on co-assemblies without failing. Note that this is *n* × *n* mappings, so batch size matters. |
+
+A batch with the field unset runs as it always did: the assembly codes decide, and no extra flag is passed.
+
 ---
 
 ### `ehio quantifying`

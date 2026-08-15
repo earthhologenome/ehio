@@ -13,6 +13,7 @@ from typing import Any
 
 from ehio import config as cfg
 from ehio.airtable import AirtableClient, AirtableError
+from ehio.drakkar import normalise_assembly_type
 
 _PRIMARY_BASE = {
     "preprocessing": "EHI_BASE",
@@ -183,6 +184,7 @@ def build_script_content(
     boost_memory: int | None = None,
     rerun: bool = False,
     resume: bool = False,
+    multicoverage: bool = False,
     ani_threshold: str = "",
     profiling_type: str = "",
     annotation_type: str = "all",
@@ -288,10 +290,13 @@ def build_script_content(
         )
 
     if module == "binning":
+        # -c maps every sample of the batch to every individual assembly, so the
+        # binners see a coverage profile per assembly instead of a single depth.
+        multicoverage_part = " -c" if multicoverage else ""
         input_step = "" if resume else f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
         return header + (
             input_step
-            + f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
+            + f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{multicoverage_part}{boost_parts}\n"
             + f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             + "_EHIO_SUCCESS=1\n"
         )
@@ -552,6 +557,17 @@ def scan_module(
                 file=sys.stderr,
             )
 
+        multicoverage = False
+        if module == "binning":
+            type_field = str(cfg.get("EHI_ASB_BATCH_TYPE") or "").strip()
+            if type_field:
+                assembly_type = normalise_assembly_type(record.get("fields", {}).get(type_field))
+                multicoverage = assembly_type == "multicoverage"
+                print(
+                    f"  [{module}] {batch_name}: assembly type → {assembly_type or '(unset)'}",
+                    file=sys.stderr,
+                )
+
         ani_threshold   = ""
         profiling_type  = ""
         annotation_type = "all"
@@ -582,6 +598,7 @@ def scan_module(
             boost_memory=boost_memory,
             rerun=do_rerun,
             resume=do_resume,
+            multicoverage=multicoverage,
             ani_threshold=ani_threshold,
             profiling_type=profiling_type,
             annotation_type=annotation_type,

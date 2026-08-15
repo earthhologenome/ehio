@@ -421,7 +421,12 @@ def cmd_binning(args: argparse.Namespace) -> int:
 
 def _run_binning_input(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
-    from ehio.drakkar import write_sample_file, verify_input_files
+    from ehio.drakkar import (
+        write_sample_file,
+        verify_input_files,
+        normalise_assembly_type,
+        check_assembly_type,
+    )
 
     token       = _resolve_token(args)
     base_id     = _require_cfg("EHI_BASE")
@@ -429,6 +434,7 @@ def _run_binning_input(args: argparse.Namespace) -> int:
     entry_table = _require_cfg("EHI_ASB_ENTRY")
 
     batch_code_field     = _require_cfg("EHI_ASB_BATCH_CODE")
+    batch_type_field     = str(cfg.get("EHI_ASB_BATCH_TYPE") or "").strip()
     entry_batch_field    = _require_cfg("EHI_ASB_ENTRY_BATCH")
     ehi_number_field     = _require_cfg("EHI_ASB_ENTRY_EHI_NUMBER")
     assembly_code_field  = _require_cfg("EHI_ASB_ENTRY_ASSEMBLY_CODE")
@@ -450,6 +456,24 @@ def _run_binning_input(args: argparse.Namespace) -> int:
     _info(f"Found {len(entries)} entries for batch '{args.batch}'.")
     if not entries:
         _die(f"No entries found for batch '{args.batch}'.")
+
+    # The assembly codes of the entries decide the grouping; the batch type says
+    # what that grouping is meant to be.  Checking them against each other here
+    # keeps a mismatch from surfacing as an empty drakkar run.
+    if batch_type_field:
+        assembly_type = normalise_assembly_type(
+            batch_record.get("fields", {}).get(batch_type_field)
+        )
+        _info(f"Batch assembly type: {assembly_type or '(unset)'}")
+        error, warning = check_assembly_type(
+            entries, assembly_type,
+            sample_field=ehi_number_field,
+            assembly_field=assembly_code_field,
+        )
+        if warning:
+            print(f"  WARNING: {warning}", file=sys.stderr)
+        if error:
+            _die(error)
 
     out_path = Path(args.sample_file)
     n = write_sample_file(

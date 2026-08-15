@@ -199,6 +199,35 @@ class TestBuildScriptContent:
         drakkar_line = next(l for l in script.splitlines() if "drakkar cataloging" in l)
         assert "-m " not in drakkar_line
 
+    def test_binning_no_multicoverage_flag_by_default(self):
+        script = build_script_content(
+            "binning", "ASB001",
+            "/projects/ehi/data/RUN/ASB001",
+            "/projects/ehi/data/ASB/ASB001",
+            "slurm",
+        )
+        drakkar_line = next(l for l in script.splitlines() if "drakkar cataloging" in l)
+        assert " -c" not in drakkar_line
+
+    def test_binning_multicoverage_adds_c_flag(self):
+        script = build_script_content(
+            "binning", "ASB001",
+            "/projects/ehi/data/RUN/ASB001",
+            "/projects/ehi/data/ASB/ASB001",
+            "slurm",
+            multicoverage=True,
+        )
+        drakkar_line = next(l for l in script.splitlines() if "drakkar cataloging" in l)
+        assert " -c" in drakkar_line
+
+    def test_multicoverage_ignored_for_other_modules(self):
+        script = build_script_content(
+            "preprocessing", "PPR001", RUN_DIR, OUT_DIR, "slurm",
+            multicoverage=True,
+        )
+        drakkar_line = next(l for l in script.splitlines() if "drakkar preprocessing" in l)
+        assert " -c" not in drakkar_line
+
     def test_quantifying_uses_profiling_and_bins_file(self):
         script = build_script_content(
             "quantifying", "DMB001",

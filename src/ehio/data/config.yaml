@@ -90,7 +90,14 @@ EHI_ASB_BATCH_ID: "fldqKiqvlAMXcS2l6" # Field in EHI_ASB_BATCH  with the batch r
 EHI_ASB_BATCH_CODE: "fldBV65e7paYvGCwQ"  # Field in EHI_ASB_BATCH with the batch code (primary key, for processing and logging)
 EHI_ASB_BATCH_DATE: "fldjrdzUdYVoPOQid" # Field in EHI_ASB_BATCH with the batch date (for logging)
 EHI_ASB_BATCH_STATUS: "fldqtozTLIRTzKiac" # Field in EHI_ASB_BATCH with the batch status (for scanning, processing and logging)
-EHI_ASB_BATCH_TYPE: "fldNQm1mdTIKkGaVC" # Field in EHI_ASB_BATCH with the batch type (e.g. "co-assembly", for processing)
+# Assembly type of the batch: Individual, Coassembly or Multicoverage.
+# The grouping itself comes from the assembly codes of the entries — entries
+# sharing a code are co-assembled by drakkar — and this field declares what that
+# grouping is meant to be. Multicoverage adds -c to 'drakkar cataloging', which
+# maps every sample of the batch to every individual assembly before binning;
+# it requires one assembly code per entry, and 'ehio binning --input' refuses
+# the batch otherwise.
+EHI_ASB_BATCH_TYPE: "fldNQm1mdTIKkGaVC" # Field in EHI_ASB_BATCH with the batch type (for processing)
 EHI_ASB_BATCH_EHIO_VERSION: "fldehAA7O6ndnOqMQ" # Field in EHI_ASB_BATCH with the ehio version used for cataloging (for logging)
 EHI_ASB_BATCH_DRAKKAR_VERSION: "fldWvZyrMKf3DRKgD" # Field in EHI_ASB_BATCH with the drakkar version used for cataloging (for logging)
 EHI_ASB_BATCH_BOOST_TIME: "fldAWH3ThmXdLmXNO" # Field in EHI_ASB_BATCH with the time boost value passed to drakkar (for processing)

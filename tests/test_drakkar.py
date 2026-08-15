@@ -8,7 +8,10 @@ import pytest
 from pathlib import Path
 
 from ehio.drakkar import (
+    check_assembly_type,
     find_failure_report,
+    group_samples_by_assembly,
+    normalise_assembly_type,
     verify_input_files,
     write_bins_file,
     write_sample_file,
@@ -180,6 +183,96 @@ class TestWriteSampleFile:
         first_line = out.read_text().splitlines()[0]
         assert "\t" in first_line
         assert "," not in first_line
+
+
+# ---------------------------------------------------------------------------
+# assembly type (EHI_ASB_BATCH_TYPE)
+# ---------------------------------------------------------------------------
+
+SAMPLE_FIELD   = "fldEHINUMBER"
+ASSEMBLY_FIELD = "fldASSEMBLY"
+
+
+def _entries(*pairs: tuple[str, str]) -> list[dict]:
+    """Build binning entry records from (sample, assembly code) pairs."""
+    return [
+        {"id": f"rec{i}", "fields": {SAMPLE_FIELD: sample, ASSEMBLY_FIELD: assembly}}
+        for i, (sample, assembly) in enumerate(pairs)
+    ]
+
+
+INDIVIDUAL_ENTRIES = _entries(("EHI00001", "EHA00001"), ("EHI00002", "EHA00002"))
+COASSEMBLY_ENTRIES = _entries(("EHI00001", "EHA00001"), ("EHI00002", "EHA00001"))
+
+
+class TestNormaliseAssemblyType:
+    @pytest.mark.parametrize("value,expected", [
+        ("Individual",    "individual"),
+        ("Coassembly",    "coassembly"),
+        ("Co-assembly",   "coassembly"),
+        ("co assembly",   "coassembly"),
+        ("Multicoverage", "multicoverage"),
+        ("multi-coverage", "multicoverage"),
+        (["Multicoverage"], "multicoverage"),
+    ])
+    def test_recognised_values(self, value, expected):
+        assert normalise_assembly_type(value) == expected
+
+    @pytest.mark.parametrize("value", ["", None, [], "Something else"])
+    def test_unset_or_unknown_returns_empty(self, value):
+        assert normalise_assembly_type(value) == ""
+
+
+class TestGroupSamplesByAssembly:
+    def test_individual_codes(self):
+        groups = group_samples_by_assembly(INDIVIDUAL_ENTRIES, SAMPLE_FIELD, ASSEMBLY_FIELD)
+        assert groups == {"EHA00001": ["EHI00001"], "EHA00002": ["EHI00002"]}
+
+    def test_shared_code_groups_samples(self):
+        groups = group_samples_by_assembly(COASSEMBLY_ENTRIES, SAMPLE_FIELD, ASSEMBLY_FIELD)
+        assert groups == {"EHA00001": ["EHI00001", "EHI00002"]}
+
+    def test_missing_assembly_code_falls_back_to_sample(self):
+        records = [{"id": "rec0", "fields": {SAMPLE_FIELD: "EHI00001"}}]
+        groups = group_samples_by_assembly(records, SAMPLE_FIELD, ASSEMBLY_FIELD)
+        assert groups == {"EHI00001": ["EHI00001"]}
+
+    def test_entry_without_sample_is_skipped(self):
+        records = [{"id": "rec0", "fields": {ASSEMBLY_FIELD: "EHA00001"}}]
+        assert group_samples_by_assembly(records, SAMPLE_FIELD, ASSEMBLY_FIELD) == {}
+
+
+class TestCheckAssemblyType:
+    def _check(self, records, assembly_type):
+        return check_assembly_type(records, assembly_type, SAMPLE_FIELD, ASSEMBLY_FIELD)
+
+    def test_multicoverage_on_individual_codes_is_accepted(self):
+        assert self._check(INDIVIDUAL_ENTRIES, "multicoverage") == ("", "")
+
+    def test_multicoverage_on_coassembly_is_an_error(self):
+        error, warning = self._check(COASSEMBLY_ENTRIES, "multicoverage")
+        assert "Multicoverage" in error
+        assert "EHA00001" in error
+        assert "EHI00001" in error and "EHI00002" in error
+        assert warning == ""
+
+    def test_individual_and_coassembly_are_accepted(self):
+        assert self._check(INDIVIDUAL_ENTRIES, "individual") == ("", "")
+        assert self._check(COASSEMBLY_ENTRIES, "coassembly") == ("", "")
+
+    def test_individual_with_shared_codes_only_warns(self):
+        error, warning = self._check(COASSEMBLY_ENTRIES, "individual")
+        assert error == ""
+        assert "co-assembled" in warning
+
+    def test_coassembly_without_shared_codes_only_warns(self):
+        error, warning = self._check(INDIVIDUAL_ENTRIES, "coassembly")
+        assert error == ""
+        assert "individual" in warning
+
+    def test_unset_type_never_complains(self):
+        assert self._check(COASSEMBLY_ENTRIES, "") == ("", "")
+        assert self._check(INDIVIDUAL_ENTRIES, "") == ("", "")
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.5.0] - 2026-08-15
+
+### Added
+
+- Assembly type support in the binning module. `EHI_ASB_BATCH_TYPE` (`fldNQm1mdTIKkGaVC` in `EHI_ASB_BATCH`) was declared in the config but never read; it now drives the run and takes three values: **Individual**, **Coassembly** and **Multicoverage**. Punctuation and case are ignored, so `Co-assembly` is read the same as `Coassembly`, and a batch with the field unset behaves exactly as before.
+  - **Multicoverage** adds `-c/--multicoverage` to `drakkar cataloging`. Every sample of the batch is assembled on its own and then mapped against every assembly of the batch, so the binners see a coverage profile per assembly instead of a single depth. No `coverage` column is written to the sample info TSV, which is what makes drakkar map all samples to all assemblies; per-batch coverage subgroups are not exposed.
+  - **Individual** and **Coassembly** are unchanged in behaviour: the grouping still comes from the assembly codes of the entries, and entries sharing a code are co-assembled.
+- `ehio binning --input` checks the assembly codes of the entries against the declared batch type. A **Multicoverage** batch whose entries share assembly codes is refused before the TSV is written, because drakkar rejects `--multicoverage` on co-assembled samples by printing a message and exiting **0** without running anything — the batch would otherwise look launched, produce no output, and only fail later in `ehio binning --output`. A batch typed **Individual** with shared codes, or **Coassembly** with none, only warns: those run exactly as their codes say.
+
+### Notes
+
+- Multicoverage is *n* assemblies × *n* mappings. A 50-sample batch is 2500 mapping jobs where an individual batch is 50, so batch size matters much more for this type.
+
 ## [0.4.6] - 2026-08-15
 
 ### Changed
