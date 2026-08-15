@@ -175,7 +175,7 @@ Bridges the assembly and binning step. Reads from `EHI_BASE`; on output, also wr
 | Direction | What it does |
 |-----------|-------------|
 | `--input` | Looks up the batch in `EHI_ASB_BATCH`, follows links to `EHI_ASB_ENTRY`, and writes a Drakkar sample info TSV with preprocessed read URLs. |
-| `--output` | Transfers the `cataloging/final/` directory to SFTP, marks entries as processed in `EHI_ASB_ENTRY`, and writes new MAG metadata to `MAG_BASE`. |
+| `--output` | Transfers the assemblies and the batch summary tables to `{SFTP_REMOTE_BASE}/ASB/{batch}` and the bins to `{SFTP_REMOTE_BASE}/MAG/{batch}`, both gzipped; marks entries as processed in `EHI_ASB_ENTRY`; and writes new MAG metadata to `MAG_BASE`. |
 
 ```bash
 ehio binning --input -b ASB001 -f samples.tsv

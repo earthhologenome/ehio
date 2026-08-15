@@ -182,8 +182,8 @@ SFTP_IDENTITY: ""                    # Path to SSH private key (leave empty to u
 
 # Remote paths are built at runtime as {SFTP_REMOTE_BASE}/{PREFIX}/{batch_code}:
 #   preprocessing  →  {SFTP_REMOTE_BASE}/PPR/{EHI_PPR_BATCH_CODE}
-#   binning        →  {SFTP_REMOTE_BASE}/ASB/{EHI_ASB_BATCH_CODE}   (assembly products)
-#                     {SFTP_REMOTE_BASE}/MAG/{EHI_ASB_BATCH_CODE}   (MAG files)
+#   binning        →  {SFTP_REMOTE_BASE}/ASB/{EHI_ASB_BATCH_CODE}   (assemblies, gzipped, plus the batch summary tables)
+#                     {SFTP_REMOTE_BASE}/MAG/{EHI_ASB_BATCH_CODE}   (bin FASTAs, gzipped)
 #   quantifying    →  {SFTP_REMOTE_BASE}/DMB/{MAG_DMB_BATCH_CODE}
 SFTP_REMOTE_BASE: "/EarthHologenomeInitiative/Data"
 

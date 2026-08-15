@@ -470,6 +470,49 @@ def _run_binning_input(args: argparse.Namespace) -> int:
     return 0
 
 
+_GZIP_COMPRESS_LEVEL = 6
+
+# Assemblies have been on ERDA as ASB/{batch}/{assembly}_contigs.fasta.gz since
+# before ehio; drakkar names them {assembly}.fna, so they are renamed on upload
+# rather than breaking the links of every batch that predates this.
+_ASSEMBLY_REMOTE_SUFFIX = "_contigs.fasta.gz"
+
+
+def _assembly_remote_name(fasta: Path) -> str:
+    """Return the ERDA filename for an assembly FASTA ({assembly}.fna)."""
+    return f"{fasta.stem}{_ASSEMBLY_REMOTE_SUFFIX}"
+
+
+def _find_assembly_fastas(local_root: Path) -> list[Path]:
+    """Return the assembly FASTAs of a drakkar cataloging run.
+
+    drakkar writes one per assembly as
+    {local_root}/cataloging/megahit/{assembly}/{assembly}.fna — the renamed
+    contigs, not megahit's own final.contigs.raw.fa, which keeps the .fa suffix.
+    """
+    megahit_dir = local_root / "cataloging" / "megahit"
+    if not megahit_dir.is_dir():
+        return []
+    return sorted(p for p in megahit_dir.glob("*/*.fna") if p.is_file())
+
+
+def _gzip_into(source: Path, handle) -> None:
+    """Gzip `source` straight into an open remote file handle.
+
+    Assemblies run to several GB, so they are compressed into the SFTP
+    connection rather than to a temporary .gz on the local disk.  The gzip layer
+    is built explicitly because Python 3.11 does not accept a compresslevel on
+    a stream, which is what the cluster environment runs.
+    """
+    import gzip as _gzip
+    import shutil as _sh
+
+    with _gzip.GzipFile(
+        filename="", mode="wb", fileobj=handle, compresslevel=_GZIP_COMPRESS_LEVEL
+    ) as gz, source.open("rb") as fin:
+        _sh.copyfileobj(fin, gz)
+
+
 def _run_binning_output(args: argparse.Namespace) -> int:
     """Parse cataloging metadata from drakkar output, update Airtable, transfer files."""
     from ehio.airtable import AirtableClient
@@ -581,13 +624,49 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         if tsv_out is not None and tsv_out.exists():
             _shutil.copy2(tsv_out, final_dir / tsv_out.name)
 
-        _info(f"Transferring {final_dir} → {user}@{host}:{remote_dir} ...")
+        # ASB/{batch} holds the assemblies and the batch-level summary tables.
+        # The bin FASTAs sit in the per-assembly subdirectories of final/ and go
+        # to MAG/{batch} compressed further down, so they are left out here
+        # instead of being transferred a second time, uncompressed.
+        summary_files = [p for p in sorted(final_dir.iterdir()) if p.is_file()]
+        assembly_fastas = _find_assembly_fastas(local_root)
+        if not assembly_fastas:
+            print(
+                f"  Warning: no assembly FASTA found under "
+                f"{local_root / 'cataloging' / 'megahit'}; only summary files "
+                f"will be transferred to {remote_dir}.",
+                file=sys.stderr,
+            )
+
+        _verbose = getattr(args, "verbose", False)
+        _info(
+            f"Transferring {len(summary_files)} summary file(s) and "
+            f"{len(assembly_fastas)} assembly FASTA(s) → {user}@{host}:{remote_dir} ..."
+        )
         _timeout = getattr(args, "connect_timeout", 300.0)
         with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
             if getattr(args, "rerun", False):
                 xfer.remove_remote_dir(remote_dir)
                 _info(f"Deleted remote directory {remote_dir} for rerun.")
-            n_up, n_sk = xfer.upload_dir(final_dir, remote_dir, verbose=getattr(args, "verbose", False))
+            n_up, n_sk = xfer.upload(summary_files, final_dir, remote_dir, verbose=_verbose)
+            for _fna in assembly_fastas:
+                remote_fna = f"{remote_dir}/{_assembly_remote_name(_fna)}"
+                if xfer.remote_exists(remote_fna):
+                    n_sk += 1
+                    if _verbose:
+                        print(f"  SKIP {_fna} (already exists remotely)", file=sys.stderr)
+                    continue
+                size_mb = _fna.stat().st_size / (1024 * 1024)
+                _info(
+                    f"  Compressing and uploading {_fna.name} ({size_mb:.0f} MB) "
+                    f"→ {_assembly_remote_name(_fna)} ..."
+                )
+                xfer.upload_stream(
+                    remote_fna,
+                    lambda handle, src=_fna: _gzip_into(src, handle),
+                    verbose=_verbose,
+                )
+                n_up += 1
         _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
         _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
 

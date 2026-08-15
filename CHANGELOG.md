@@ -3,6 +3,20 @@
 All notable changes to ehio are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- No unreleased changes yet.
+
+## [0.4.6] - 2026-08-15
+
+### Changed
+
+- `ehio binning --output` now uploads the **assemblies** to `Data/ASB/{batch}/`, compressed. drakkar writes them to `cataloging/megahit/{assembly}/{assembly}.fna`, which is outside `cataloging/final/` and was therefore never transferred: the only copy was deleted along with the output directory once `CLEANUP_OUTPUT_DIR` kicked in, so the assemblies behind every existing MAG are gone from ERDA. Each one is now streamed through gzip straight into the SFTP connection, so a multi-GB assembly never needs a second copy on the local disk. An assembly already on ERDA is skipped, which keeps a re-run of `--output` cheap.
+  - They land as `Data/ASB/{batch}/{assembly}_contigs.fasta.gz`, the name assemblies have carried on ERDA since before ehio (`ASB/ABB0112/EHA00405_contigs.fasta.gz`), rather than drakkar's own `{assembly}.fna` — so batches uploaded from now on sit under the same naming as everything already there.
+- The bin FASTAs are no longer uploaded to `Data/ASB/{batch}/`. The whole `cataloging/final/` tree was mirrored there, and that tree contains the per-assembly subdirectories holding the bins — so every bin was transferred twice: once uncompressed into `ASB/{batch}/{assembly}/{assembly}_bin_{n}.fa`, and once gzipped into `MAG/{batch}/{assembly}_bin_{n}.fa.gz`. Only the batch-level tables at the root of `cataloging/final/` (`all_bin_paths.txt`, `all_bin_metadata.csv`, the per-assembly `{assembly}.tsv` and the `{batch}_output.tsv` summary) now go to `ASB/{batch}/`; the MAG upload is unchanged. Bins already uploaded to `ASB/` by an earlier version have to be removed by hand.
+
 ## [0.4.5] - 2026-08-14
 
 ### Fixed
