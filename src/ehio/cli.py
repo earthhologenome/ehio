@@ -295,9 +295,13 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
 
     # Transfer preprocessed output files via SFTP
     ppr_dir = local_root / "preprocessing"
+    # No preprocessing output means the workflow never ran (drakkar exits 0 on
+    # some of its own error paths), so the batch must not be left in the
+    # launched status with nothing transferred: failing here makes the launch
+    # script set the error status.
     if not ppr_dir.is_dir():
-        _info(f"Preprocessing output directory not found ({ppr_dir}); skipping transfer.")
-        return 0
+        _die(f"Preprocessing output directory not found: {ppr_dir}. "
+             f"The batch is not finished — check the drakkar log.")
 
     host     = _conf(args, "host",     "SFTP_HOST",     required=True)
     user     = _conf(args, "user",     "SFTP_USER",     required=True)
@@ -566,6 +570,16 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     if not local_root.is_dir():
         _die(f"Local directory not found: {local_root}")
 
+    # A batch whose cataloging left no output has nothing to report, and
+    # marking it done would hide an unfinished run: drakkar exits 0 on some of
+    # its own error paths, so the missing output is the only sign that the
+    # workflow never ran.  Failing here makes the launch script set the error
+    # status instead.
+    final_dir = local_root / "cataloging" / "final"
+    if not final_dir.is_dir():
+        _die(f"Cataloging output directory not found: {final_dir}. "
+             f"The batch is not finished — check the drakkar log.")
+
     _info(f"Looking up batch '{args.batch}' in Airtable...")
     client = AirtableClient(api_key=token, base_id=base_id)
     batch_record, entries = client.fetch_batch_and_entries(
@@ -632,181 +646,177 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     else:
         _info("No assembly/binning metrics found to update.")
 
-    final_dir = local_root / "cataloging" / "final"
-    if not final_dir.is_dir():
-        _info(f"Final output directory not found ({final_dir}); skipping transfer.")
-    else:
-        host     = _conf(args, "host",     "SFTP_HOST",     required=True)
-        user     = _conf(args, "user",     "SFTP_USER",     required=True)
-        port     = int(_conf(args, "port", "SFTP_PORT") or 22)
-        identity = _conf(args, "identity", "SFTP_IDENTITY") or None
+    host     = _conf(args, "host",     "SFTP_HOST",     required=True)
+    user     = _conf(args, "user",     "SFTP_USER",     required=True)
+    port     = int(_conf(args, "port", "SFTP_PORT") or 22)
+    identity = _conf(args, "identity", "SFTP_IDENTITY") or None
 
-        remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
-        remote_dir  = f"{remote_base.rstrip('/')}/ASB/{args.batch}"
+    remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
+    remote_dir  = f"{remote_base.rstrip('/')}/ASB/{args.batch}"
 
-        import shutil as _shutil
-        if tsv_out is not None and tsv_out.exists():
-            _shutil.copy2(tsv_out, final_dir / tsv_out.name)
+    import shutil as _shutil
+    if tsv_out is not None and tsv_out.exists():
+        _shutil.copy2(tsv_out, final_dir / tsv_out.name)
 
-        # ASB/{batch} holds the assemblies and the batch-level summary tables.
-        # The bin FASTAs sit in the per-assembly subdirectories of final/ and go
-        # to MAG/{batch} compressed further down, so they are left out here
-        # instead of being transferred a second time, uncompressed.
-        summary_files = [p for p in sorted(final_dir.iterdir()) if p.is_file()]
-        assembly_fastas = _find_assembly_fastas(local_root)
-        if not assembly_fastas:
-            print(
-                f"  Warning: no assembly FASTA found under "
-                f"{local_root / 'cataloging' / 'megahit'}; only summary files "
-                f"will be transferred to {remote_dir}.",
-                file=sys.stderr,
-            )
-
-        _verbose = getattr(args, "verbose", False)
-        _info(
-            f"Transferring {len(summary_files)} summary file(s) and "
-            f"{len(assembly_fastas)} assembly FASTA(s) → {user}@{host}:{remote_dir} ..."
+    # ASB/{batch} holds the assemblies and the batch-level summary tables.
+    # The bin FASTAs sit in the per-assembly subdirectories of final/ and go
+    # to MAG/{batch} compressed further down, so they are left out here
+    # instead of being transferred a second time, uncompressed.
+    summary_files = [p for p in sorted(final_dir.iterdir()) if p.is_file()]
+    assembly_fastas = _find_assembly_fastas(local_root)
+    if not assembly_fastas:
+        print(
+            f"  Warning: no assembly FASTA found under "
+            f"{local_root / 'cataloging' / 'megahit'}; only summary files "
+            f"will be transferred to {remote_dir}.",
+            file=sys.stderr,
         )
-        _timeout = getattr(args, "connect_timeout", 300.0)
-        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
-            if getattr(args, "rerun", False):
-                xfer.remove_remote_dir(remote_dir)
-                _info(f"Deleted remote directory {remote_dir} for rerun.")
-            n_up, n_sk = xfer.upload(summary_files, final_dir, remote_dir, verbose=_verbose)
-            for _fna in assembly_fastas:
-                remote_fna = f"{remote_dir}/{_assembly_remote_name(_fna)}"
-                if xfer.remote_exists(remote_fna):
-                    n_sk += 1
-                    if _verbose:
-                        print(f"  SKIP {_fna} (already exists remotely)", file=sys.stderr)
-                    continue
-                size_mb = _fna.stat().st_size / (1024 * 1024)
-                _info(
-                    f"  Compressing and uploading {_fna.name} ({size_mb:.0f} MB) "
-                    f"→ {_assembly_remote_name(_fna)} ..."
-                )
-                xfer.upload_stream(
-                    remote_fna,
-                    lambda handle, src=_fna: _gzip_into(src, handle),
-                    verbose=_verbose,
-                )
-                n_up += 1
-        _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
-        _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
 
-        # --- Create MAG_ENTRY records and upload FASTA files ----------------
-        bin_metadata_csv = final_dir / "all_bin_metadata.csv"
-        bin_paths_txt    = final_dir / "all_bin_paths.txt"
-        mag_base_id      = str(cfg.get("MAG_BASE") or "").strip()
+    _verbose = getattr(args, "verbose", False)
+    _info(
+        f"Transferring {len(summary_files)} summary file(s) and "
+        f"{len(assembly_fastas)} assembly FASTA(s) → {user}@{host}:{remote_dir} ..."
+    )
+    _timeout = getattr(args, "connect_timeout", 300.0)
+    with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
+        if getattr(args, "rerun", False):
+            xfer.remove_remote_dir(remote_dir)
+            _info(f"Deleted remote directory {remote_dir} for rerun.")
+        n_up, n_sk = xfer.upload(summary_files, final_dir, remote_dir, verbose=_verbose)
+        for _fna in assembly_fastas:
+            remote_fna = f"{remote_dir}/{_assembly_remote_name(_fna)}"
+            if xfer.remote_exists(remote_fna):
+                n_sk += 1
+                if _verbose:
+                    print(f"  SKIP {_fna} (already exists remotely)", file=sys.stderr)
+                continue
+            size_mb = _fna.stat().st_size / (1024 * 1024)
+            _info(
+                f"  Compressing and uploading {_fna.name} ({size_mb:.0f} MB) "
+                f"→ {_assembly_remote_name(_fna)} ..."
+            )
+            xfer.upload_stream(
+                remote_fna,
+                lambda handle, src=_fna: _gzip_into(src, handle),
+                verbose=_verbose,
+            )
+            n_up += 1
+    _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
+    _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
 
-        if not bin_metadata_csv.exists():
-            _info(f"No bin metadata CSV found ({bin_metadata_csv}); skipping MAG creation.")
-        elif not mag_base_id:
-            _info("MAG_BASE not configured; skipping MAG creation.")
+    # --- Create MAG_ENTRY records and upload FASTA files ----------------
+    bin_metadata_csv = final_dir / "all_bin_metadata.csv"
+    bin_paths_txt    = final_dir / "all_bin_paths.txt"
+    mag_base_id      = str(cfg.get("MAG_BASE") or "").strip()
+
+    if not bin_metadata_csv.exists():
+        _info(f"No bin metadata CSV found ({bin_metadata_csv}); skipping MAG creation.")
+    elif not mag_base_id:
+        _info("MAG_BASE not configured; skipping MAG creation.")
+    else:
+        mag_table          = _require_cfg("MAG_ENTRY")
+        mag_client         = AirtableClient(api_key=token, base_id=mag_base_id)
+        mag_name_fld       = str(cfg.get("MAG_ENTRY_NAME")       or "").strip()
+        mag_assembly_fld   = str(cfg.get("MAG_ENTRY_ASSEMBLY")   or "").strip()
+        mag_annotated_fld  = str(cfg.get("MAG_ENTRY_ANNOTATED")  or "").strip()
+        mag_field_map: dict[str, str] = {}
+        for _mk, _ck in BIN_METRIC_KEYS.items():
+            _fid = str(cfg.get(_ck) or "").strip()
+            if _fid:
+                mag_field_map[_mk] = _fid
+
+        remote_mag_dir = f"{remote_base.rstrip('/')}/MAG/{args.batch}"
+        _info(f"bin_metadata_csv: {bin_metadata_csv}")
+        _info(f"bin_paths_txt:    {bin_paths_txt} (exists: {bin_paths_txt.exists()})")
+
+        # Collect FASTA files listed in all_bin_paths.txt
+        bin_files: list[Path] = []
+        if bin_paths_txt.exists():
+            raw_lines = [l.strip() for l in bin_paths_txt.read_text().splitlines() if l.strip()]
+            _info(f"all_bin_paths.txt contains {len(raw_lines)} path(s).")
+            for _line in raw_lines:
+                _p = local_root / _line
+                if _p.exists():
+                    bin_files.append(_p)
+                else:
+                    _info(f"  FASTA not found (skipped): {_p}")
+            _info(f"{len(bin_files)} of {len(raw_lines)} FASTA file(s) resolved.")
         else:
-            mag_table          = _require_cfg("MAG_ENTRY")
-            mag_client         = AirtableClient(api_key=token, base_id=mag_base_id)
-            mag_name_fld       = str(cfg.get("MAG_ENTRY_NAME")       or "").strip()
-            mag_assembly_fld   = str(cfg.get("MAG_ENTRY_ASSEMBLY")   or "").strip()
-            mag_annotated_fld  = str(cfg.get("MAG_ENTRY_ANNOTATED")  or "").strip()
-            mag_field_map: dict[str, str] = {}
-            for _mk, _ck in BIN_METRIC_KEYS.items():
-                _fid = str(cfg.get(_ck) or "").strip()
-                if _fid:
-                    mag_field_map[_mk] = _fid
+            _info("all_bin_paths.txt not found; no FASTA files will be uploaded.")
 
-            remote_mag_dir = f"{remote_base.rstrip('/')}/MAG/{args.batch}"
-            _info(f"bin_metadata_csv: {bin_metadata_csv}")
-            _info(f"bin_paths_txt:    {bin_paths_txt} (exists: {bin_paths_txt.exists()})")
+        # Build and create MAG_ENTRY records
+        bins_data = parse_bin_metadata_csv(bin_metadata_csv)
+        _info(f"Parsed {len(bins_data)} bin(s) from {bin_metadata_csv.name}.")
 
-            # Collect FASTA files listed in all_bin_paths.txt
-            bin_files: list[Path] = []
-            if bin_paths_txt.exists():
-                raw_lines = [l.strip() for l in bin_paths_txt.read_text().splitlines() if l.strip()]
-                _info(f"all_bin_paths.txt contains {len(raw_lines)} path(s).")
-                for _line in raw_lines:
-                    _p = local_root / _line
-                    if _p.exists():
-                        bin_files.append(_p)
-                    else:
-                        _info(f"  FASTA not found (skipped): {_p}")
-                _info(f"{len(bin_files)} of {len(raw_lines)} FASTA file(s) resolved.")
-            else:
-                _info("all_bin_paths.txt not found; no FASTA files will be uploaded.")
+        # Check which genomes already have a MAG_ENTRY record to avoid duplicates on resume
+        existing_mag_names: set[str] = set()
+        if mag_name_fld:
+            all_genome_names = [str(r.get("genome", "")) for r in bins_data if r.get("genome")]
+            if all_genome_names:
+                _info(f"Checking for existing MAG_ENTRY records ({len(all_genome_names)} genomes)...")
+                existing_mag_names = mag_client.fetch_existing_values(
+                    mag_table, mag_name_fld, all_genome_names
+                )
+                if existing_mag_names:
+                    _info(f"Found {len(existing_mag_names)} existing MAG_ENTRY records — skipping those.")
 
-            # Build and create MAG_ENTRY records
-            bins_data = parse_bin_metadata_csv(bin_metadata_csv)
-            _info(f"Parsed {len(bins_data)} bin(s) from {bin_metadata_csv.name}.")
-
-            # Check which genomes already have a MAG_ENTRY record to avoid duplicates on resume
-            existing_mag_names: set[str] = set()
+        records_to_create: list[dict] = []
+        for bin_row in bins_data:
+            genome = bin_row.get("genome", "")
+            if not genome:
+                continue
+            if genome in existing_mag_names:
+                continue
+            genome_name   = genome.removesuffix(".fa").removesuffix(".fasta")
+            assembly_code = genome_name.split("_bin_")[0] if "_bin_" in genome_name else genome_name
+            rec_fields: dict = {}
             if mag_name_fld:
-                all_genome_names = [str(r.get("genome", "")) for r in bins_data if r.get("genome")]
-                if all_genome_names:
-                    _info(f"Checking for existing MAG_ENTRY records ({len(all_genome_names)} genomes)...")
-                    existing_mag_names = mag_client.fetch_existing_values(
-                        mag_table, mag_name_fld, all_genome_names
-                    )
-                    if existing_mag_names:
-                        _info(f"Found {len(existing_mag_names)} existing MAG_ENTRY records — skipping those.")
+                rec_fields[mag_name_fld] = genome
+            if mag_assembly_fld:
+                rec_fields[mag_assembly_fld] = assembly_code
 
-            records_to_create: list[dict] = []
-            for bin_row in bins_data:
-                genome = bin_row.get("genome", "")
-                if not genome:
-                    continue
-                if genome in existing_mag_names:
-                    continue
-                genome_name   = genome.removesuffix(".fa").removesuffix(".fasta")
-                assembly_code = genome_name.split("_bin_")[0] if "_bin_" in genome_name else genome_name
-                rec_fields: dict = {}
-                if mag_name_fld:
-                    rec_fields[mag_name_fld] = genome
-                if mag_assembly_fld:
-                    rec_fields[mag_assembly_fld] = assembly_code
+            for metric, fld_id in mag_field_map.items():
+                val = bin_row.get(metric)
+                if val is not None:
+                    rec_fields[fld_id] = val
+            if rec_fields:
+                records_to_create.append(rec_fields)
 
-                for metric, fld_id in mag_field_map.items():
-                    val = bin_row.get(metric)
-                    if val is not None:
-                        rec_fields[fld_id] = val
-                if rec_fields:
-                    records_to_create.append(rec_fields)
+        if records_to_create:
+            _info(f"Creating {len(records_to_create)} MAG_ENTRY records in Airtable...")
+            mag_client.create_records(mag_table, records_to_create)
+            _info("MAG_ENTRY records created.")
+        else:
+            _info("No new MAG_ENTRY records to create.")
 
-            if records_to_create:
-                _info(f"Creating {len(records_to_create)} MAG_ENTRY records in Airtable...")
-                mag_client.create_records(mag_table, records_to_create)
-                _info("MAG_ENTRY records created.")
-            else:
-                _info("No new MAG_ENTRY records to create.")
+        # Compress and upload FASTA files to MAG/{batch}/
+        if bin_files:
+            import gzip as _gzip
+            _info(f"Uploading {len(bin_files)} compressed FASTA files to {remote_mag_dir} ...")
+            n_mag_up = n_mag_sk = 0
+            with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
+                if getattr(args, "rerun", False):
+                    xfer.remove_remote_dir(remote_mag_dir)
+                    _info(f"Deleted remote MAG directory {remote_mag_dir} for rerun.")
+                xfer._ensure_remote_dir(remote_mag_dir)
+                for _fa in bin_files:
+                    _gz = Path(str(_fa) + ".gz")
+                    try:
+                        with _fa.open("rb") as _fin, _gzip.open(_gz, "wb") as _fout:
+                            _shutil.copyfileobj(_fin, _fout)
+                        _up, _sk = xfer.upload_flat([_gz], remote_mag_dir,
+                                                    verbose=getattr(args, "verbose", False))
+                        n_mag_up += _up
+                        n_mag_sk += _sk
+                    finally:
+                        _gz.unlink(missing_ok=True)
+            _skip_msg = f", {n_mag_sk} already present (skipped)" if n_mag_sk else ""
+            _info(f"Uploaded {n_mag_up} compressed FASTA files to {remote_mag_dir}{_skip_msg}.")
 
-            # Compress and upload FASTA files to MAG/{batch}/
-            if bin_files:
-                import gzip as _gzip
-                _info(f"Uploading {len(bin_files)} compressed FASTA files to {remote_mag_dir} ...")
-                n_mag_up = n_mag_sk = 0
-                with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
-                    if getattr(args, "rerun", False):
-                        xfer.remove_remote_dir(remote_mag_dir)
-                        _info(f"Deleted remote MAG directory {remote_mag_dir} for rerun.")
-                    xfer._ensure_remote_dir(remote_mag_dir)
-                    for _fa in bin_files:
-                        _gz = Path(str(_fa) + ".gz")
-                        try:
-                            with _fa.open("rb") as _fin, _gzip.open(_gz, "wb") as _fout:
-                                _shutil.copyfileobj(_fin, _fout)
-                            _up, _sk = xfer.upload_flat([_gz], remote_mag_dir,
-                                                        verbose=getattr(args, "verbose", False))
-                            n_mag_up += _up
-                            n_mag_sk += _sk
-                        finally:
-                            _gz.unlink(missing_ok=True)
-                _skip_msg = f", {n_mag_sk} already present (skipped)" if n_mag_sk else ""
-                _info(f"Uploaded {n_mag_up} compressed FASTA files to {remote_mag_dir}{_skip_msg}.")
-
-        cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
-        if cleanup not in ("false", "0", "no"):
-            _shutil.rmtree(local_root, ignore_errors=True)
-            _info(f"Deleted output directory {local_root}.")
+    cleanup = str(cfg.get("CLEANUP_OUTPUT_DIR") or "true").strip().lower()
+    if cleanup not in ("false", "0", "no"):
+        _shutil.rmtree(local_root, ignore_errors=True)
+        _info(f"Deleted output directory {local_root}.")
 
     batch_fields: dict = {}
     ehio_version_field    = str(cfg.get("EHI_ASB_BATCH_EHIO_VERSION")    or "").strip()

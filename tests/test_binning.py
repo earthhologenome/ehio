@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import argparse
 import gzip
 import io
 from pathlib import Path
 
 import pytest
 
-from ehio.cli import _assembly_remote_name, _find_assembly_fastas, _gzip_into
+from ehio.cli import (
+    _assembly_remote_name,
+    _find_assembly_fastas,
+    _gzip_into,
+    _run_binning_output,
+)
 
 
 CONTIGS = ">EHA00405_1\nACGTACGTACGT\n>EHA00405_2\nTTTTGGGGCCCC\n"
@@ -65,3 +71,14 @@ def test_gzip_into_writes_a_readable_archive(tmp_path: Path) -> None:
     _gzip_into(source, handle)
 
     assert gzip.decompress(handle.getvalue()).decode() == CONTIGS
+
+
+def test_binning_output_refuses_a_batch_without_cataloging_output(tmp_path: Path) -> None:
+    """drakkar exits 0 on some of its own error paths; an empty output
+    directory must fail the step instead of marking the batch as done."""
+    args = argparse.Namespace(
+        batch="ASB001", local_dir=str(tmp_path), airtable_token="tok", verbose=False,
+    )
+    with pytest.raises(SystemExit):
+        _run_binning_output(args)
+

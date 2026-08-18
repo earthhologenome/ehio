@@ -288,13 +288,35 @@ class TestBuildScriptContent:
 # ---------------------------------------------------------------------------
 
 class TestResumeFlag:
+    _INPUT_FILE = {
+        "preprocessing": "/run/BATCH001/BATCH001.tsv",
+        "binning":       "/run/BATCH001/BATCH001.tsv",
+        "quantifying":   "/run/BATCH001/BATCH001_mags.tsv",
+    }
+
     @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
-    def test_resume_skips_input_step(self, module: str):
+    def test_resume_reuses_the_existing_input_file(self, module: str):
         script = build_script_content(
             module, "BATCH001", "/run/BATCH001", "/out/BATCH001", "slurm",
             resume=True,
         )
-        assert f"ehio {module} --input" not in script
+        input_line = next(l for l in script.splitlines() if f"ehio {module} --input" in l)
+        assert input_line.startswith(f"[ -s {self._INPUT_FILE[module]} ] || ")
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_resume_clears_a_stale_snakemake_lock(self, module: str):
+        script = build_script_content(
+            module, "BATCH001", "/run/BATCH001", "/out/BATCH001", "slurm",
+            resume=True,
+        )
+        assert "drakkar unlock -o /out/BATCH001 -p slurm || true" in script
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_no_resume_does_not_unlock(self, module: str):
+        script = build_script_content(
+            module, "BATCH001", "/run/BATCH001", "/out/BATCH001", "slurm",
+        )
+        assert "drakkar unlock" not in script
 
     @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
     def test_resume_keeps_drakkar_and_output_steps(self, module: str):
@@ -312,7 +334,8 @@ class TestResumeFlag:
             module, "BATCH001", "/run/BATCH001", "/out/BATCH001", "slurm",
             resume=False,
         )
-        assert f"ehio {module} --input" in script
+        input_line = next(l for l in script.splitlines() if f"ehio {module} --input" in l)
+        assert input_line.startswith(f"ehio {module} --input")
 
     def test_resume_tsv_path_still_passed_to_drakkar(self):
         script = build_script_content(
@@ -320,6 +343,73 @@ class TestResumeFlag:
             resume=True,
         )
         assert "ASB001.tsv" in script
+
+
+# ---------------------------------------------------------------------------
+# drakkar silent no-op guards
+# ---------------------------------------------------------------------------
+
+class TestDrakkarNoOpGuards:
+    """drakkar exits 0 on several of its own error paths (a stale Snakemake
+    lock, a missing input file), so the script must not read that as success."""
+
+    _PRODUCT = {
+        "preprocessing": "/out/B001/preprocessing/final",
+        "binning":       "/out/B001/cataloging/final",
+        "quantifying":   "/out/B001/profiling_genomes/drep/dereplicated_genomes",
+    }
+
+    def _script(self, module: str, **kwargs) -> str:
+        return build_script_content(
+            module, "B001", "/run/B001", "/out/B001", "slurm", **kwargs,
+        )
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_every_drakkar_call_is_bracketed_by_the_metadata_check(self, module: str):
+        lines = [l.strip() for l in self._script(module).splitlines()]
+        for i, line in enumerate(lines):
+            if not line.startswith("drakkar ") or line.startswith("drakkar unlock"):
+                continue
+            assert lines[i - 1] == "_ehio_drakkar_start"
+            assert lines[i + 1].startswith("_ehio_drakkar_check")
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_metadata_check_fails_when_no_run_was_started(self, module: str):
+        script = self._script(module)
+        check = script.split("_ehio_drakkar_check() {")[1].split("\n}")[0]
+        assert '-newer "$_EHIO_MARKER"' in check
+        assert 'grep -q "^status: success"' in check
+        assert check.count("exit 1") == 2
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_metadata_check_is_skipped_for_drakkar_without_run_metadata(self, module: str):
+        check = self._script(module).split("_ehio_drakkar_check() {")[1].split("\n}")[0]
+        assert "ls /out/B001/drakkar_*.yaml >/dev/null 2>&1" in check
+        assert "return 0" in check
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_output_step_runs_only_after_the_product_check(self, module: str):
+        script = self._script(module)
+        require_pos = script.index(f"_ehio_require {self._PRODUCT[module]}")
+        output_pos  = script.index(f"ehio {module} --output")
+        assert require_pos < output_pos
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_missing_product_exits_non_zero(self, module: str):
+        require = self._script(module).split("_ehio_require() {")[1].split("\n}")[0]
+        assert 'if [ ! -e "$1" ]' in require
+        assert "exit 1" in require
+
+    def test_marker_lives_in_the_run_dir(self):
+        assert "_EHIO_MARKER=/run/B001/.ehio_drakkar_marker" in self._script("binning")
+
+    def test_conditional_drakkar_call_keeps_its_guard(self):
+        script = self._script("quantifying", resume=True)
+        block = script.split("if [ ! -d /out/B001/profiling_genomes/drep/dereplicated_genomes ]; then\n")[1]
+        block = block.split("fi\n")[0]
+        assert "_ehio_drakkar_start" in block
+        assert "drakkar profiling" in block
+        assert "_ehio_drakkar_check profiling" in block
 
 
 # ---------------------------------------------------------------------------

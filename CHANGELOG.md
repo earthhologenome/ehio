@@ -9,6 +9,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.6.2] - 2026-08-18
+
+### Fixed
+
+- A resumed batch could go straight to `Done` without drakkar ever running again. drakkar reports several of its own errors by printing a message and returning, which leaves its exit status at **0** — most importantly the Snakemake lock a killed batch leaves behind in the output directory (`Output directory is locked and no interactive prompt is available`), and an input file it cannot find. `set -e` read that as a successful workflow, `ehio <module> --output` found no results, warned, and set the batch to the done status. Three changes close it:
+  - Every drakkar call in the launch script is now bracketed by a check of the run metadata drakkar writes next to the results (`drakkar_<run id>.yaml`, stamped `status: success` once the workflow ends). A call that exits 0 without starting a run, or whose run did not finish, fails the script, so the exit trap sets the error status. Older drakkar builds that write no run metadata are not affected: the check is skipped when the output directory holds no metadata at all, and the product check below still applies.
+  - The products each step must have left behind (`preprocessing/final`, `cataloging/final`, the dereplicated genomes, `annotating/genome_taxonomy.tsv`) are required before the matching `--output` step runs, and `ehio binning --output` refuses a batch whose `cataloging/final` is missing instead of reporting nothing and marking it done. `ehio preprocessing --output` fails on a missing `preprocessing/` directory as well, where it used to return quietly and leave the batch in the launched status.
+  - A resumed batch clears the stale Snakemake lock first (`drakkar unlock`), which is what lets it continue from the checkpoint at all, and rebuilds its input file if the run directory no longer holds one, instead of handing drakkar a path that does not exist.
 ## [0.6.1] - 2026-08-18
 
 ### Fixed

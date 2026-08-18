@@ -215,6 +215,9 @@ def build_script_content(
     # 'ehio stop' drops this file before killing the screen session, so the
     # exit trap below can tell a deliberate stop from a genuine failure.
     stop_file = f"{run_dir}/{STOP_SENTINEL}"
+    # Touched right before every drakkar call, so the run metadata written by
+    # that call can be told apart from the metadata of earlier runs.
+    marker_file = f"{run_dir}/.ehio_drakkar_marker"
 
     conda_block = ""
     if ehio_conda_env:
@@ -281,8 +284,72 @@ def build_script_content(
         "}\n"
         "trap _on_exit EXIT\n"
         "\n"
+        # drakkar reports several of its own errors — a Snakemake lock left
+        # behind by a killed batch, an input file it cannot find — by printing
+        # a message and returning, which leaves the exit status at 0.  Without
+        # the checks below 'set -e' reads that as a successful run, the output
+        # step finds no results, and the batch is marked as done although
+        # nothing ran.  Two independent signals catch it: the run metadata
+        # drakkar writes next to the results (drakkar_<run id>.yaml, stamped
+        # 'status: success' once the workflow ends) and the products the
+        # workflow must have left behind.
+        f"_EHIO_MARKER={q(marker_file)}\n"
+        "_ehio_drakkar_start() {\n"
+        '    rm -f "$_EHIO_MARKER"\n'
+        '    touch "$_EHIO_MARKER"\n'
+        "}\n"
+        "_ehio_drakkar_check() {\n"
+        f'    if ! ls {q(output_dir)}/drakkar_*.yaml >/dev/null 2>&1; then\n'
+        "        return 0\n"
+        "    fi\n"
+        f'    _EHIO_META=$(find {q(output_dir)} -maxdepth 1 -name "drakkar_*.yaml"'
+        ' -newer "$_EHIO_MARKER" 2>/dev/null | sort | tail -n 1)\n'
+        '    if [ -z "${_EHIO_META:-}" ]; then\n'
+        '        echo "=== ehio: drakkar $1 exited without starting a workflow run ===" >&2\n'
+        "        exit 1\n"
+        "    fi\n"
+        '    if ! grep -q "^status: success" "$_EHIO_META"; then\n'
+        '        echo "=== ehio: drakkar $1 did not finish successfully (see $_EHIO_META) ===" >&2\n'
+        "        exit 1\n"
+        "    fi\n"
+        "}\n"
+        "_ehio_require() {\n"
+        '    if [ ! -e "$1" ]; then\n'
+        '        echo "=== ehio: drakkar $2 left no output at $1 ===" >&2\n'
+        "        exit 1\n"
+        "    fi\n"
+        "}\n"
+        "\n"
         f"mkdir -p {q(run_dir)} {q(output_dir)}\n"
         f"cd {q(output_dir)}\n"
+    )
+
+    def drakkar_step(command: str, label: str) -> str:
+        """A drakkar call bracketed by the run-metadata check."""
+        return "_ehio_drakkar_start\n" + command + f"_ehio_drakkar_check {q(label)}\n"
+
+    def optional_drakkar_step(condition: str, command: str, label: str) -> str:
+        """A drakkar call that is skipped when its result is already there."""
+        body = "".join(f"    {line}\n" for line in drakkar_step(command, label).splitlines())
+        return f"if {condition}; then\n{body}fi\n"
+
+    def input_step_of(command: str, produced: str) -> str:
+        """The '--input' step; on resume it only runs if its file is missing.
+
+        A resumed batch reuses the input file written by the original launch,
+        but that file is gone whenever the run directory was cleaned, and
+        drakkar exits 0 when it cannot find it — so it is rebuilt instead of
+        letting the batch fail silently.
+        """
+        return (f"[ -s {q(produced)} ] || " if resume else "") + command
+
+    # A batch that was killed — by 'ehio stop', or by the driver dying — leaves
+    # the Snakemake lock behind in the output directory, and drakkar refuses to
+    # start over a locked directory.  Clearing it is what makes a resume able to
+    # continue from the checkpoint at all.
+    unlock_step = (
+        f"{drakkar_prefix}drakkar unlock -o {q(output_dir)} -p {q(profile)} || true\n"
+        if resume else ""
     )
 
     time_part   = f" --time-multiplier {boost_time}"     if boost_time   and boost_time   > 1 else ""
@@ -294,10 +361,17 @@ def build_script_content(
         ref_part       = f" {ref_flag}" if ref_flag else ""
         fraction_part  = " --fraction"  if ppr_fraction  else ""
         nonpareil_part = " --nonpareil" if ppr_nonpareil else ""
-        input_step = "" if resume else f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n"
+        input_step = input_step_of(
+            f"ehio preprocessing --input -b {q(batch_name)} -f {q(tsv_file)}\n", tsv_file,
+        )
         return header + (
             input_step
-            + f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}{fraction_part}{nonpareil_part}{boost_parts}\n"
+            + unlock_step
+            + drakkar_step(
+                f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{ref_part}{fraction_part}{nonpareil_part}{boost_parts}\n",
+                "preprocessing",
+            )
+            + f"_ehio_require {q(output_dir + '/preprocessing/final')} {q('preprocessing')}\n"
             + f"ehio preprocessing --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             + "_EHIO_SUCCESS=1\n"
         )
@@ -306,10 +380,17 @@ def build_script_content(
         # -c maps every sample of the batch to every individual assembly, so the
         # binners see a coverage profile per assembly instead of a single depth.
         multicoverage_part = " -c" if multicoverage else ""
-        input_step = "" if resume else f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n"
+        input_step = input_step_of(
+            f"ehio binning --input -b {q(batch_name)} -f {q(tsv_file)}\n", tsv_file,
+        )
         return header + (
             input_step
-            + f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{multicoverage_part}{boost_parts}\n"
+            + unlock_step
+            + drakkar_step(
+                f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(tsv_file)} -o {q(output_dir)} -p {q(profile)}{multicoverage_part}{boost_parts}\n",
+                "cataloging",
+            )
+            + f"_ehio_require {q(output_dir + '/cataloging/final')} {q('cataloging')}\n"
             + f"ehio binning --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             + "_EHIO_SUCCESS=1\n"
         )
@@ -320,11 +401,12 @@ def build_script_content(
         quality_file = f"{run_dir}/{batch_name}_quality.tsv"
         ani_part     = f" -a {q(ani_threshold)}"   if ani_threshold  else ""
         type_part    = f" -t {q(profiling_type)}"  if profiling_type else ""
-        input_step   = "" if resume else (
+        input_step   = input_step_of(
             f"ehio quantifying --input -b {q(batch_name)}"
             f" --mags-file {q(mags_file)}"
             f" --reads-file {q(reads_file)}"
-            f" --quality-file {q(quality_file)}\n"
+            f" --quality-file {q(quality_file)}\n",
+            mags_file,
         )
         derep_genomes_dir         = f"{output_dir}/profiling_genomes/drep/dereplicated_genomes"
         annotation_file           = f"{run_dir}/{batch_name}_annotation.tsv"
@@ -337,10 +419,15 @@ def build_script_content(
         qfy_status           = str(cfg.get("QUANTIFYING_RUNNING_STATUS")  or "Quantifying").strip()
         ann_tax_status       = str(cfg.get("ANNOTATING_TAXONOMY_STATUS")  or "Annotating taxonomy").strip()
         ann_func_status      = str(cfg.get("ANNOTATING_FUNCTION_STATUS")  or "Annotating function").strip()
+        profiling_cmd = (
+            f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(mags_file)} -R {q(reads_file)}{ani_part}{type_part} -q {q(quality_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
+        )
+        taxonomy_cmd = (
+            f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
+        )
         if resume:
-            profiling_step = (
-                f"[ -d {q(derep_genomes_dir)} ] || "
-                f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(mags_file)} -R {q(reads_file)}{ani_part}{type_part} -q {q(quality_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
+            profiling_step = optional_drakkar_step(
+                f"[ ! -d {q(derep_genomes_dir)} ]", profiling_cmd, "profiling",
             )
             qfy_output_step = (
                 f"if [ ! -f {q(qfy_output_sentinel)} ]; then\n"
@@ -348,37 +435,40 @@ def build_script_content(
                 f"  touch {q(qfy_output_sentinel)}\n"
                 f"fi\n"
             )
-            taxonomy_step = (
-                f"[ -f {q(taxonomy_tsv)} ] || "
-                f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
+            taxonomy_step = optional_drakkar_step(
+                f"[ ! -f {q(taxonomy_tsv)} ]", taxonomy_cmd, "annotating taxonomy",
             )
             ann_input_step = (
                 f"[ -s {q(annotation_file)} ] || "
                 f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}{rerun_flag}\n"
             )
         else:
-            profiling_step = (
-                f"{drakkar_prefix}drakkar {drakkar_sub} -B {q(mags_file)} -R {q(reads_file)}{ani_part}{type_part} -q {q(quality_file)} -o {q(output_dir)} -p {q(profile)}{boost_parts}\n"
-            )
+            profiling_step = drakkar_step(profiling_cmd, "profiling")
             qfy_output_step = f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
-            taxonomy_step = (
-                f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
-            )
+            taxonomy_step = drakkar_step(taxonomy_cmd, "annotating taxonomy")
             ann_input_step = f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}{rerun_flag}\n"
-        clusters_step = (
-            f"[ -s {q(annotation_clusters_file)} ] && "
-            f"{drakkar_prefix}drakkar annotating -B {q(annotation_clusters_file)} -p {q(profile)}{boost_parts} --annotation-type clusters\n"
+        clusters_step = optional_drakkar_step(
+            f"[ -s {q(annotation_clusters_file)} ]",
+            f"{drakkar_prefix}drakkar annotating -B {q(annotation_clusters_file)} -p {q(profile)}{boost_parts} --annotation-type clusters\n",
+            "annotating clusters",
         ) if annotation_type.lower() == "all" else ""
         return header + (
             f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(qfy_status)}\n"
             + input_step
+            + unlock_step
             + profiling_step
+            + f"_ehio_require {q(derep_genomes_dir)} {q('profiling')}\n"
             + qfy_output_step
             + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_tax_status)}\n"
             + taxonomy_step
+            + f"_ehio_require {q(taxonomy_tsv)} {q('annotating taxonomy')}\n"
             + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_func_status)}\n"
             + ann_input_step
-            + f"[ -s {q(annotation_file)} ] && {drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type {q(drakkar_ann_flag)}\n"
+            + optional_drakkar_step(
+                f"[ -s {q(annotation_file)} ]",
+                f"{drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type {q(drakkar_ann_flag)}\n",
+                "annotating function",
+            )
             + clusters_step
             + f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
             + "_EHIO_SUCCESS=1\n"
