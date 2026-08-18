@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.6.1] - 2026-08-18
+
+### Fixed
+
+- `ehio stop` crashed with `ValueError: too many values to unpack (expected 4)` before doing anything, for every module. `_SET_STATUS_CFG` gained a fifth key (the error-files field) when failure reports started being attached to batch records, and `cmd_set_status` was updated to read it while `cmd_stop` kept unpacking four — so no batch could be stopped through ehio since. `cmd_stop` now ignores the extra key, and the command is covered by tests that run it for all three modules.
+
 ## [0.6.0] - 2026-08-18
 
 ### Added

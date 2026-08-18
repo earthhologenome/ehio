@@ -1963,7 +1963,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
     # the batch was stopped on purpose, so it does not flag it as an error.
     from ehio.scanning import STOP_SENTINEL
 
-    base_cfg, table_cfg, code_cfg, status_cfg = _SET_STATUS_CFG[args.module]
+    base_cfg, table_cfg, code_cfg, status_cfg, _ = _SET_STATUS_CFG[args.module]
     token            = _resolve_token(args)
     base_id          = _require_cfg(base_cfg)
     batch_table      = _require_cfg(table_cfg)
