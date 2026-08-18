@@ -15,6 +15,9 @@ from ehio import config as cfg
 from ehio.airtable import AirtableClient, AirtableError
 from ehio.drakkar import normalise_assembly_type
 
+# Marker file written by 'ehio stop' in the run directory of a batch.
+STOP_SENTINEL = ".ehio_stopped"
+
 _PRIMARY_BASE = {
     "preprocessing": "EHI_BASE",
     "binning":       "EHI_BASE",
@@ -209,6 +212,9 @@ def build_script_content(
 
     out_file = f"{run_dir}/{batch_name}.out"
     err_file = f"{run_dir}/{batch_name}.err"
+    # 'ehio stop' drops this file before killing the screen session, so the
+    # exit trap below can tell a deliberate stop from a genuine failure.
+    stop_file = f"{run_dir}/{STOP_SENTINEL}"
 
     conda_block = ""
     if ehio_conda_env:
@@ -238,6 +244,9 @@ def build_script_content(
         'echo "=== $(date \'+%Y-%m-%d %H:%M:%S\') ===" >&2\n'
         "\n"
         + conda_block +
+        # A stop marker left by an earlier 'ehio stop' must not silence the
+        # error reporting of this launch.
+        f"rm -f {q(stop_file)}\n"
         "_EHIO_SUCCESS=0\n"
         # Only failure reports written after this point belong to this launch.
         "_EHIO_STARTED=$(date +%s)\n"
@@ -260,6 +269,10 @@ def build_script_content(
         f'    echo "=== ehio: end of failure report (full log: {out_file}) ===" >&2\n'
         "}\n"
         "_on_exit() {\n"
+        f'    if [ -f {q(stop_file)} ]; then\n'
+        f'        echo "=== ehio: batch {batch_name} stopped on request ===" >&2\n'
+        "        return 0\n"
+        "    fi\n"
         '    if [ "$_EHIO_SUCCESS" -ne 1 ]; then\n'
         "        _ehio_report_failure || true\n"
         f"        ehio set-status --module {module} --batch {q(batch_name)} --status {q(error_status)}"

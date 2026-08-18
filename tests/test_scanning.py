@@ -9,6 +9,7 @@ from ehio.scanning import (
     BatchLaunchError,
     build_script_content,
     session_exists,
+    STOP_SENTINEL,
     _verify_reference,
     MODULES,
     DRAKKAR_CMD,
@@ -107,6 +108,27 @@ class TestBuildScriptContent:
         script = self._script()
         assert "_EHIO_STARTED=$(date +%s)" in script
         assert script.index("_EHIO_STARTED=$(date") < script.index("trap _on_exit EXIT")
+
+    # --- stop marker ---
+
+    def test_stop_marker_short_circuits_the_trap(self):
+        script = self._script()
+        trap = script.split("_on_exit() {")[1].split("\n}")[0]
+        assert f"[ -f {RUN_DIR}/{STOP_SENTINEL} ]" in trap
+        # the check comes before the failure handling, and returns without it
+        assert trap.index(STOP_SENTINEL) < trap.index("_EHIO_SUCCESS")
+        assert "return 0" in trap
+
+    def test_stop_marker_removed_at_launch(self):
+        script = self._script()
+        assert f"rm -f {RUN_DIR}/{STOP_SENTINEL}" in script
+        assert script.index("rm -f") < script.index("trap _on_exit EXIT")
+
+    def test_stop_marker_lives_in_the_run_dir(self):
+        script = build_script_content(
+            "preprocessing", "PPR001", "/other/run", OUT_DIR, "slurm",
+        )
+        assert f"/other/run/{STOP_SENTINEL}" in script
 
     def test_error_status_is_configurable(self):
         script = self._script(error_status="Failed")

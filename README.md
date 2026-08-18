@@ -258,6 +258,32 @@ If any step fails, the exit trap of the launch script appends a failure report t
 
 ---
 
+### `ehio stop` and `ehio jobs`
+
+A running batch is a screen session holding the drakkar workflow, plus the Slurm jobs that workflow has submitted. `ehio stop` ends both:
+
+1. Writes a stop marker (`{RUN_BASE}/{batch}/.ehio_stopped`), so the exit trap of the dying launch script reports the stop instead of flagging the batch as an error.
+2. Quits the screen session. This comes first on purpose — while the workflow is alive it resubmits any job cancelled under it (the drakkar slurm profile runs with `retries` and `keep-going`).
+3. Cancels every queued or running Slurm job of the batch, re-checking the queue afterwards in case jobs were submitted while it was cancelling.
+4. Sets the batch status to `SCANNING_STOPPED_STATUS` (default: `Stopped`).
+
+The jobs of a batch are recognised in two independent ways, so orphans left by an earlier session are caught as well: by the directory they were submitted from ( `{MODULE_OUTPUT_BASE}/{batch}` or `{RUN_BASE}/{batch}`), and by the snakemake run ids that the Slurm executor uses as job names and logs as `SLURM run ID: <uuid>` in `{RUN_BASE}/{batch}/{batch}.out` — a batch can hold several of those, since quantifying calls drakkar more than once.
+
+```bash
+# Stop everything: session, jobs, status
+ehio stop -m preprocessing -b PPR001
+
+# Kill the session but let the submitted jobs finish
+ehio stop -m preprocessing -b PPR001 --keep-jobs
+
+# List what is queued or running for a batch, cancelling nothing
+ehio jobs -m preprocessing -b PPR001
+```
+
+`ehio jobs` prints one row per job (job id, state, elapsed time, partition, name) and a per-state summary. It needs `squeue` on `PATH`; `ehio stop` also needs `scancel`, and if either is missing it kills the session and updates the status but reports that the jobs were left alone.
+
+---
+
 ## Overall data flow
 
 ```
@@ -298,6 +324,10 @@ ehio reference      -b BATCH [-l LOCAL_DIR] [--force] [overrides...]
 ehio scanning       [--module preprocessing|binning|quantifying] [--dry-run] [-v]
 
 ehio set-status     -m MODULE -b BATCH -s STATUS [--failures-dir DIR] [--failures-since EPOCH]
+
+ehio stop           -m MODULE -b BATCH [--keep-jobs]
+ehio jobs           -m MODULE -b BATCH
+ehio remove         -m MODULE -b BATCH
 
 ehio config         --view | --edit
 ```

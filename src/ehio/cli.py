@@ -1656,8 +1656,18 @@ def _build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     p_stop = sub.add_parser(
         "stop",
-        help="Kill the screen session for a running batch.",
-        description="Sends a quit signal to the screen session named after the batch.",
+        help="Kill the screen session and the Slurm jobs of a running batch.",
+        description=(
+            "Stops a batch completely:\n"
+            "  1. Quits the screen session named after the batch.\n"
+            "  2. Cancels every queued or running Slurm job of the batch.\n"
+            "  3. Sets the batch status to SCANNING_STOPPED_STATUS.\n\n"
+            "The screen session goes first on purpose: while the drakkar\n"
+            "workflow is alive it resubmits any job cancelled under it.\n"
+            "Jobs are found by the directory they were submitted from and by\n"
+            "the snakemake run ids logged in {RUN_BASE}/{batch}/{batch}.out,\n"
+            "so orphaned jobs of an already-dead session are cancelled too."
+        ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_stop.add_argument("--module", "-m", required=True,
@@ -1665,9 +1675,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Module whose batch table to update.")
     p_stop.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code (screen session name) to stop.")
+    p_stop.add_argument("--keep-jobs", action="store_true",
+        help="Leave the Slurm jobs of the batch running; only kill the\n"
+             "screen session and update the status.")
     p_stop.add_argument("--airtable-token", metavar="TOKEN",
         help="Airtable personal access token. Overrides $AIRTABLE_TOKEN.")
     p_stop.set_defaults(func=cmd_stop)
+
+    # ------------------------------------------------------------------
+    # jobs
+    # ------------------------------------------------------------------
+    p_jobs = sub.add_parser(
+        "jobs",
+        help="List the queued and running Slurm jobs of a batch.",
+        description=(
+            "Shows every Slurm job of the current user that belongs to the\n"
+            "batch, matched by the directory it was submitted from and by the\n"
+            "snakemake run ids logged in {RUN_BASE}/{batch}/{batch}.out.\n\n"
+            "Nothing is cancelled — use 'ehio stop' for that."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    p_jobs.add_argument("--module", "-m", required=True,
+        choices=["preprocessing", "binning", "quantifying"],
+        help="Module whose output base the batch runs in.")
+    p_jobs.add_argument("--batch", "-b", required=True, metavar="BATCH",
+        help="Batch code to list the jobs of.")
+    p_jobs.set_defaults(func=cmd_jobs)
 
     # ------------------------------------------------------------------
     # remove
@@ -1878,9 +1912,56 @@ _OUTPUT_BASE_CFG = {
 }
 
 
+def _batch_dirs(module: str, batch: str) -> tuple[str, str, str]:
+    """Return (output_dir, run_dir, out_file) of a batch.
+
+    These are the paths ehio scanning writes the launch script and the
+    drakkar output to, and the ones the Slurm jobs of the batch are
+    submitted from.
+    """
+    output_dir = str(Path(_require_cfg(_OUTPUT_BASE_CFG[module])) / batch)
+    run_base   = str(cfg.get("RUN_BASE") or "").strip()
+    run_dir    = str(Path(run_base) / batch) if run_base else ""
+    out_file   = str(Path(run_dir) / f"{batch}.out") if run_dir else ""
+    return output_dir, run_dir, out_file
+
+
+def cmd_jobs(args: argparse.Namespace) -> int:
+    from ehio.slurm import SlurmUnavailable, find_batch_jobs
+
+    output_dir, run_dir, out_file = _batch_dirs(args.module, args.batch)
+    try:
+        jobs = find_batch_jobs(output_dir, run_dir, out_file)
+    except SlurmUnavailable as exc:
+        _die(str(exc))
+        return 1
+
+    if not jobs:
+        _info(f"No queued or running Slurm jobs found for batch '{args.batch}'.")
+        return 0
+
+    rows = [("JOBID", "STATE", "TIME", "PARTITION", "NAME")] + [
+        (j.job_id, j.state, j.elapsed, j.partition, j.name) for j in jobs
+    ]
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    for row in rows:
+        print("  ".join(value.ljust(width) for value, width in zip(row, widths)).rstrip())
+
+    states: dict[str, int] = {}
+    for job in jobs:
+        states[job.state] = states.get(job.state, 0) + 1
+    summary = ", ".join(f"{count} {state.lower()}" for state, count in sorted(states.items()))
+    _info(f"{len(jobs)} job(s) for batch '{args.batch}': {summary}.")
+    return 0
+
+
 def cmd_stop(args: argparse.Namespace) -> int:
     import subprocess
     from ehio.airtable import AirtableClient
+    # Written before the screen session is killed and deleted by the launch
+    # script on every start: it tells the exit trap of the dying script that
+    # the batch was stopped on purpose, so it does not flag it as an error.
+    from ehio.scanning import STOP_SENTINEL
 
     base_cfg, table_cfg, code_cfg, status_cfg = _SET_STATUS_CFG[args.module]
     token            = _resolve_token(args)
@@ -1894,12 +1975,20 @@ def cmd_stop(args: argparse.Namespace) -> int:
     batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
     if not batch_record:
         _die(f"Batch '{args.batch}' not found in {batch_table}.")
-    client.update_records(
-        batch_table,
-        [{"id": batch_record["id"], "fields": {status_field: stopped_status}}],
-    )
-    _info(f"Batch '{args.batch}' status → '{stopped_status}'.")
 
+    output_dir, run_dir, out_file = _batch_dirs(args.module, args.batch)
+
+    # Tell the exit trap of the launch script that this is a deliberate stop,
+    # before anything is killed — otherwise it overwrites the status below
+    # with the processing error status on its way out.
+    if run_dir and Path(run_dir).is_dir():
+        try:
+            (Path(run_dir) / STOP_SENTINEL).write_text("", encoding="utf-8")
+        except OSError as exc:
+            _info(f"Could not write the stop marker in {run_dir}: {exc}")
+
+    # The screen session first: while the drakkar workflow is alive it
+    # resubmits every job that is cancelled under it.
     session = args.batch
     result = subprocess.run(
         ["screen", "-S", session, "-X", "quit"],
@@ -1909,7 +1998,42 @@ def cmd_stop(args: argparse.Namespace) -> int:
         _info(f"Screen session '{session}' terminated.")
     else:
         _info(f"No screen session named '{session}' found (already stopped or never started).")
+
+    if args.keep_jobs:
+        _info("--keep-jobs: Slurm jobs of the batch left running.")
+    else:
+        _cancel_batch_jobs(args.batch, output_dir, run_dir, out_file)
+
+    client.update_records(
+        batch_table,
+        [{"id": batch_record["id"], "fields": {status_field: stopped_status}}],
+    )
+    _info(f"Batch '{args.batch}' status → '{stopped_status}'.")
     return 0
+
+
+def _cancel_batch_jobs(batch: str, output_dir: str, run_dir: str, out_file: str) -> None:
+    """Cancel the Slurm jobs of a batch, reporting what happened."""
+    from ehio.slurm import SlurmUnavailable, cancel_batch_jobs
+
+    try:
+        cancelled, remaining, errors = cancel_batch_jobs(output_dir, run_dir, out_file)
+    except SlurmUnavailable as exc:
+        _info(f"Slurm jobs not cancelled — {exc}")
+        return
+
+    for message in errors:
+        _info(f"scancel reported: {message}")
+    if cancelled:
+        _info(f"Cancelled {len(cancelled)} Slurm job(s): {' '.join(cancelled)}")
+    else:
+        _info(f"No queued or running Slurm jobs found for batch '{batch}'.")
+    if remaining:
+        ids = " ".join(j.job_id for j in remaining)
+        _info(
+            f"WARNING: {len(remaining)} job(s) are still queued after cancelling: {ids}. "
+            f"Check with 'ehio jobs -m ... -b {batch}' and cancel them manually."
+        )
 
 
 def cmd_remove(args: argparse.Namespace) -> int:

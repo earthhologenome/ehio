@@ -9,6 +9,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.6.0] - 2026-08-18
+
+### Added
+
+- `ehio stop` now cancels the Slurm jobs of the batch, not just its screen session. Killing the session only ever killed the drakkar/snakemake driver: every job it had already submitted kept running, kept writing into the output directory, and kept occupying the queue after the batch was marked `Stopped`. The session is quit first and the jobs cancelled after — the other order makes the still-live workflow resubmit them, since the drakkar slurm profile runs with `retries: 3` and `keep-going`. The queue is re-checked after cancelling, so jobs submitted in the meantime are caught too. `--keep-jobs` restores the old behaviour for the cases where the submitted work is worth finishing.
+  - Jobs are matched to a batch in two independent ways, so orphans left behind by an already-dead session are cancelled as well: by the directory they were submitted from (`{MODULE_OUTPUT_BASE}/{batch}` or `{RUN_BASE}/{batch}`, since the launch script cds into the output directory before calling drakkar), and by the snakemake run ids the Slurm executor uses as job names and logs as `SLURM run ID: <uuid>` into `{RUN_BASE}/{batch}/{batch}.out`. A batch can carry several run ids: quantifying calls drakkar more than once, and a resumed batch adds another run.
+- `ehio jobs -m MODULE -b BATCH` lists the queued and running Slurm jobs of a batch — job id, state, elapsed time, partition and name, with a per-state summary — using the same matching as `ehio stop` and cancelling nothing.
+
+### Fixed
+
+- A stopped batch is no longer flagged as an error. `ehio stop` set the status to `Stopped` and then killed the session, whose exit trap ran `ehio set-status --status Error` on the way out and overwrote it. `ehio stop` now drops a `.ehio_stopped` marker in the run directory before killing anything and writes the status last; the exit trap of the launch script checks for that marker and reports the stop instead of building a failure report. The marker is deleted at the start of every launch, so it cannot silence the error reporting of a later run.
+
+### Notes
+
+- `ehio jobs` needs `squeue` on `PATH` and `ehio stop` also needs `scancel`. Where they are missing (a laptop, a non-Slurm host), `ehio stop` still kills the session and updates the status, and says that the jobs were left alone.
 ## [0.5.0] - 2026-08-15
 
 ### Added
