@@ -1031,7 +1031,7 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
         write_quantifying_output_tsv(all_metrics, tsv_out)
         _info(f"Output summary written to {tsv_out}")
 
-    # Genomes-type output: profiling_genomes/final/counts.tsv + bases.tsv
+    # Genomes-type output: profiling_genomes/final/counts.tsv + bases.tsv + mags.tsv
     # Pangenomes-type output path and files differ — to be wired when implemented.
     final_dir = local_root / "profiling_genomes" / "final"
     if not final_dir.is_dir():
@@ -1052,6 +1052,7 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
         for src_name, dest_name in [
             ("counts.tsv", f"{args.batch}_counts.tsv.gz"),
             ("bases.tsv",  f"{args.batch}_bases.tsv.gz"),
+            ("mags.tsv",   f"{args.batch}_mag_info.tsv.gz"),
         ]:
             src = final_dir / src_name
             if not src.exists():

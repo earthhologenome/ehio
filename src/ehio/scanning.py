@@ -409,6 +409,7 @@ def build_script_content(
             mags_file,
         )
         derep_genomes_dir         = f"{output_dir}/profiling_genomes/drep/dereplicated_genomes"
+        mags_info_tsv             = f"{output_dir}/profiling_genomes/final/mags.tsv"
         annotation_file           = f"{run_dir}/{batch_name}_annotation.tsv"
         annotation_clusters_file  = f"{run_dir}/{batch_name}_annotation_clusters.tsv"
         taxonomy_tsv              = f"{output_dir}/annotating/genome_taxonomy.tsv"
@@ -426,11 +427,18 @@ def build_script_content(
             f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
         )
         if resume:
+            # mags.tsv (the MAG info table) was added to drakkar after the first
+            # batches were finished, so a resumed batch that has its dereplicated
+            # genomes but no mags.tsv still calls drakkar: snakemake then builds
+            # that one missing target and leaves everything else alone.
             profiling_step = optional_drakkar_step(
-                f"[ ! -d {q(derep_genomes_dir)} ]", profiling_cmd, "profiling",
+                f"[ ! -d {q(derep_genomes_dir)} ] || [ ! -s {q(mags_info_tsv)} ]",
+                profiling_cmd, "profiling",
             )
+            # Re-run the upload when mags.tsv is newer than the last upload, so
+            # a file drakkar has just produced still reaches the DMB folder.
             qfy_output_step = (
-                f"if [ ! -f {q(qfy_output_sentinel)} ]; then\n"
+                f"if [ ! -f {q(qfy_output_sentinel)} ] || [ {q(mags_info_tsv)} -nt {q(qfy_output_sentinel)} ]; then\n"
                 f"  ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
                 f"  touch {q(qfy_output_sentinel)}\n"
                 f"fi\n"

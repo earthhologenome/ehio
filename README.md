@@ -202,7 +202,7 @@ Bridges the dereplication and mapping step. Connects to `MAG_BASE` only.
 | Direction | What it does |
 |-----------|-------------|
 | `--input` | Looks up the batch in `MAG_DMB_BATCH`, follows links to `MAG_DMB_ENTRY`, and writes two files: a bins path file (`bins.txt`) and a reads sample file (`samples.tsv`) for Drakkar profiling. |
-| `--output` | Transfers the `profiling_genomes/final/` directory to SFTP and marks entries as processed in `MAG_DMB_ENTRY`. |
+| `--output` | Transfers the `profiling_genomes/final/` tables to SFTP as `{batch}_counts.tsv.gz`, `{batch}_bases.tsv.gz` and `{batch}_mag_info.tsv.gz` (the per-MAG metrics: size, completeness, contamination, contig count), and marks entries as processed in `MAG_DMB_ENTRY`. |
 
 ```bash
 ehio quantifying --input -b DMB001 -f samples.tsv --bins-file bins.txt

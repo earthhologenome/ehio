@@ -346,6 +346,43 @@ class TestResumeFlag:
 
 
 # ---------------------------------------------------------------------------
+# MAG info table (mags.tsv) on a resumed batch
+# ---------------------------------------------------------------------------
+
+class TestResumeMagInfoTable:
+    """drakkar gained profiling_genomes/final/mags.tsv after the first batches
+    were finished, so a resumed 'Done' batch must regenerate and upload it."""
+
+    _MAGS_TSV = "/out/DMB001/profiling_genomes/final/mags.tsv"
+    _SENTINEL = "/run/DMB001/.qfy_output_done"
+
+    def _script(self, **kwargs) -> str:
+        return build_script_content(
+            "quantifying", "DMB001", "/run/DMB001", "/out/DMB001", "slurm", **kwargs,
+        )
+
+    def test_resume_calls_drakkar_when_only_the_mag_table_is_missing(self):
+        script = self._script(resume=True)
+        assert f"|| [ ! -s {self._MAGS_TSV} ]; then" in script
+
+    def test_resume_reuploads_when_the_mag_table_is_newer_than_the_last_upload(self):
+        script = self._script(resume=True)
+        assert (
+            f"if [ ! -f {self._SENTINEL} ] || [ {self._MAGS_TSV} -nt {self._SENTINEL} ]; then"
+            in script
+        )
+
+    def test_the_upload_step_comes_after_the_drakkar_call(self):
+        script = self._script(resume=True)
+        assert script.index(f"[ ! -s {self._MAGS_TSV} ]") < script.index(self._SENTINEL)
+
+    def test_a_fresh_launch_has_no_mag_table_guard(self):
+        script = self._script(resume=False)
+        assert self._MAGS_TSV not in script
+        assert self._SENTINEL not in script
+
+
+# ---------------------------------------------------------------------------
 # drakkar silent no-op guards
 # ---------------------------------------------------------------------------
 
@@ -405,7 +442,10 @@ class TestDrakkarNoOpGuards:
 
     def test_conditional_drakkar_call_keeps_its_guard(self):
         script = self._script("quantifying", resume=True)
-        block = script.split("if [ ! -d /out/B001/profiling_genomes/drep/dereplicated_genomes ]; then\n")[1]
+        block = script.split(
+            "if [ ! -d /out/B001/profiling_genomes/drep/dereplicated_genomes ]"
+            " || [ ! -s /out/B001/profiling_genomes/final/mags.tsv ]; then\n"
+        )[1]
         block = block.split("fi\n")[0]
         assert "_ehio_drakkar_start" in block
         assert "drakkar profiling" in block

@@ -9,6 +9,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.6.3] - 2026-08-20
+
+### Added
+
+- The MAG info table drakkar now writes to `profiling_genomes/final/mags.tsv` — genome size, completeness, contamination, contig count and the rest of the per-MAG metrics — is uploaded to the batch DMB folder as `{batch}_mag_info.tsv.gz`, alongside `{batch}_counts.tsv.gz` and `{batch}_bases.tsv.gz`. A batch whose drakkar build does not produce the file is unaffected: the step reports it as missing and transfers the other two.
+- A `Done` DMB batch set back to `Resume` now regenerates the MAG info table and uploads it, instead of finishing without it. The resumed launch script calls drakkar whenever `mags.tsv` is missing — not only when the dereplicated genomes are — and Snakemake builds that one target from the results already in the output directory, leaving dereplication, profiling and annotation alone. The upload step, which a resumed batch skips once it has run, runs again whenever `mags.tsv` is newer than the last upload, so the file drakkar has just produced reaches the DMB folder.
+
 ## [0.6.2] - 2026-08-18
 
 ### Fixed
