@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.6.4] - 2026-08-20
+
+### Changed
+
+- `ehio annotating --output` uploads the genome taxonomy table to `Data/DMB/{batch}/` compressed and batch-prefixed, as `{batch}_genome_taxonomy.tsv.gz` instead of the plain `genome_taxonomy.tsv`, and the unified gene annotation file as `{batch}_gene_annotations.tsv.xz` instead of `gene_annotations.tsv.xz`. Both renamings happen at transfer time — the local `annotating/genome_taxonomy.tsv`, which the Airtable update parses, and `annotating/gene_annotations.tsv.xz` are left in place, and the temporary files created for the upload are removed afterwards even if the transfer fails. The tree files and the checkm2 quality report are transferred under their own names as before.
+
 ## [0.6.3] - 2026-08-20
 
 ### Added

@@ -1231,6 +1231,7 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
 def _run_annotating_output(args: argparse.Namespace) -> int:
     """Parse annotation results, update MAG_ENTRY in Airtable, transfer files."""
     import gzip as _gzip
+    import os as _os
     import shutil as _shutil
 
     from ehio.airtable import AirtableClient
@@ -1339,10 +1340,38 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     identity    = _conf(args, "identity",   "SFTP_IDENTITY") or None
     remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
 
-    # Upload genome_taxonomy.tsv + tree files to DMB/{batch}/
+    # Upload genome taxonomy + tree files to DMB/{batch}/
     dmb_remote = f"{remote_base.rstrip('/')}/DMB/{args.batch}"
     dmb_files: list[Path] = []
-    for fname in ("genome_taxonomy.tsv", "bacteria.tree", "archaea.tree", "gene_annotations.tsv.xz"):
+    dmb_tmp: list[Path] = []
+
+    # genome_taxonomy.tsv is compressed and renamed to {batch}_genome_taxonomy.tsv.gz
+    if taxonomy_tsv.exists():
+        tax_gz = ann_dir / f"{args.batch}_genome_taxonomy.tsv.gz"
+        with taxonomy_tsv.open("rb") as _fin, _gzip.open(tax_gz, "wb") as _fout:
+            _shutil.copyfileobj(_fin, _fout)
+        dmb_files.append(tax_gz)
+        dmb_tmp.append(tax_gz)
+        _info(f"  Compressed {taxonomy_tsv.name} → {tax_gz.name}")
+    else:
+        _info(f"  genome_taxonomy.tsv not found in {ann_dir} — skipping.")
+
+    # gene_annotations.tsv.xz is already compressed; upload it under a batch-prefixed name
+    gene_ann = ann_dir / "gene_annotations.tsv.xz"
+    if gene_ann.exists():
+        gene_ann_alias = ann_dir / f"{args.batch}_gene_annotations.tsv.xz"
+        gene_ann_alias.unlink(missing_ok=True)
+        try:
+            _os.link(gene_ann, gene_ann_alias)
+        except OSError:
+            _shutil.copy2(gene_ann, gene_ann_alias)
+        dmb_files.append(gene_ann_alias)
+        dmb_tmp.append(gene_ann_alias)
+        _info(f"  Renamed {gene_ann.name} → {gene_ann_alias.name}")
+    else:
+        _info(f"  gene_annotations.tsv.xz not found in {ann_dir} — skipping.")
+
+    for fname in ("bacteria.tree", "archaea.tree"):
         p = ann_dir / fname
         if p.exists():
             dmb_files.append(p)
@@ -1358,8 +1387,12 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     _timeout = getattr(args, "connect_timeout", 300.0)
     if dmb_files:
         _info(f"Uploading {len(dmb_files)} file(s) to {user}@{host}:{dmb_remote} ...")
-        with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
-            n_up, n_sk = xfer.upload_flat(dmb_files, dmb_remote, verbose=getattr(args, "verbose", False))
+        try:
+            with SFTPTransfer(host=host, username=user, port=port, key_path=identity or None, timeout=_timeout) as xfer:
+                n_up, n_sk = xfer.upload_flat(dmb_files, dmb_remote, verbose=getattr(args, "verbose", False))
+        finally:
+            for _tmp in dmb_tmp:
+                _tmp.unlink(missing_ok=True)
         _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
         _info(f"Uploaded {n_up} file(s) to {dmb_remote}{_skip_msg}.")
 
