@@ -31,6 +31,15 @@ TOKEN_HINT = (
 ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024
 
 
+def attachment_encoded_size(size_bytes: int) -> int:
+    """Return the base64 length Airtable counts for a file of `size_bytes`.
+
+    Lets a caller decide whether a file fits without reading it into memory
+    first, which matters for the compressed result tables of a large batch.
+    """
+    return 4 * ((size_bytes + 2) // 3)
+
+
 class AirtableError(RuntimeError):
     """An Airtable request failed for a reason the user can act on.
 
@@ -330,15 +339,17 @@ class AirtableClient:
             ) from exc
 
         file_path = Path(path)
+        # Checked before the file is read, so an oversized attachment is
+        # reported without pulling hundreds of MB into memory first.
         try:
+            if attachment_encoded_size(file_path.stat().st_size) > ATTACHMENT_MAX_BYTES:
+                raise AirtableError(
+                    f"{file_path.name} is too large to attach to Airtable "
+                    f"(limit {ATTACHMENT_MAX_BYTES // (1024 * 1024)} MB encoded)."
+                )
             content = base64.b64encode(file_path.read_bytes()).decode("ascii")
         except OSError as exc:
             raise AirtableError(f"Could not read {file_path} to upload it: {exc}") from exc
-        if len(content) > ATTACHMENT_MAX_BYTES:
-            raise AirtableError(
-                f"{file_path.name} is too large to attach to Airtable "
-                f"(limit {ATTACHMENT_MAX_BYTES // (1024 * 1024)} MB encoded)."
-            )
 
         url = (
             "https://content.airtable.com/v0/"

@@ -7,11 +7,13 @@ front and fails with a controlled error instead.
 
 from __future__ import annotations
 
+import shutil
 import socket
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 REMOTE_SCHEMES = ("http", "https", "ftp", "ftps", "sftp")
 
@@ -21,6 +23,10 @@ _UNCHECKABLE_SCHEMES = ("sftp", "ftps")
 _USER_AGENT = "ehio/url-check"
 
 DEFAULT_TIMEOUT = 20.0
+
+
+class DownloadError(RuntimeError):
+    """A file referenced in Airtable could not be downloaded."""
 
 
 def is_remote_url(value: str) -> bool:
@@ -109,3 +115,54 @@ def check_urls(
         reasons = list(pool.map(lambda u: check_url(u, timeout), unique))
 
     return {url: reason for url, reason in zip(unique, reasons) if reason}
+
+
+def download_url(
+    url: str,
+    dest: Path,
+    timeout: float = DEFAULT_TIMEOUT,
+    overwrite: bool = False,
+) -> Path:
+    """Download `url` to `dest`, returning the path of the downloaded file.
+
+    The content goes to a '.part' file and is renamed only once the transfer
+    finishes, so an interrupted download never leaves behind a file that looks
+    complete.  An existing, non-empty `dest` is kept unless `overwrite` is set:
+    a resumed batch re-uses the assemblies the first launch already fetched.
+
+    Raises DownloadError when the file cannot be retrieved.
+    """
+    dest = Path(dest)
+    if dest.exists() and dest.stat().st_size > 0 and not overwrite:
+        return dest
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    req = urllib.request.Request(str(url).strip(), headers={"User-Agent": _USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp, part.open("wb") as fh:
+            shutil.copyfileobj(resp, fh, length=1024 * 1024)
+    except urllib.error.HTTPError as exc:
+        part.unlink(missing_ok=True)
+        raise DownloadError(f"HTTP {exc.code} {exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        part.unlink(missing_ok=True)
+        raise DownloadError(f"unreachable ({exc.reason})") from exc
+    except socket.timeout as exc:
+        part.unlink(missing_ok=True)
+        raise DownloadError(f"timed out after {timeout:g}s") from exc
+    except OSError as exc:
+        part.unlink(missing_ok=True)
+        raise DownloadError(f"could not be written to {dest}: {exc}") from exc
+
+    if part.stat().st_size == 0:
+        part.unlink(missing_ok=True)
+        raise DownloadError("the server returned an empty file")
+    part.replace(dest)
+    return dest
+
+
+def filename_from_url(url: str, fallback: str) -> str:
+    """Return the file name a URL points at, or `fallback` when it has none."""
+    name = Path(unquote(urlparse(str(url).strip()).path)).name
+    return name or fallback

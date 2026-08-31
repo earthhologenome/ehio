@@ -9,6 +9,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.7.0] - 2026-08-31
+
+### Added
+
+- **`ehio amr`**, a fourth module bridging the `drakkar amr` workflow: AMRFinderPlus, CARD/RGI and geNomad mobility context run over the assemblies of an AMR batch. The AMR batch table lives in `EHI_BASE` and is the one table that has no entry table of its own — it links straight to the assembly records of `EHI_ASB_ENTRY` through `EHI_AMR_BATCH_LIST_ASSEMBLIES`, so an assembly can be sent through the AMR workflow at any point after the binning batch that produced it, and can belong to several AMR batches.
+  - `ehio amr --input` follows those links, downloads each assembly FASTA from `EHI_ASB_ENTRY_ASSEMBLY_URL` into `{EHI_AMR_OUTPUT_BASE}/{batch}/data/assemblies`, and writes the `assembly_id` / `assembly_path` / `assembly_type` manifest that `drakkar amr -f` reads. The download step exists because `drakkar amr` inspects and hashes every assembly before the run: unlike `drakkar preprocessing`, which is handed read URLs, it takes local files only. Files already in the staging directory are kept, so a resumed batch downloads nothing twice, and `--redownload` forces a fresh copy. Assemblies that have no file, cannot be downloaded, or are not named as a FASTA drakkar accepts stop the batch before drakkar starts, with every problem reported at once instead of one per run.
+  - `ehio amr --output` writes one row of `amr/amr_qc.tsv` per assembly back to `EHI_ASB_ENTRY` — `amrfinder_hits`, `rgi_hits`, `mobility_regions`, `amr_loci`, `multi_tool_loci`, `mobility_links` and `mobile_loci`. The `amrfinder_hits_without_coordinates` and `rgi_hits_without_coordinates` columns are diagnostics of the callers rather than results and are not written.
+  - The five aggregate tables (`amr_hits`, `amr_loci`, `amr_drug_classes`, `amr_mobility`, `mobility_regions`, all `.tsv.xz`) are transferred batch-prefixed to `{SFTP_REMOTE_BASE}/AMR/{batch}`, together with gzipped copies of `amr_qc.tsv` and `assembly_summary.tsv` and the `manifest.yaml` provenance record, and the same five tables are attached to the AMR batch record. Airtable caps an attachment upload at 5 MB of base64, so a table above that is reported and left on ERDA only rather than failing the batch. A rerun clears the attachment fields first, since Airtable's upload endpoint appends instead of replacing.
+  - Every batch runs as `metagenome`, written into the `assembly_type` column of the manifest, which selects the Prodigal mode and RGI's `--low_quality` handling. `write_amr_manifest` takes the type per row, so isolate batches are a config field away if the database ever holds them.
+  - `ehio scanning` picks AMR batches up like any other module, `ehio stop`, `ehio jobs`, `ehio remove` and `ehio set-status` take `-m amr`, and batches run in the new `AMR` folder (`EHI_AMR_OUTPUT_BASE`, default `/projects/ehi/data/AMR`).
+
+### Changed
+
+- An attachment that is too large for Airtable is now recognised from the file size instead of after the file has been base64-encoded in memory, so an oversized result table is reported without a several-hundred-MB memory spike first.
+
+### Notes
+
+- `EHI_AMR_BATCH_LIST_ASSEMBLIES` must be the linked-record field of the AMR batch table, not the batch code. A field that is not a linked-record field comes back from Airtable as a string, which would be walked character by character and leave the batch looking empty; `ehio amr` reports it as a config error instead.
 ## [0.6.4] - 2026-08-20
 
 ### Changed

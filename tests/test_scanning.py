@@ -26,12 +26,13 @@ OUT_DIR = "/projects/ehi/data/PPR/PPR001"
 
 class TestConstants:
     def test_modules_list(self):
-        assert set(MODULES) == {"preprocessing", "binning", "quantifying"}
+        assert set(MODULES) == {"preprocessing", "binning", "quantifying", "amr"}
 
     def test_drakkar_cmd_mapping(self):
         assert DRAKKAR_CMD["preprocessing"] == "preprocessing"
         assert DRAKKAR_CMD["binning"]       == "cataloging"
         assert DRAKKAR_CMD["quantifying"]   == "profiling"
+        assert DRAKKAR_CMD["amr"]           == "amr"
 
 
 # ---------------------------------------------------------------------------

@@ -7,9 +7,9 @@
 # Do NOT store the token here.
 
 # ---- Airtable database structure ------------------------------------------
-# Two bases and six tables define the full database layout.
-# Preprocessing and binning read from EHI_BASE; quantifying reads from MAG_BASE.
-# Binning output also writes MAG metadata to MAG_BASE.
+# Two bases define the full database layout.
+# Preprocessing, binning and amr read from EHI_BASE; quantifying reads from
+# MAG_BASE. Binning output also writes MAG metadata to MAG_BASE.
 
 EHI_BASE:    "appQpr6MxnaiVHsHy"   # EHI database
 MAG_BASE:    "appWbHBNLE6iAsMRV"   # MAG database
@@ -181,6 +181,56 @@ MAG_PPR_EHI: "flds92MuRBX7ecKUK" # Field in MAG_PPR with the linked EHI record I
 MAG_PPR_READS1: "fld92nfITR1mMKXjc" # Field in MAG_PPR with the preprocessed forward reads URL (for input)
 MAG_PPR_READS2: "fldPwaMMW43G7J6vO" # Field in MAG_PPR with the preprocessed reverse reads URL (for input)
 
+# ---- AMR module -----------------------------------------------------------
+# Input:  fetch the assemblies linked to an AMR batch, download their FASTAs,
+#         and write a drakkar amr assembly manifest
+# Output: parse amr/amr_qc.tsv, write the per-assembly AMR stats back to
+#         EHI_ASB_ENTRY, transfer the aggregate tables to AMR/{batch} and
+#         attach them to the AMR batch record
+#
+# The AMR batch table lives in EHI_BASE and links to the assembly entries of
+# EHI_ASB_ENTRY, so an assembly can be run through the AMR workflow long after
+# the binning batch that produced it is done.
+
+EHI_AMR_BATCH: "tbllEdFcMpHQ9djBg"  # AMR batch table (EHI_BASE)
+EHI_AMR_BATCH_ID: "flddCuWndpJCfeH9q"  # Field in EHI_AMR_BATCH with the batch record ID (for logging)
+EHI_AMR_BATCH_CODE: "fldX41ymPf4EwhsUR"  # Field in EHI_AMR_BATCH with the batch code (primary key, for processing and logging)
+EHI_AMR_BATCH_DATE: "fldI1EGvr6q4rM8cw"  # Field in EHI_AMR_BATCH with the batch date (for logging)
+EHI_AMR_BATCH_STATUS: "fld8oKt3drlQKJS5R"  # Field in EHI_AMR_BATCH with the batch status (for scanning, processing and logging)
+EHI_AMR_BATCH_LIST_ASSEMBLIES: "fldQ7fIUgGwv84loo"  # Field in EHI_AMR_BATCH with the linked assembly records, i.e. a list of EHI_ASB_ENTRY_ID (for processing)
+EHI_AMR_BATCH_EHIO_VERSION: "fld5ECVssaaQU8DLG"  # Field in EHI_AMR_BATCH with the ehio version used for the AMR run (for logging)
+EHI_AMR_BATCH_DRAKKAR_VERSION: "fldp44z0r0FKuUB6a"  # Field in EHI_AMR_BATCH with the drakkar version used for the AMR run (for logging)
+EHI_AMR_BATCH_BOOST_TIME: "fldGHb5egqxj5MPU7"  # Field in EHI_AMR_BATCH with the time boost value passed to drakkar (for processing)
+EHI_AMR_BATCH_BOOST_MEMORY: "fldDMcB7E8Lq59qct"  # Field in EHI_AMR_BATCH with the memory boost value passed to drakkar (for processing)
+EHI_AMR_BATCH_ERROR_FILES: "fldHwt1O4FNe12t2w"  # Attachment field in EHI_AMR_BATCH where the drakkar failure report is uploaded on error (leave empty if unused)
+
+# Attachment fields in EHI_AMR_BATCH holding the aggregate AMR tables drakkar
+# writes to {output_dir}/amr/. Every file is also transferred to
+# {SFTP_REMOTE_BASE}/AMR/{batch}; a file too large for an Airtable attachment
+# (the API caps the upload at 5 MB of base64) is reported and left on ERDA only.
+# Leave a key empty to skip attaching that file.
+EHI_AMR_BATCH_FILE_DRUG_CLASSES: "fldx0RHT4twLjf8CN"  # amr_drug_classes.tsv.xz
+EHI_AMR_BATCH_FILE_HITS: "fldl6XmzqF8AZ3v9V"  # amr_hits.tsv.xz
+EHI_AMR_BATCH_FILE_LOCI: "fldIqRh0MP4RutGJB"  # amr_loci.tsv.xz
+EHI_AMR_BATCH_FILE_MOBILITY: "fldZpNiGEgoNyZ3A5"  # amr_mobility.tsv.xz
+EHI_AMR_BATCH_FILE_MOBILITY_REGIONS: "fldiCcBztduuIRy8k"  # mobility_regions.tsv.xz
+
+# Assembly FASTA URL in EHI_ASB_ENTRY. 'drakkar amr' inspects and hashes every
+# assembly before the run and has no downloader of its own, so 'ehio amr --input'
+# downloads each URL into the batch staging directory and writes the local path
+# into the manifest. A cell already holding a local path is used as it is.
+EHI_ASB_ENTRY_ASSEMBLY_URL: "fld8qFX8HYgpzQOM6"
+
+# Per-assembly AMR stats, read from one row of amr/amr_qc.tsv and written back
+# to the assembly record in EHI_ASB_ENTRY.
+EHI_ASB_ENTRY_AMR_AMRFINDER_HITS: "fldGkYD9VSOQ8t0Tc"  # amrfinder_hits
+EHI_ASB_ENTRY_AMR_RGI_HITS: "fld67zhglkouNmpCf"  # rgi_hits
+EHI_ASB_ENTRY_AMR_MOBILITY_REGIONS: "fldMGrcx0q9RnhV0m"  # mobility_regions
+EHI_ASB_ENTRY_AMR_LOCI: "fldWd2K65r7HzqoP7"  # amr_loci
+EHI_ASB_ENTRY_AMR_MULTI_TOOL_LOCI: "fldg26JVzTd21SCnJ"  # multi_tool_loci
+EHI_ASB_ENTRY_AMR_MOBILITY_LINKS: "fld9aNIZXTAyc5dMW"  # mobility_links
+EHI_ASB_ENTRY_AMR_MOBILE_LOCI: "fld5jq9mMekfLevpc"  # mobile_loci
+
 # ---- SFTP settings --------------------------------------------------------
 SFTP_HOST: "io.erda.dk"
 SFTP_USER: "antton.alberdi@snm.ku.dk"
@@ -192,6 +242,7 @@ SFTP_IDENTITY: ""                    # Path to SSH private key (leave empty to u
 #   binning        →  {SFTP_REMOTE_BASE}/ASB/{EHI_ASB_BATCH_CODE}   (assemblies, gzipped, plus the batch summary tables)
 #                     {SFTP_REMOTE_BASE}/MAG/{EHI_ASB_BATCH_CODE}   (bin FASTAs, gzipped)
 #   quantifying    →  {SFTP_REMOTE_BASE}/DMB/{MAG_DMB_BATCH_CODE}
+#   amr            →  {SFTP_REMOTE_BASE}/AMR/{EHI_AMR_BATCH_CODE}
 SFTP_REMOTE_BASE: "/EarthHologenomeInitiative/Data"
 
 # ---- Local HPC directories (used by scanning) ----------------------------
@@ -199,9 +250,11 @@ SFTP_REMOTE_BASE: "/EarthHologenomeInitiative/Data"
 #   preprocessing  →  {EHI_PPR_OUTPUT_BASE}/{EHI_PPR_BATCH_CODE}
 #   binning        →  {EHI_ASB_OUTPUT_BASE}/{EHI_ASB_BATCH_CODE}
 #   quantifying    →  {MAG_DMB_OUTPUT_BASE}/{MAG_DMB_BATCH_CODE}
+#   amr            →  {EHI_AMR_OUTPUT_BASE}/{EHI_AMR_BATCH_CODE}
 EHI_PPR_OUTPUT_BASE: "/projects/ehi/data/PPR"
 EHI_ASB_OUTPUT_BASE: "/projects/ehi/data/ASB"
 MAG_DMB_OUTPUT_BASE: "/projects/ehi/data/DMB"
+EHI_AMR_OUTPUT_BASE: "/projects/ehi/data/AMR"
 
 # Run dir — where each screen session is launched from:
 #   {RUN_BASE}/{batch_code}  (contains samples.tsv, .snakemake, logs)

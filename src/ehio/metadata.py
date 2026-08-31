@@ -750,3 +750,68 @@ ANNOTATING_FUNC_KEYS: dict[str, str] = {
     "genes_kegg":        "MAG_ENTRY_GENES_KEGG_NUMBER",
     "annotated":         "MAG_ENTRY_ANNOTATED",
 }
+
+
+# ---------------------------------------------------------------------------
+# AMR parsers
+# ---------------------------------------------------------------------------
+
+def parse_amr_qc_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
+    """Read a drakkar amr_qc.tsv summary, keyed by assembly id.
+
+    Expected file: amr/amr_qc.tsv, one row per assembly with the columns
+    amrfinder_hits, amrfinder_hits_without_coordinates, rgi_hits,
+    rgi_hits_without_coordinates, mobility_regions, amr_loci, multi_tool_loci,
+    mobility_links and mobile_loci.
+    Returns {assembly_id: {metric_name: value, ...}}.
+    """
+    return _parse_tsv_keyed(tsv_path, key_col="assembly_id")
+
+
+AMR_OUTPUT_TSV_COLUMNS: list[str] = [
+    "assembly",
+    "amrfinder_hits",
+    "rgi_hits",
+    "mobility_regions",
+    "amr_loci",
+    "multi_tool_loci",
+    "mobility_links",
+    "mobile_loci",
+]
+
+
+def write_amr_output_tsv(
+    assembly_metrics: dict[str, dict[str, Any]],
+    tsv_path: Path,
+) -> None:
+    """Write a per-assembly AMR summary TSV to tsv_path."""
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    with tsv_path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=AMR_OUTPUT_TSV_COLUMNS, delimiter="\t",
+                                extrasaction="ignore")
+        writer.writeheader()
+        for assembly, m in assembly_metrics.items():
+            writer.writerow({"assembly": assembly, **m})
+
+
+# The two 'without_coordinates' columns of amr_qc.tsv are diagnostics of the
+# callers rather than results, so they are left out of Airtable.
+AMR_METRIC_KEYS: dict[str, str] = {
+    "amrfinder_hits":    "EHI_ASB_ENTRY_AMR_AMRFINDER_HITS",
+    "rgi_hits":          "EHI_ASB_ENTRY_AMR_RGI_HITS",
+    "mobility_regions":  "EHI_ASB_ENTRY_AMR_MOBILITY_REGIONS",
+    "amr_loci":          "EHI_ASB_ENTRY_AMR_LOCI",
+    "multi_tool_loci":   "EHI_ASB_ENTRY_AMR_MULTI_TOOL_LOCI",
+    "mobility_links":    "EHI_ASB_ENTRY_AMR_MOBILITY_LINKS",
+    "mobile_loci":       "EHI_ASB_ENTRY_AMR_MOBILE_LOCI",
+}
+
+# Aggregate tables drakkar writes to {output_dir}/amr/: the file name and the
+# config key holding the EHI_AMR_BATCH attachment field it is uploaded to.
+AMR_OUTPUT_FILES: dict[str, str] = {
+    "amr_drug_classes.tsv.xz": "EHI_AMR_BATCH_FILE_DRUG_CLASSES",
+    "amr_hits.tsv.xz":         "EHI_AMR_BATCH_FILE_HITS",
+    "amr_loci.tsv.xz":         "EHI_AMR_BATCH_FILE_LOCI",
+    "amr_mobility.tsv.xz":     "EHI_AMR_BATCH_FILE_MOBILITY",
+    "mobility_regions.tsv.xz": "EHI_AMR_BATCH_FILE_MOBILITY_REGIONS",
+}

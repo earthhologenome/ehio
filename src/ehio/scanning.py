@@ -22,36 +22,43 @@ _PRIMARY_BASE = {
     "preprocessing": "EHI_BASE",
     "binning":       "EHI_BASE",
     "quantifying":   "MAG_BASE",
+    "amr":           "EHI_BASE",
 }
 _BATCH_TABLE_KEY = {
     "preprocessing": "EHI_PPR_BATCH",
     "binning":       "EHI_ASB_BATCH",
     "quantifying":   "MAG_DMB_BATCH",
+    "amr":           "EHI_AMR_BATCH",
 }
 _BATCH_CODE_CFG = {
     "preprocessing": "EHI_PPR_BATCH_CODE",
     "binning":       "EHI_ASB_BATCH_CODE",
     "quantifying":   "MAG_DMB_BATCH_CODE",
+    "amr":           "EHI_AMR_BATCH_CODE",
 }
 _BATCH_STATUS_CFG = {
     "preprocessing": "EHI_PPR_BATCH_STATUS",
     "binning":       "EHI_ASB_BATCH_STATUS",
     "quantifying":   "MAG_DMB_BATCH_STATUS",
+    "amr":           "EHI_AMR_BATCH_STATUS",
 }
 _OUTPUT_BASE_CFG = {
     "preprocessing": "EHI_PPR_OUTPUT_BASE",
     "binning":       "EHI_ASB_OUTPUT_BASE",
     "quantifying":   "MAG_DMB_OUTPUT_BASE",
+    "amr":           "EHI_AMR_OUTPUT_BASE",
 }
 _BOOST_TIME_CFG = {
     "preprocessing": "EHI_PPR_BATCH_BOOST_TIME",
     "binning":       "EHI_ASB_BATCH_BOOST_TIME",
     "quantifying":   "MAG_DMB_BATCH_BOOST_TIME",
+    "amr":           "EHI_AMR_BATCH_BOOST_TIME",
 }
 _BOOST_MEMORY_CFG = {
     "preprocessing": "EHI_PPR_BATCH_BOOST_MEMORY",
     "binning":       "EHI_ASB_BATCH_BOOST_MEMORY",
     "quantifying":   "MAG_DMB_BATCH_BOOST_MEMORY",
+    "amr":           "EHI_AMR_BATCH_BOOST_MEMORY",
 }
 _RUN_BASE_CFG = "RUN_BASE"
 
@@ -64,6 +71,7 @@ DRAKKAR_CMD = {
     "preprocessing": "preprocessing",
     "binning":       "cataloging",
     "quantifying":   "profiling",
+    "amr":           "amr",
 }
 
 MODULES = list(DRAKKAR_CMD)
@@ -199,7 +207,7 @@ def build_script_content(
     environment of the launching shell.
 
     run_dir    — /projects/ehi/data/RUN/{batch_code}  (samples.tsv, logs, .snakemake)
-    output_dir — /projects/ehi/data/{PPR|ASB|DMB}/{batch_code}  (drakkar -o target)
+    output_dir — /projects/ehi/data/{PPR|ASB|DMB|AMR}/{batch_code}  (drakkar -o target)
     ref_flag   — pre-resolved '-x url' or '-r url' for preprocessing; '' otherwise
     """
     if module not in DRAKKAR_CMD:
@@ -395,6 +403,31 @@ def build_script_content(
             + "_EHIO_SUCCESS=1\n"
         )
 
+    if module == "amr":
+        manifest_file  = f"{run_dir}/{batch_name}_assemblies.tsv"
+        # The assemblies are downloaded next to the manifest drakkar writes for
+        # itself, so a rerun that clears the output directory fetches them again
+        # and a resume re-uses what is already there.
+        assemblies_dir = f"{output_dir}/data/assemblies"
+        qc_tsv         = f"{output_dir}/amr/amr_qc.tsv"
+        input_step = input_step_of(
+            f"ehio amr --input -b {q(batch_name)} -f {q(manifest_file)}"
+            f" -d {q(assemblies_dir)}\n",
+            manifest_file,
+        )
+        return header + (
+            input_step
+            + unlock_step
+            + drakkar_step(
+                f"{drakkar_prefix}drakkar {drakkar_sub} -f {q(manifest_file)}"
+                f" -o {q(output_dir)} -p {q(profile)}{boost_parts}\n",
+                "amr",
+            )
+            + f"_ehio_require {q(qc_tsv)} {q('amr')}\n"
+            + f"ehio amr --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
+            + "_EHIO_SUCCESS=1\n"
+        )
+
     if module == "quantifying":
         mags_file    = f"{run_dir}/{batch_name}_mags.tsv"
         reads_file   = f"{run_dir}/{batch_name}_reads.tsv"
@@ -504,6 +537,12 @@ def _generate_input_files(module: str, batch_name: str, run_dir: str, token: str
     elif module == "binning":
         cmd = [sys.executable, "-m", "ehio", "binning", "--input",
                "-b", batch_name, "-f", tsv_path]
+    elif module == "amr":
+        manifest_path = str(Path(run_dir) / f"{batch_name}_assemblies.tsv")
+        output_base   = str(cfg.get(_OUTPUT_BASE_CFG["amr"]) or "").strip()
+        cmd = [sys.executable, "-m", "ehio", "amr", "--input",
+               "-b", batch_name, "-f", manifest_path,
+               "-d", str(Path(output_base) / batch_name / "data" / "assemblies")]
     elif module == "quantifying":
         mags_path    = str(Path(run_dir) / f"{batch_name}_mags.tsv")
         reads_path   = str(Path(run_dir) / f"{batch_name}_reads.tsv")

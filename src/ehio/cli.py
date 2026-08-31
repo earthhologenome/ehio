@@ -19,6 +19,7 @@ _PRIMARY_BASE = {
     "PREPROCESSING": "EHI_BASE",
     "BINNING":       "EHI_BASE",
     "QUANTIFYING":   "MAG_BASE",
+    "AMR":           "EHI_BASE",
 }
 _SECONDARY_BASE = {
     "BINNING": "MAG_BASE",
@@ -27,11 +28,14 @@ _BATCH_TABLE_KEY = {
     "PREPROCESSING": "EHI_PPR_BATCH",
     "BINNING":       "EHI_ASB_BATCH",
     "QUANTIFYING":   "MAG_DMB_BATCH",
+    "AMR":           "EHI_AMR_BATCH",
 }
 _ENTRY_TABLE_KEY = {
     "PREPROCESSING": "EHI_PPR_ENTRY",
     "BINNING":       "EHI_ASB_ENTRY",
     "QUANTIFYING":   "MAG_DMB_ENTRY",
+    # The AMR module runs on the assembly entries of the binning table.
+    "AMR":           "EHI_ASB_ENTRY",
 }
 
 
@@ -1434,6 +1438,405 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# amr
+# ---------------------------------------------------------------------------
+
+def cmd_amr(args: argparse.Namespace) -> int:
+    if args.input:
+        return _run_amr_input(args)
+    return _run_amr_output(args)
+
+
+# Suffixes 'drakkar amr' accepts for an assembly, checked here so a badly named
+# file is reported before the workflow starts instead of inside it.
+_AMR_FASTA_SUFFIXES = (".fa.gz", ".fna.gz", ".fasta.gz", ".fa", ".fna", ".fasta")
+
+
+def _amr_fasta_suffix(name: str) -> str:
+    """Return the FASTA suffix of `name` that drakkar accepts, or ''.
+
+    Longest first, so 'EHA00405.fna.gz' resolves to '.fna.gz' and not '.gz'.
+    """
+    lowered = name.lower()
+    return next((s for s in _AMR_FASTA_SUFFIXES if lowered.endswith(s)), "")
+
+
+def _first_value(value: object) -> str:
+    """Return an Airtable cell as a stripped string, taking [0] of a list."""
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    return str(value or "").strip()
+
+
+def _linked_assembly_ids(batch_record: dict, field_id: str, batch: str) -> list[str]:
+    """Return the assembly record ids linked to an AMR batch record.
+
+    A field that is not a linked-record field comes back as a string rather than
+    a list, which would be iterated character by character and leave the batch
+    looking empty.  That is a config mistake, so it is reported as one.
+    """
+    raw = batch_record.get("fields", {}).get(field_id)
+    if raw is None or raw == []:
+        _die(f"No assembly records linked in field {field_id} of batch '{batch}'.")
+    if not isinstance(raw, list):
+        _die(
+            f"Field {field_id} of batch '{batch}' holds {raw!r}, not a list of linked "
+            f"records. EHI_AMR_BATCH_LIST_ASSEMBLIES must be the linked-record field "
+            f"pointing at the assembly table, not the batch code or another text field "
+            f"(ehio config --edit)."
+        )
+    ids = [value for value in raw if isinstance(value, str) and value.startswith("rec")]
+    if not ids:
+        _die(
+            f"Field {field_id} of batch '{batch}' holds no assembly record ids ({raw!r}). "
+            f"Check EHI_AMR_BATCH_LIST_ASSEMBLIES in the config (ehio config --edit)."
+        )
+    return ids
+
+
+def _run_amr_input(args: argparse.Namespace) -> int:
+    """Fetch the assemblies of an AMR batch and write a drakkar amr manifest.
+
+    'drakkar amr' inspects and hashes every assembly before the run and has no
+    downloader of its own, so the ERDA URLs held in Airtable are fetched here
+    and the manifest points at the local copies.
+    """
+    from ehio.airtable import AirtableClient
+    from ehio.drakkar import write_amr_manifest
+    from ehio.urls import DownloadError, download_url, filename_from_url, is_remote_url
+
+    token       = _resolve_token(args)
+    base_id     = _require_cfg("EHI_BASE")
+    batch_table = _require_cfg("EHI_AMR_BATCH")
+    entry_table = _require_cfg("EHI_ASB_ENTRY")
+
+    batch_code_field    = _require_cfg("EHI_AMR_BATCH_CODE")
+    assembly_list_field = _require_cfg("EHI_AMR_BATCH_LIST_ASSEMBLIES")
+    assembly_url_field  = _require_cfg("EHI_ASB_ENTRY_ASSEMBLY_URL")
+    assembly_code_field = (
+        str(cfg.get("EHI_ASB_ENTRY_ASSEMBLY_CODE") or "").strip()
+        or _require_cfg("EHI_ASB_ENTRY_CODE")
+    )
+
+    manifest_path  = Path(args.manifest_file)
+    assemblies_dir = Path(args.assemblies_dir).resolve()
+
+    _info(f"Looking up batch '{args.batch}' in Airtable...")
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    if batch_record is None:
+        _die(f"Batch '{args.batch}' not found in {batch_table}.")
+
+    rec_ids = _linked_assembly_ids(batch_record, assembly_list_field, args.batch)
+    _info(f"Fetching {len(rec_ids)} assembly record(s) from Airtable...")
+
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    problems: list[str] = []
+    timeout = float(getattr(args, "download_timeout", 600.0))
+    redownload = getattr(args, "redownload", False)
+
+    for rec_id in rec_ids:
+        record = client.fetch_record_by_id(entry_table, rec_id)
+        if not record:
+            problems.append(f"{rec_id}: assembly record not found in {entry_table}")
+            continue
+        fields   = record.get("fields", {})
+        code     = _first_value(fields.get(assembly_code_field))
+        source   = _first_value(fields.get(assembly_url_field))
+        if not code:
+            problems.append(f"{rec_id}: assembly record has no code in field {assembly_code_field}")
+            continue
+        if code in seen:
+            _info(f"  {code}: linked to the batch more than once — kept once.")
+            continue
+        if not source:
+            problems.append(f"{code}: no assembly file in field {assembly_url_field}")
+            continue
+
+        if is_remote_url(source):
+            suffix = _amr_fasta_suffix(filename_from_url(source, ""))
+            if not suffix:
+                problems.append(
+                    f"{code}: {source} is not a FASTA drakkar accepts "
+                    f"(expected one of {', '.join(_AMR_FASTA_SUFFIXES)})"
+                )
+                continue
+            # Named after the assembly, not after the URL: two assemblies whose
+            # URLs happen to share a basename would otherwise overwrite each
+            # other in the staging directory.
+            destination = assemblies_dir / f"{code}{suffix}"
+            if destination.exists() and destination.stat().st_size > 0 and not redownload:
+                _info(f"  {code}: {destination.name} already downloaded.")
+            else:
+                _info(f"  {code}: downloading {source} → {destination} ...")
+            try:
+                path = download_url(source, destination, timeout=timeout, overwrite=redownload)
+            except DownloadError as exc:
+                problems.append(f"{code}: {source} could not be downloaded ({exc})")
+                continue
+        else:
+            path = Path(source).expanduser()
+            if not path.is_file():
+                problems.append(f"{code}: assembly file not found at {path}")
+                continue
+            if not _amr_fasta_suffix(path.name):
+                problems.append(
+                    f"{code}: {path.name} is not a FASTA drakkar accepts "
+                    f"(expected one of {', '.join(_AMR_FASTA_SUFFIXES)})"
+                )
+                continue
+
+        seen.add(code)
+        rows.append({"assembly_id": code, "assembly_path": str(path)})
+
+    if problems:
+        detail = "\n  ".join(problems)
+        _die(
+            f"{len(problems)} assembly/assemblies of batch '{args.batch}' cannot be "
+            f"processed:\n  {detail}"
+        )
+    if not rows:
+        _die(f"No usable assemblies found for batch '{args.batch}'.")
+
+    n = write_amr_manifest(rows, manifest_path)
+    _info(f"Wrote {n} assembly/assemblies to {manifest_path}.")
+    return 0
+
+
+# Content types used when a result file is attached to the batch record.
+_AMR_CONTENT_TYPES = {
+    ".xz":   "application/x-xz",
+    ".gz":   "application/gzip",
+    ".tsv":  "text/tab-separated-values",
+    ".yaml": "text/yaml",
+}
+
+
+def _content_type_of(path: Path) -> str:
+    return _AMR_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _run_amr_output(args: argparse.Namespace) -> int:
+    """Parse amr_qc.tsv, update EHI_ASB_ENTRY, transfer and attach the AMR tables."""
+    import gzip as _gzip
+    import os as _os
+    import shutil as _shutil
+
+    from ehio.airtable import AirtableError, attachment_encoded_size, ATTACHMENT_MAX_BYTES, AirtableClient
+    from ehio.metadata import (
+        AMR_METRIC_KEYS,
+        AMR_OUTPUT_FILES,
+        build_entry_update,
+        parse_amr_qc_tsv,
+        write_amr_output_tsv,
+    )
+    from ehio.transfer import SFTPTransfer
+
+    token       = _resolve_token(args)
+    base_id     = _require_cfg("EHI_BASE")
+    batch_table = _require_cfg("EHI_AMR_BATCH")
+    entry_table = _require_cfg("EHI_ASB_ENTRY")
+
+    batch_code_field    = _require_cfg("EHI_AMR_BATCH_CODE")
+    batch_status_field  = _require_cfg("EHI_AMR_BATCH_STATUS")
+    assembly_list_field = _require_cfg("EHI_AMR_BATCH_LIST_ASSEMBLIES")
+    assembly_code_field = (
+        str(cfg.get("EHI_ASB_ENTRY_ASSEMBLY_CODE") or "").strip()
+        or _require_cfg("EHI_ASB_ENTRY_CODE")
+    )
+
+    local_root = Path(args.local_dir).resolve()
+    if not local_root.is_dir():
+        _die(f"Local directory not found: {local_root}")
+
+    # A batch whose AMR run left no summary has nothing to report, and marking
+    # it done would hide an unfinished run: drakkar exits 0 on some of its own
+    # error paths, so the missing output is the only sign that nothing ran.
+    amr_dir = local_root / "amr"
+    qc_tsv  = amr_dir / "amr_qc.tsv"
+    if not qc_tsv.is_file():
+        _die(f"AMR summary not found: {qc_tsv}. "
+             f"The batch is not finished — check the drakkar log.")
+
+    assembly_stats = parse_amr_qc_tsv(qc_tsv)
+    if not assembly_stats:
+        _die(f"No assemblies found in {qc_tsv}.")
+
+    _info(f"Looking up batch '{args.batch}' in Airtable...")
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    if batch_record is None:
+        _die(f"Batch '{args.batch}' not found in {batch_table}.")
+    batch_record_id = batch_record["id"]
+
+    rec_ids = _linked_assembly_ids(batch_record, assembly_list_field, args.batch)
+
+    field_map: dict[str, str] = {}
+    for metric_key, config_key in AMR_METRIC_KEYS.items():
+        fld_id = str(cfg.get(config_key) or "").strip()
+        if fld_id:
+            field_map[metric_key] = fld_id
+
+    _info(f"Fetching {len(rec_ids)} assembly record(s)...")
+    all_metrics: dict[str, dict] = {}
+    updates: list[dict] = []
+    for rec_id in rec_ids:
+        record = client.fetch_record_by_id(entry_table, rec_id)
+        if not record:
+            continue
+        code = _first_value(record.get("fields", {}).get(assembly_code_field))
+        if not code:
+            continue
+        metrics = assembly_stats.get(code)
+        if metrics is None:
+            print(f"  Warning: no AMR stats found for assembly '{code}' in {qc_tsv}",
+                  file=sys.stderr)
+            continue
+        all_metrics[code] = metrics
+        payload = build_entry_update(record["id"], metrics, field_map)
+        if payload["fields"]:
+            updates.append(payload)
+
+    run_base = str(cfg.get("RUN_BASE") or "").strip()
+    if run_base and all_metrics:
+        tsv_out = Path(run_base) / args.batch / f"{args.batch}_output.tsv"
+        write_amr_output_tsv(all_metrics, tsv_out)
+        _info(f"Output summary written to {tsv_out}")
+
+    if updates:
+        _info(f"Updating {len(updates)} assembly record(s) in Airtable...")
+        client.update_records(entry_table, updates)
+        _info("Airtable update complete.")
+    else:
+        _info("No AMR metrics found to update.")
+
+    # Build the batch-prefixed copies that go to ERDA and to the attachment
+    # fields.  The .tsv.xz tables drakkar writes are already compressed, so they
+    # are only renamed; the two plain summaries are gzipped on the way out.
+    host        = _conf(args, "host",       "SFTP_HOST",        required=True)
+    user        = _conf(args, "user",       "SFTP_USER",        required=True)
+    port        = int(_conf(args, "port",   "SFTP_PORT") or 22)
+    identity    = _conf(args, "identity",   "SFTP_IDENTITY") or None
+    remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
+    remote_dir  = f"{remote_base.rstrip('/')}/AMR/{args.batch}"
+    rerun       = getattr(args, "rerun", False)
+
+    def _alias(source: Path, name: str) -> Path:
+        """Return a batch-prefixed hard link (or copy) of source."""
+        alias = source.with_name(name)
+        alias.unlink(missing_ok=True)
+        try:
+            _os.link(source, alias)
+        except OSError:
+            _shutil.copy2(source, alias)
+        return alias
+
+    upload_files: list[Path] = []
+    temporary: list[Path] = []
+    attachments: list[tuple[str, Path]] = []  # (field id, file)
+
+    for file_name, config_key in AMR_OUTPUT_FILES.items():
+        source = amr_dir / file_name
+        if not source.exists():
+            _info(f"  {file_name} not found in {amr_dir} — skipping.")
+            continue
+        alias = _alias(source, f"{args.batch}_{file_name}")
+        upload_files.append(alias)
+        temporary.append(alias)
+        field_id = str(cfg.get(config_key) or "").strip()
+        if field_id:
+            attachments.append((field_id, alias))
+
+    for file_name in ("amr_qc.tsv", "assembly_summary.tsv"):
+        source = amr_dir / file_name
+        if not source.exists():
+            _info(f"  {file_name} not found in {amr_dir} — skipping.")
+            continue
+        gz = amr_dir / f"{args.batch}_{file_name}.gz"
+        with source.open("rb") as _fin, _gzip.open(gz, "wb") as _fout:
+            _shutil.copyfileobj(_fin, _fout)
+        upload_files.append(gz)
+        temporary.append(gz)
+
+    provenance = amr_dir / "manifest.yaml"
+    if provenance.exists():
+        alias = _alias(provenance, f"{args.batch}_amr_manifest.yaml")
+        upload_files.append(alias)
+        temporary.append(alias)
+    else:
+        _info(f"  manifest.yaml not found in {amr_dir} — skipping.")
+
+    try:
+        if upload_files:
+            _info(f"Transferring {len(upload_files)} file(s) to {user}@{host}:{remote_dir} ...")
+            _timeout = getattr(args, "connect_timeout", 300.0)
+            with SFTPTransfer(host=host, username=user, port=port,
+                              key_path=identity or None, timeout=_timeout) as xfer:
+                if rerun:
+                    xfer.remove_remote_dir(remote_dir)
+                    _info(f"Deleted remote directory {remote_dir} for rerun.")
+                n_up, n_sk = xfer.upload_flat(
+                    upload_files, remote_dir, verbose=getattr(args, "verbose", False)
+                )
+            _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
+            _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
+
+        # uploadAttachment appends to whatever the field already holds, so a
+        # rerun clears the fields first instead of stacking a second copy of
+        # every table on the record.
+        if attachments and rerun:
+            client.update_records(
+                batch_table,
+                [{"id": batch_record_id, "fields": {fld: [] for fld, _ in attachments}}],
+            )
+            _info("Cleared the AMR attachment fields for rerun.")
+            batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+
+        batch_fields_now = batch_record.get("fields", {}) if batch_record else {}
+        for field_id, path in attachments:
+            attached = batch_fields_now.get(field_id) or []
+            if any(str(a.get("filename", "")) == path.name
+                   for a in attached if isinstance(a, dict)):
+                _info(f"  {path.name} is already attached — skipping.")
+                continue
+            encoded = attachment_encoded_size(path.stat().st_size)
+            if encoded > ATTACHMENT_MAX_BYTES:
+                _info(
+                    f"  {path.name} is {path.stat().st_size / (1024 * 1024):.1f} MB, over the "
+                    f"{ATTACHMENT_MAX_BYTES // (1024 * 1024)} MB Airtable attachment limit — "
+                    f"left on ERDA only ({remote_dir}/{path.name})."
+                )
+                continue
+            try:
+                client.upload_attachment(
+                    batch_table, batch_record_id, field_id, path,
+                    content_type=_content_type_of(path),
+                )
+            except AirtableError as exc:
+                print(f"  Warning: could not attach {path.name}: {exc}", file=sys.stderr)
+                continue
+            _info(f"  Attached {path.name}.")
+    finally:
+        for tmp in temporary:
+            tmp.unlink(missing_ok=True)
+
+    batch_fields: dict = {}
+    ehio_version_field    = str(cfg.get("EHI_AMR_BATCH_EHIO_VERSION")    or "").strip()
+    drakkar_version_field = str(cfg.get("EHI_AMR_BATCH_DRAKKAR_VERSION") or "").strip()
+    if ehio_version_field:
+        batch_fields[ehio_version_field] = __version__
+    if drakkar_version_field:
+        batch_fields[drakkar_version_field] = _get_drakkar_version()
+
+    done_status = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    batch_fields[batch_status_field] = done_status
+    client.update_records(batch_table, [{"id": batch_record_id, "fields": batch_fields}])
+    _info(f"Batch '{args.batch}' status → '{done_status}'.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -1587,6 +1990,40 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ann.set_defaults(func=cmd_annotating)
 
     # ------------------------------------------------------------------
+    # amr
+    # ------------------------------------------------------------------
+    p_amr = sub.add_parser(
+        "amr",
+        help="Input/output for the antimicrobial resistance workflow.",
+        description=(
+            "Input mode:  fetch the assemblies linked to an AMR batch in\n"
+            "             EHI_BASE/EHI_AMR_BATCH, download their FASTAs from the\n"
+            "             URLs held in EHI_ASB_ENTRY, and write a drakkar amr\n"
+            "             assembly manifest pointing at the local copies.\n"
+            "Output mode: parse amr/amr_qc.tsv, write the per-assembly AMR stats\n"
+            "             back to EHI_ASB_ENTRY, upload the aggregate tables to\n"
+            "             AMR/{batch} via SFTP and attach them to the batch record."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    _add_mode(p_amr)
+    _add_batch(p_amr)
+    _add_token(p_amr)
+    _add_verbose(p_amr)
+    p_amr.add_argument("--manifest-file", "-f", default="assemblies.tsv", metavar="PATH",
+        help="Output assembly manifest for drakkar amr (input mode). Default: assemblies.tsv.")
+    p_amr.add_argument("--assemblies-dir", "-d", default="assemblies", metavar="DIR",
+        help="Directory the assembly FASTAs are downloaded into (input mode).\n"
+             "Default: assemblies.")
+    p_amr.add_argument("--redownload", action="store_true",
+        help="Download every assembly again, even when it is already in the\n"
+             "assemblies directory (input mode).")
+    p_amr.add_argument("--download-timeout", metavar="SECONDS", type=float, default=600.0,
+        help="Timeout for a single assembly download in seconds (default: 600).")
+    _add_sftp_overrides(p_amr)
+    p_amr.set_defaults(func=cmd_amr)
+
+    # ------------------------------------------------------------------
     # reference
     # ------------------------------------------------------------------
     p_ref = sub.add_parser(
@@ -1626,9 +2063,9 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_scan.add_argument("--module", "-m",
-        choices=["preprocessing", "binning", "quantifying"],
+        choices=["preprocessing", "binning", "quantifying", "amr"],
         metavar="MODULE",
-        help="Scan only this module. Default: scan all three.")
+        help="Scan only this module. Default: scan all four.")
     p_scan.add_argument("--airtable-token", metavar="TOKEN",
         help="Airtable personal access token. Overrides $AIRTABLE_TOKEN.")
     p_scan.add_argument("--dry-run", action="store_true",
@@ -1654,7 +2091,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_ss.add_argument("--module", "-m", required=True,
-        choices=["preprocessing", "binning", "quantifying"],
+        choices=["preprocessing", "binning", "quantifying", "amr"],
         help="Module whose batch table to update.")
     p_ss.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code to look up.")
@@ -1715,7 +2152,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_stop.add_argument("--module", "-m", required=True,
-        choices=["preprocessing", "binning", "quantifying"],
+        choices=["preprocessing", "binning", "quantifying", "amr"],
         help="Module whose batch table to update.")
     p_stop.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code (screen session name) to stop.")
@@ -1741,7 +2178,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_jobs.add_argument("--module", "-m", required=True,
-        choices=["preprocessing", "binning", "quantifying"],
+        choices=["preprocessing", "binning", "quantifying", "amr"],
         help="Module whose output base the batch runs in.")
     p_jobs.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code to list the jobs of.")
@@ -1754,13 +2191,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "remove",
         help="Delete the output directory for a batch (not the RUN directory).",
         description=(
-            "Removes the working output directory (PPR/ASB/DMB)/{batch} for the given\n"
+            "Removes the working output directory (PPR/ASB/DMB/AMR)/{batch} for the given\n"
             "module. The RUN/{batch} directory (scripts and logs) is not touched."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_rm.add_argument("--module", "-m", required=True,
-        choices=["preprocessing", "binning", "quantifying"],
+        choices=["preprocessing", "binning", "quantifying", "amr"],
         help="Module whose output base to use.")
     p_rm.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code — the subdirectory to delete.")
@@ -1777,6 +2214,7 @@ _SET_STATUS_CFG = {
     "preprocessing": ("EHI_BASE", "EHI_PPR_BATCH", "EHI_PPR_BATCH_CODE", "EHI_PPR_BATCH_STATUS", "EHI_PPR_BATCH_ERROR_FILES"),
     "binning":       ("EHI_BASE", "EHI_ASB_BATCH", "EHI_ASB_BATCH_CODE", "EHI_ASB_BATCH_STATUS", "EHI_ASB_BATCH_ERROR_FILES"),
     "quantifying":   ("MAG_BASE", "MAG_DMB_BATCH", "MAG_DMB_BATCH_CODE", "MAG_DMB_BATCH_STATUS", "MAG_DMB_BATCH_ERROR_FILES"),
+    "amr":           ("EHI_BASE", "EHI_AMR_BATCH", "EHI_AMR_BATCH_CODE", "EHI_AMR_BATCH_STATUS", "EHI_AMR_BATCH_ERROR_FILES"),
 }
 
 
@@ -1953,6 +2391,7 @@ _OUTPUT_BASE_CFG = {
     "preprocessing": "EHI_PPR_OUTPUT_BASE",
     "binning":       "EHI_ASB_OUTPUT_BASE",
     "quantifying":   "MAG_DMB_OUTPUT_BASE",
+    "amr":           "EHI_AMR_OUTPUT_BASE",
 }
 
 

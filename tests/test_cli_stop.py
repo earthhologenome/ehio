@@ -11,7 +11,7 @@ from ehio import cli
 from ehio.scanning import STOP_SENTINEL
 from ehio.slurm import SlurmJob, SlurmUnavailable
 
-MODULES = ["preprocessing", "binning", "quantifying"]
+MODULES = ["preprocessing", "binning", "quantifying", "amr"]
 
 
 @pytest.fixture

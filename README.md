@@ -44,6 +44,7 @@ EHI_PPR_BATCH: "tblXXXXXXXXXXXXXX"  # Preprocessing batch table
 EHI_PPR_ENTRY: "tblXXXXXXXXXXXXXX"  # Preprocessing entry table
 EHI_ASB_BATCH: "tblXXXXXXXXXXXXXX"  # Assembly/binning batch table
 EHI_ASB_ENTRY: "tblXXXXXXXXXXXXXX"  # Assembly/binning entry table
+EHI_AMR_BATCH: "tblXXXXXXXXXXXXXX"  # AMR batch table
 MAG_DMB_BATCH: "tblXXXXXXXXXXXXXX"  # Dereplication/mapping batch table
 MAG_DMB_ENTRY: "tblXXXXXXXXXXXXXX"  # Dereplication/mapping entry table
 GENOME_ENTRY:  "tblXXXXXXXXXXXXXX"  # Genome entry table
@@ -110,7 +111,8 @@ ehio expects two Airtable bases with a shared relational pattern: each base has 
 ```
 EHI_BASE
 ├── EHI_PPR_BATCH  ── linked ──▶  EHI_PPR_ENTRY   (preprocessing)
-└── EHI_ASB_BATCH  ── linked ──▶  EHI_ASB_ENTRY   (assembly/binning)
+├── EHI_ASB_BATCH  ── linked ──▶  EHI_ASB_ENTRY   (assembly/binning)
+└── EHI_AMR_BATCH  ── linked ──▶  EHI_ASB_ENTRY   (antimicrobial resistance)
 
 MAG_BASE
 └── MAG_DMB_BATCH  ── linked ──▶  MAG_DMB_ENTRY   (dereplication/mapping)
@@ -118,6 +120,12 @@ MAG_BASE
 GENOME_BASE
 └── GENOME_ENTRY                                   (reference genomes)
 ```
+
+The AMR batch table is the one exception to the batch/entry pattern: it has no
+entry table of its own and links straight to the assembly records of
+`EHI_ASB_ENTRY`, so an assembly can be run through the AMR workflow at any time
+after the binning batch that produced it is done, and the same assembly can
+belong to several AMR batches.
 
 **Batch tables** hold batch-level metadata and a status field that ehio reads (for scanning) and updates (after launching or completing a run).
 
@@ -212,9 +220,57 @@ ehio quantifying --output -b DMB001 --local-dir /projects/DMB001
 
 ---
 
+### `ehio amr`
+
+Bridges the antimicrobial resistance step. Connects to `EHI_BASE` only.
+
+| Direction | What it does |
+|-----------|-------------|
+| `--input` | Looks up the batch in `EHI_AMR_BATCH`, follows `EHI_AMR_BATCH_LIST_ASSEMBLIES` to the linked `EHI_ASB_ENTRY` records, downloads every assembly FASTA from `EHI_ASB_ENTRY_ASSEMBLY_URL` into the batch staging directory, and writes a drakkar amr manifest (`assembly_id`, `assembly_path`, `assembly_type`) pointing at the local copies. |
+| `--output` | Parses `amr/amr_qc.tsv`, writes the per-assembly AMR counts back to the assembly records in `EHI_ASB_ENTRY`, transfers the aggregate tables to `{SFTP_REMOTE_BASE}/AMR/{batch}` and attaches them to the AMR batch record. |
+
+```bash
+ehio amr --input -b AMR001 -f assemblies.tsv -d /projects/ehi/data/AMR/AMR001/data/assemblies
+drakkar amr -f assemblies.tsv -o /projects/ehi/data/AMR/AMR001
+ehio amr --output -b AMR001 --local-dir /projects/ehi/data/AMR/AMR001
+```
+
+**Why the assemblies are downloaded.** `drakkar amr` inspects and hashes every
+assembly before the run — it takes local files only and has no downloader of its
+own, unlike `drakkar preprocessing`, which is handed read URLs. `ehio amr
+--input` therefore fetches each URL into `{EHI_AMR_OUTPUT_BASE}/{batch}/data/assemblies`
+and writes those paths into the manifest. A file that is already there is kept,
+so a resumed batch does not download anything twice; `--redownload` forces a
+fresh copy. A cell already holding a local path is used as it is. The batch stops
+before drakkar starts if any assembly has no file, cannot be downloaded, or is not
+named as a FASTA drakkar accepts (`.fa`, `.fna`, `.fasta`, optionally `.gz`) —
+all such problems are reported together rather than one per run.
+
+**Assembly type.** Every batch runs as `metagenome`, which is written into the
+`assembly_type` column of the manifest and selects the Prodigal mode and RGI's
+`--low_quality` handling. Isolate assemblies are not part of the EHI database,
+so there is no Airtable field for it.
+
+**Stats.** One row of `amr_qc.tsv` per assembly goes to `EHI_ASB_ENTRY`:
+`amrfinder_hits`, `rgi_hits`, `mobility_regions`, `amr_loci`, `multi_tool_loci`,
+`mobility_links` and `mobile_loci`. The two `*_without_coordinates` columns are
+diagnostics of the callers rather than results, and are not written.
+
+**Files.** The five aggregate tables (`amr_hits`, `amr_loci`, `amr_drug_classes`,
+`amr_mobility`, `mobility_regions`, all `.tsv.xz`) go to `AMR/{batch}` on ERDA
+batch-prefixed, together with gzipped copies of `amr_qc.tsv` and
+`assembly_summary.tsv` and the `manifest.yaml` provenance record. The same five
+tables are attached to the AMR batch record. Airtable caps an attachment upload
+at 5 MB of base64 (~3.7 MB of file), so a table above that is reported and left
+on ERDA only — the transfer is never the step that fails. A rerun clears the
+attachment fields first, since Airtable's upload endpoint appends rather than
+replaces.
+
+---
+
 ### `ehio scanning`
 
-Polls all three batch tables for records whose status field matches `SCANNING_TRIGGER_STATUS` (default: `ready`). For each pending batch it finds:
+Polls all four batch tables for records whose status field matches `SCANNING_TRIGGER_STATUS` (default: `ready`). For each pending batch it finds:
 
 1. Checks whether a `screen` session named after the batch already exists — skips if so.
 2. For preprocessing batches, resolves the reference genome (`-x` indexed tarball, else `-r` raw fasta) and verifies it can be downloaded; if not, the batch is marked `PROCESSING_ERROR_STATUS` and skipped instead of being launched.
@@ -223,7 +279,7 @@ Polls all three batch tables for records whose status field matches `SCANNING_TR
 5. Updates the batch record status to `SCANNING_LAUNCHED_STATUS` (default: `running`).
 
 ```bash
-# Scan all three modules
+# Scan all four modules
 ehio scanning
 
 # Scan one module only
@@ -250,11 +306,16 @@ drakkar cataloging -f OUTPUT_DIR/samples.tsv -o OUTPUT_DIR -p slurm
 mkdir -p OUTPUT_DIR &&
 ehio quantifying --input -b BATCH -f OUTPUT_DIR/samples.tsv --bins-file OUTPUT_DIR/bins.txt &&
 drakkar profiling -B OUTPUT_DIR/bins.txt -R OUTPUT_DIR/samples.tsv -o OUTPUT_DIR -p slurm
+
+# amr
+mkdir -p OUTPUT_DIR &&
+ehio amr --input -b BATCH -f RUN_DIR/BATCH_assemblies.tsv -d OUTPUT_DIR/data/assemblies &&
+drakkar amr -f RUN_DIR/BATCH_assemblies.tsv -o OUTPUT_DIR -p slurm
 ```
 
 `OUTPUT_DIR` is constructed as `{MODULE_OUTPUT_BASE}/{BATCH_NAME}`.
 
-If any step fails, the exit trap of the launch script appends a failure report to `{BATCH}.err`, sets the batch status to `PROCESSING_ERROR_STATUS` and attaches drakkar's own failure report — `OUTPUT_DIR/drakkar_<run_id>_failures.tsv`, one row per failed job with its failure category — to the batch record, so the source of the error can be read straight from Airtable. The attachment field is configured per module with `EHI_PPR_BATCH_ERROR_FILES`, `EHI_ASB_BATCH_ERROR_FILES` and `MAG_DMB_BATCH_ERROR_FILES`; leave a key empty to disable uploading for that module.
+If any step fails, the exit trap of the launch script appends a failure report to `{BATCH}.err`, sets the batch status to `PROCESSING_ERROR_STATUS` and attaches drakkar's own failure report — `OUTPUT_DIR/drakkar_<run_id>_failures.tsv`, one row per failed job with its failure category — to the batch record, so the source of the error can be read straight from Airtable. The attachment field is configured per module with `EHI_PPR_BATCH_ERROR_FILES`, `EHI_ASB_BATCH_ERROR_FILES`, `MAG_DMB_BATCH_ERROR_FILES` and `EHI_AMR_BATCH_ERROR_FILES`; leave a key empty to disable uploading for that module.
 
 ---
 
@@ -292,7 +353,8 @@ Airtable (EHI_BASE / MAG_BASE)
         │  ehio <module> --input -b BATCH
         ▼
   Drakkar input files
-  (samples.tsv, bins.txt)
+  (samples.tsv, bins.txt,
+   assemblies.tsv)
         │
         │  drakkar <cmd> -f ... -o OUTPUT_DIR
         ▼
@@ -319,9 +381,12 @@ ehio binning        --output -b BATCH [-l LOCAL_DIR]   [overrides...]
 ehio quantifying    --input  -b BATCH [-f samples.tsv] [--bins-file bins.txt] [overrides...]
 ehio quantifying    --output -b BATCH [-l LOCAL_DIR]   [overrides...]
 
+ehio amr            --input  -b BATCH [-f assemblies.tsv] [-d ASSEMBLIES_DIR] [--redownload] [overrides...]
+ehio amr            --output -b BATCH [-l LOCAL_DIR]   [overrides...]
+
 ehio reference      -b BATCH [-l LOCAL_DIR] [--force] [overrides...]
 
-ehio scanning       [--module preprocessing|binning|quantifying] [--dry-run] [-v]
+ehio scanning       [--module preprocessing|binning|quantifying|amr] [--dry-run] [-v]
 
 ehio set-status     -m MODULE -b BATCH -s STATUS [--failures-dir DIR] [--failures-since EPOCH]
 

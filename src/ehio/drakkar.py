@@ -276,3 +276,61 @@ def write_bins_file(
         for p in paths:
             fh.write(p + "\n")
     return len(paths)
+
+
+# ---------------------------------------------------------------------------
+# AMR manifest
+# ---------------------------------------------------------------------------
+
+# Assembly types accepted by 'drakkar amr'; the type picks the Prodigal mode
+# and whether RGI is run with --low_quality.
+AMR_ASSEMBLY_TYPES = ("metagenome", "isolate")
+AMR_MANIFEST_COLUMNS = ["assembly_id", "assembly_path", "assembly_type"]
+
+
+def normalise_amr_assembly_type(value: object, default: str = "metagenome") -> str:
+    """Return the canonical AMR assembly type of an Airtable batch-type value.
+
+    Case and punctuation are ignored, so 'Metagenome' and 'meta-genome' both
+    mean the same thing.  An empty or unrecognised value returns `default`,
+    which is what drakkar assumes when the manifest does not say.
+    """
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    text = re.sub(r"[^a-z]", "", str(value or "").lower())
+    return text if text in AMR_ASSEMBLY_TYPES else default
+
+
+def write_amr_manifest(
+    rows: list[dict[str, str]],
+    path: Path,
+    assembly_type: str = "metagenome",
+) -> int:
+    """Write the assembly manifest 'drakkar amr -f' reads.
+
+    Columns: assembly_id, assembly_path, assembly_type.  Every path must be a
+    local file — drakkar inspects and hashes each assembly before the run and
+    has no downloader of its own, so URLs are fetched by 'ehio amr --input'
+    before this is called.  Rows without an id or a path are skipped.
+    Returns the number of rows written.
+    """
+    written = []
+    for row in rows:
+        assembly_id = str(row.get("assembly_id", "")).strip()
+        assembly_path = str(row.get("assembly_path", "")).strip()
+        if not assembly_id or not assembly_path:
+            continue
+        written.append({
+            "assembly_id": assembly_id,
+            "assembly_path": assembly_path,
+            "assembly_type": normalise_amr_assembly_type(
+                row.get("assembly_type"), default=assembly_type
+            ),
+        })
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=AMR_MANIFEST_COLUMNS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(written)
+    return len(written)
