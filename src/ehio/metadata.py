@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -670,12 +671,64 @@ def parse_genome_taxonomy_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
-def parse_annotation_tsv(tsv_path: Path) -> dict[str, Any]:
-    """Parse a per-genome annotation TSV from annotating/final/{mag_code}.tsv.
+# drakkar strips the FASTA suffix from a genome file to name everything it
+# writes about that genome, so the MAG called 'EHA00123_bin_1.fa' in Airtable
+# is 'EHA00123_bin_1' in every drakkar output path.
+_FASTA_SUFFIX_RE = re.compile(r"\.(?:fa|fna|fasta)(?:\.gz)?$", re.IGNORECASE)
 
-    Returns coding_density, genes_number, genes_unannotated, genes_kegg.
-    Genome length is estimated as sum of max(end) per contig; gene length
-    is abs(end - start) per gene.  Unannotated = no kegg, ec, pfam, or cazy.
+
+def drakkar_mag_id(genome_name: str) -> str:
+    """Return the MAG id drakkar derives from a genome file name."""
+    return _FASTA_SUFFIX_RE.sub("", str(genome_name or "").strip())
+
+
+GENE_TABLE_SUFFIX = "_genes.tsv"
+
+
+def find_gene_tables(final_dir: Path) -> dict[str, Path]:
+    """Return {mag id: gene table} for a drakkar annotating/final directory.
+
+    drakkar writes one '{mag}_genes.tsv' per genome, and a '{mag}_clusters.tsv'
+    beside it holding the dbCAN, antiSMASH, geNomad and defense clusters — a
+    different table with a different schema, which is why the gene tables are
+    picked by name rather than by globbing every TSV in the directory.
+    """
+    if not final_dir.is_dir():
+        return {}
+    return {
+        path.name[: -len(GENE_TABLE_SUFFIX)]: path
+        for path in sorted(final_dir.glob(f"*{GENE_TABLE_SUFFIX}"))
+        if path.is_file()
+    }
+
+
+# Sources of the long-form gene table that count as a functional annotation.
+# They are the kegg / ec / pfam / cazy columns of the 1.x wide table: 'ec' was
+# filled from the KEGG or Pfam hit rather than being a source of its own, and
+# the remaining sources (vfdb, ncbi_amrfinder, signalp, defensefinder) were not
+# counted as an annotation then either.  'prodigal' is the gene call itself and
+# is never one — drakkar writes a prodigal row for every gene it predicted,
+# annotated or not.
+ANNOTATION_SOURCES = frozenset({"kegg", "pfam", "cazy"})
+
+
+def parse_annotation_tsv(tsv_path: Path) -> dict[str, Any]:
+    """Parse a per-genome gene table from annotating/final/{mag}_genes.tsv.
+
+    Returns coding_density, genes_number, genes_unannotated and genes_kegg.
+
+    Since drakkar 2.0.0 the table is long-form: one row per accepted hit, so a
+    gene appears once per source and once per ranked hit within a source, plus
+    a 'prodigal' row carrying the gene call itself.  Every metric is therefore
+    counted over distinct genes rather than over rows, and a gene counts as
+    annotated when it has a row from one of ANNOTATION_SOURCES.  The 1.x wide
+    table — one row per gene, one column per database — is read as well, and is
+    recognised by having no 'source' column.
+
+    Gene length is end - start + 1, drakkar's coordinates being 1-based and
+    inclusive, and genome length is estimated as the sum of the last gene end
+    per contig, so coding density is the fraction of the assembled genome the
+    gene calls cover.
     """
     result: dict[str, Any] = {
         "coding_density":   None,
@@ -685,45 +738,64 @@ def parse_annotation_tsv(tsv_path: Path) -> dict[str, Any]:
     }
     if not tsv_path.exists():
         return result
-    contig_max_end: dict[str, int] = {}
-    total_gene_length = 0
-    total_genes = 0
-    unannotated = 0
-    kegg_count = 0
+
+    genes: dict[str, tuple[str, int, int]] = {}  # gene -> (contig, start, end)
+    annotated: set[str] = set()
+    kegg: set[str] = set()
     try:
         with tsv_path.open(newline="") as fh:
             reader = csv.DictReader(fh, delimiter="\t")
+            long_form = "source" in (reader.fieldnames or [])
             for row in reader:
                 gene = (row.get("gene") or "").strip()
                 if not gene:
                     continue
-                contig = gene.rsplit("_", 1)[0]
+                # The long-form table names the contig outright; the wide table
+                # left it to be read off the Prodigal gene id, '<contig>_<n>'.
+                contig = (row.get("contig") or "").strip() or gene.rsplit("_", 1)[0]
                 try:
                     start = int(row.get("start") or 0)
                     end   = int(row.get("end")   or 0)
                 except (ValueError, TypeError):
                     start, end = 0, 0
-                total_gene_length += abs(end - start)
-                contig_max_end[contig] = max(contig_max_end.get(contig, 0), end)
-                total_genes += 1
-                if not any([
+                genes.setdefault(gene, (contig, start, end))
+
+                if long_form:
+                    source = (row.get("source") or "").strip().lower()
+                    if source in ANNOTATION_SOURCES:
+                        annotated.add(gene)
+                    if source == "kegg":
+                        kegg.add(gene)
+                    continue
+
+                if any([
                     (row.get("kegg")  or "").strip(),
                     (row.get("ec")    or "").strip(),
                     (row.get("pfam")  or "").strip(),
                     (row.get("cazy")  or "").strip(),
                 ]):
-                    unannotated += 1
+                    annotated.add(gene)
                 if (row.get("kegg") or "").strip():
-                    kegg_count += 1
-        if total_genes > 0:
-            genome_length = sum(contig_max_end.values())
-            result["genes_number"]      = total_genes
-            result["genes_unannotated"] = unannotated
-            result["genes_kegg"]        = kegg_count
-            if genome_length > 0:
-                result["coding_density"] = round(total_gene_length / genome_length, 6)
+                    kegg.add(gene)
     except OSError:
-        pass
+        return result
+
+    if not genes:
+        return result
+
+    contig_max_end: dict[str, int] = {}
+    coding_length = 0
+    for contig, start, end in genes.values():
+        if 0 < start <= end:
+            coding_length += end - start + 1
+        contig_max_end[contig] = max(contig_max_end.get(contig, 0), end)
+
+    result["genes_number"]      = len(genes)
+    result["genes_unannotated"] = len(genes) - len(annotated)
+    result["genes_kegg"]        = len(kegg)
+    genome_length = sum(contig_max_end.values())
+    if genome_length > 0:
+        result["coding_density"] = round(coding_length / genome_length, 6)
     return result
 
 

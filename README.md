@@ -218,6 +218,27 @@ drakkar profiling -B bins.txt -R samples.tsv -o /projects/DMB001
 ehio quantifying --output -b DMB001 --local-dir /projects/DMB001
 ```
 
+
+---
+
+### `ehio annotating`
+
+Bridges the taxonomic and functional annotation step of a DMB batch, which runs after `ehio quantifying --output` in the same output directory. Connects to `MAG_BASE` only.
+
+| Direction | What it does |
+|-----------|-------------|
+| `--input` | Lists the dereplicated genomes that still need annotating, skipping the MAGs whose `MAG_ENTRY_ANNOTATED` value already covers the batch's annotation type (`kegg` ⊂ `genes` ⊂ `all`). A MAG at `genes` in an `all` batch is written to a second file, so it gets cluster annotation only instead of being annotated from scratch. |
+| `--output` | Writes taxonomy and gene metrics back to `MAG_ENTRY`, transfers the batch-level tables to `{SFTP_REMOTE_BASE}/DMB/{batch}` and the per-genome tables to `{SFTP_REMOTE_BASE}/ANN/{batch}`, and marks the batch done. |
+
+`--output` reads two things from `annotating/`:
+
+- `genome_taxonomy.tsv` — the GTDB-Tk summary. The classification string is split into its seven ranks, and `closest_genome_ani`, `closest_placement_ani` and `closest_genome_af` are written alongside them.
+- `final/{mag}_genes.tsv` — one gene table per genome. Since drakkar 2.0.0 this is a long-form evidence table with one row per accepted hit, so a gene appears once per source and once per ranked hit within a source, always including a `prodigal` row carrying the gene call itself. ehio counts over distinct genes: `genes_number` is every gene predicted, `genes_kegg` the genes with a KEGG hit, `genes_unannotated` the genes with no KEGG, Pfam or CAZy hit, and `coding_density` the fraction of the genome the gene calls cover. The 1.x wide table, one row per gene and one column per database, is still read.
+
+A MAG is named by its FASTA file in Airtable (`EHA00123_bin_1.fa`) and by that name with the suffix stripped in every drakkar output path (`EHA00123_bin_1_genes.tsv`), so the two are matched on the stripped id. `final/{mag}_clusters.tsv` sits beside the gene tables and holds a different table — the dbCAN gene clusters, antiSMASH regions, geNomad mobile elements and defense systems — so it is transferred but not parsed.
+
+Once a MAG has its metrics, `MAG_ENTRY_ANNOTATED` is set to the batch's annotation type, which is what lets the next batch skip it.
+
 ---
 
 ### `ehio amr`
@@ -315,7 +336,11 @@ drakkar amr -f RUN_DIR/BATCH_assemblies.tsv -o OUTPUT_DIR -p slurm
 
 `OUTPUT_DIR` is constructed as `{MODULE_OUTPUT_BASE}/{BATCH_NAME}`.
 
-If any step fails, the exit trap of the launch script appends a failure report to `{BATCH}.err`, sets the batch status to `PROCESSING_ERROR_STATUS` and attaches drakkar's own failure report — `OUTPUT_DIR/drakkar_<run_id>_failures.tsv`, one row per failed job with its failure category — to the batch record, so the source of the error can be read straight from Airtable. The attachment field is configured per module with `EHI_PPR_BATCH_ERROR_FILES`, `EHI_ASB_BATCH_ERROR_FILES`, `MAG_DMB_BATCH_ERROR_FILES` and `EHI_AMR_BATCH_ERROR_FILES`; leave a key empty to disable uploading for that module.
+If any step fails, the exit trap of the launch script appends a failure report to `{BATCH}.err`, sets the batch status to `PROCESSING_ERROR_STATUS` and attaches drakkar's own failure report — `OUTPUT_DIR/logging/drakkar_<run_id>.failures.tsv`, one row per failed job with its failure category — to the batch record, so the source of the error can be read straight from Airtable. The attachment field is configured per module with `EHI_PPR_BATCH_ERROR_FILES`, `EHI_ASB_BATCH_ERROR_FILES`, `MAG_DMB_BATCH_ERROR_FILES` and `EHI_AMR_BATCH_ERROR_FILES`; leave a key empty to disable uploading for that module.
+
+Every drakkar call in the script is bracketed by a check of the run metadata drakkar writes for the run it starts (`drakkar_<run_id>.yaml`, stamped `status: success` once the workflow ends), because drakkar reports some of its own errors — a Snakemake lock, a missing input file — by printing a message and exiting 0. drakkar 2.5.0 moved that file, the failure table and the Snakemake log into `OUTPUT_DIR/logging/`; before it they sat in the output root and in `OUTPUT_DIR/log/`. ehio reads both layouts everywhere, so a batch launched under one drakkar and resumed under another is still checked, and its failure report is still found.
+
+**Drakkar version recorded on the batch.** When a batch finishes, the drakkar version that produced it is written to the batch record (`EHI_PPR_BATCH_DRAKKAR_VERSION` and its per-module counterparts). It is read from the run metadata in the output directory, not from the installed drakkar, so the field says which version actually did the work. A batch holds one metadata file per drakkar run — quantifying alone calls drakkar four times, and a resumed batch adds more — so a batch that spans an upgrade reports every version that did part of it, oldest run first: `2.4.4/2.4.5`. On a DMB batch the field is written twice: once by `ehio quantifying --output`, and again by `ehio annotating --output` at the end of the batch, by which point the annotation runs have been recorded too. If the output directory holds no run metadata (it was cleaned up, or the drakkar that ran predates the metadata), the installed drakkar is asked instead.
 
 ---
 
@@ -380,6 +405,9 @@ ehio binning        --output -b BATCH [-l LOCAL_DIR]   [overrides...]
 
 ehio quantifying    --input  -b BATCH [-f samples.tsv] [--bins-file bins.txt] [overrides...]
 ehio quantifying    --output -b BATCH [-l LOCAL_DIR]   [overrides...]
+
+ehio annotating     --input  -b BATCH [-f annotation.tsv] [-d GENOMES_DIR] [overrides...]
+ehio annotating     --output -b BATCH [-l LOCAL_DIR]   [overrides...]
 
 ehio amr            --input  -b BATCH [-f assemblies.tsv] [-d ASSEMBLIES_DIR] [--redownload] [overrides...]
 ehio amr            --output -b BATCH [-l LOCAL_DIR]   [overrides...]

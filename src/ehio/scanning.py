@@ -13,7 +13,7 @@ from typing import Any
 
 from ehio import config as cfg
 from ehio.airtable import AirtableClient, AirtableError
-from ehio.drakkar import normalise_assembly_type
+from ehio.drakkar import LOGGING_DIRNAME, normalise_assembly_type
 
 # Marker file written by 'ehio stop' in the run directory of a batch.
 STOP_SENTINEL = ".ehio_stopped"
@@ -226,6 +226,8 @@ def build_script_content(
     # Touched right before every drakkar call, so the run metadata written by
     # that call can be told apart from the metadata of earlier runs.
     marker_file = f"{run_dir}/.ehio_drakkar_marker"
+    # Where drakkar 2.5.0 and later keep the run metadata of every run.
+    logging_dir = f"{output_dir}/{LOGGING_DIRNAME}"
 
     conda_block = ""
     if ehio_conda_env:
@@ -298,20 +300,35 @@ def build_script_content(
         # the checks below 'set -e' reads that as a successful run, the output
         # step finds no results, and the batch is marked as done although
         # nothing ran.  Two independent signals catch it: the run metadata
-        # drakkar writes next to the results (drakkar_<run id>.yaml, stamped
+        # drakkar writes for every run (drakkar_<run id>.yaml, stamped
         # 'status: success' once the workflow ends) and the products the
         # workflow must have left behind.
+        #
+        # drakkar 2.5.0 moved that metadata into the 'logging/' subdirectory of
+        # the output directory; before it, the file sat in the output root next
+        # to the results.  Both are searched, so the check keeps working across
+        # the upgrade — including for a batch launched under one layout and
+        # resumed under the other.  The run id is a UTC timestamp, and matching
+        # its shape rather than 'drakkar_*.yaml' leaves out the benchmark
+        # roll-up an older drakkar wrote beside the metadata as
+        # drakkar_<run id>_resources.yaml, which carries no status.
         f"_EHIO_MARKER={q(marker_file)}\n"
         "_ehio_drakkar_start() {\n"
         '    rm -f "$_EHIO_MARKER"\n'
         '    touch "$_EHIO_MARKER"\n'
         "}\n"
+        # 'find' exits non-zero on a directory that does not exist — which the
+        # logging directory does not under an older drakkar — and 'pipefail'
+        # would turn that into a failed script, so its status is discarded.
+        "_ehio_drakkar_metadata() {\n"
+        f'    {{ find {q(logging_dir)} {q(output_dir)} -maxdepth 1'
+        ' -name "drakkar_????????-??????.yaml" "$@" 2>/dev/null || true; } | sort\n'
+        "}\n"
         "_ehio_drakkar_check() {\n"
-        f'    if ! ls {q(output_dir)}/drakkar_*.yaml >/dev/null 2>&1; then\n'
+        '    if [ -z "$(_ehio_drakkar_metadata)" ]; then\n'
         "        return 0\n"
         "    fi\n"
-        f'    _EHIO_META=$(find {q(output_dir)} -maxdepth 1 -name "drakkar_*.yaml"'
-        ' -newer "$_EHIO_MARKER" 2>/dev/null | sort | tail -n 1)\n'
+        '    _EHIO_META=$(_ehio_drakkar_metadata -newer "$_EHIO_MARKER" | tail -n 1)\n'
         '    if [ -z "${_EHIO_META:-}" ]; then\n'
         '        echo "=== ehio: drakkar $1 exited without starting a workflow run ===" >&2\n'
         "        exit 1\n"

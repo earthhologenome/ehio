@@ -194,28 +194,160 @@ def verify_remote_urls(
     return [(sample, url, failures[url]) for sample, url in owners if url in failures]
 
 
-FAILURE_REPORT_GLOB = "drakkar_*_failures.tsv"
+# ---------------------------------------------------------------------------
+# drakkar output layout
+# ---------------------------------------------------------------------------
+
+# drakkar 2.5.0 collected everything a run records about itself — the run
+# metadata, the Snakemake log, the failure table and the benchmark roll-up —
+# into a 'logging/' subdirectory of the output directory, and renamed the
+# failure table from 'drakkar_<run id>_failures.tsv' to
+# 'drakkar_<run id>.failures.tsv'.  Earlier versions wrote both into the output
+# root.  A batch can span the upgrade — launched with one version, resumed with
+# another — so both layouts are always read, exactly as drakkar itself does.
+LOGGING_DIRNAME = "logging"
+
+FAILURE_REPORT_GLOBS = ("drakkar_*.failures.tsv", "drakkar_*_failures.tsv")
+
+# Run metadata is 'drakkar_<run id>.yaml', the run id being the UTC launch
+# timestamp.  The glob alone would also match the benchmark roll-up an older
+# drakkar wrote beside it as 'drakkar_<run id>_resources.yaml', so the whole
+# name is matched instead.
+RUN_METADATA_GLOBS = ("drakkar_*.yaml", "drakkar_*.yml")
+RUN_METADATA_RE = re.compile(r"drakkar_(\d{8}-\d{6})\.ya?ml")
+
+
+def drakkar_run_dirs(output_dir: str | Path) -> list[Path]:
+    """Return the directories that hold a run's own files, current layout first.
+
+    A directory that does not exist is still returned — globbing it simply
+    yields nothing — so callers can treat both layouts alike.
+    """
+    directory = Path(output_dir)
+    return [directory / LOGGING_DIRNAME, directory]
 
 
 def find_failure_report(output_dir: str | Path, since: float | None = None) -> Path | None:
     """Return the most recent drakkar failure report in output_dir, or None.
 
-    drakkar writes 'drakkar_{run_id}_failures.tsv' into the root of its output
-    directory when a workflow stops after failures.  A batch can run drakkar
-    several times (profiling, then annotating), each with its own run id, so
-    the newest report is the one describing the failure that just happened.
+    drakkar writes one failure table per run when a workflow stops after
+    failures: 'logging/drakkar_<run id>.failures.tsv' since 2.5.0, and
+    'drakkar_<run id>_failures.tsv' in the output root before it.  A batch can
+    run drakkar several times (profiling, then annotating), each with its own
+    run id, so the newest report is the one describing the failure that just
+    happened.
 
     `since` is a Unix timestamp: reports older than it are ignored, which keeps
     the report of an earlier, already-reported launch of the same batch from
     being mistaken for the current one.
     """
-    directory = Path(output_dir)
-    reports = [p for p in directory.glob(FAILURE_REPORT_GLOB) if p.is_file()]
+    reports: list[Path] = []
+    for directory in drakkar_run_dirs(output_dir):
+        for pattern in FAILURE_REPORT_GLOBS:
+            reports += [p for p in directory.glob(pattern) if p.is_file()]
     if since is not None:
         reports = [p for p in reports if p.stat().st_mtime >= since]
     if not reports:
         return None
     return max(reports, key=lambda p: p.stat().st_mtime)
+
+
+def find_run_metadata(output_dir: str | Path) -> list[Path]:
+    """Return the run metadata files of a drakkar output directory, oldest first.
+
+    drakkar writes one 'drakkar_<run id>.yaml' per launch, so an output
+    directory holds one file per drakkar run it has seen.  Both layouts are
+    searched and a run id found in both is taken from the logging directory,
+    the same precedence drakkar applies.  Ordering is by run id, which is the
+    UTC launch timestamp, so the files come back in the order they were run.
+    """
+    found: dict[str, Path] = {}
+    for directory in drakkar_run_dirs(output_dir):
+        for pattern in RUN_METADATA_GLOBS:
+            for path in directory.glob(pattern):
+                match = RUN_METADATA_RE.fullmatch(path.name)
+                if not match or not path.is_file():
+                    continue
+                found.setdefault(match.group(1), path)
+    return [found[run_id] for run_id in sorted(found)]
+
+
+# The drakkar commands that run a workflow, and so account for part of the
+# results in an output directory.  Older drakkar versions wrote run metadata
+# for their read-only commands too — 'drakkar config' leaves a file in whatever
+# directory it was run from — and those runs produced nothing.
+WORKFLOW_COMMANDS = frozenset({
+    "complete",
+    "preprocessing",
+    "cataloging",
+    "profiling",
+    "dereplicating",
+    "annotating",
+    "amr",
+    "inspecting",
+    "expressing",
+})
+
+
+def _read_metadata_fields(metadata_path: str | Path) -> dict[str, str]:
+    """Return the 'command' and 'drakkar_version' of a run metadata file.
+
+    Missing keys come back as ''.  A run killed while its metadata was being
+    written leaves a truncated file, which yaml refuses as a whole; both keys
+    sit on a line of their own, so they can still be read.
+    """
+    try:
+        text = Path(metadata_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+
+    fields: dict[str, str] = {}
+    try:
+        import yaml
+        data = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001 — a broken file is not worth a traceback
+        data = None
+    if isinstance(data, dict):
+        fields = {key: str(data.get(key) or "").strip()
+                  for key in ("command", "drakkar_version")}
+    for key in ("command", "drakkar_version"):
+        if fields.get(key):
+            continue
+        match = re.search(rf"^{key}:\s*['\"]?([^'\"\s]+)", text, re.MULTILINE)
+        fields[key] = match.group(1) if match else ""
+    return fields
+
+
+def read_drakkar_version(metadata_path: str | Path) -> str:
+    """Return the drakkar version recorded in one run metadata file, or ''."""
+    return _read_metadata_fields(metadata_path).get("drakkar_version", "")
+
+
+def drakkar_versions_used(output_dir: str | Path) -> list[str]:
+    """Return the drakkar versions that produced an output directory.
+
+    One entry per distinct version, in the order the runs happened.  A batch
+    normally reports a single version; one that spans a drakkar upgrade —
+    launched with one version and resumed or continued with another — reports
+    every version that did part of the work.  A failed run counts, since the
+    run resuming it builds on what it left behind; a run of a command that
+    executes no workflow does not.
+    """
+    versions: list[str] = []
+    for path in find_run_metadata(output_dir):
+        fields = _read_metadata_fields(path)
+        command = fields.get("command", "")
+        if command and command not in WORKFLOW_COMMANDS:
+            continue
+        version = fields.get("drakkar_version", "")
+        if version and version not in versions:
+            versions.append(version)
+    return versions
+
+
+def format_drakkar_versions(versions: list[str]) -> str:
+    """Join the versions of a batch as they are written to Airtable ('2.4.4/2.5.0')."""
+    return "/".join(versions)
 
 
 def write_quality_file(

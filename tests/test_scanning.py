@@ -422,8 +422,27 @@ class TestDrakkarNoOpGuards:
     @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
     def test_metadata_check_is_skipped_for_drakkar_without_run_metadata(self, module: str):
         check = self._script(module).split("_ehio_drakkar_check() {")[1].split("\n}")[0]
-        assert "ls /out/B001/drakkar_*.yaml >/dev/null 2>&1" in check
+        assert 'if [ -z "$(_ehio_drakkar_metadata)" ]' in check
         assert "return 0" in check
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_metadata_is_looked_for_in_both_drakkar_layouts(self, module: str):
+        """drakkar 2.5.0 writes into logging/; earlier versions into the root."""
+        finder = self._script(module).split("_ehio_drakkar_metadata() {")[1].split("\n}")[0]
+        assert "find /out/B001/logging /out/B001 -maxdepth 1" in finder
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_metadata_glob_excludes_the_benchmark_rollup(self, module: str):
+        """drakkar_<run id>_resources.yaml sits beside the metadata and has no status."""
+        finder = self._script(module).split("_ehio_drakkar_metadata() {")[1].split("\n}")[0]
+        assert '-name "drakkar_????????-??????.yaml"' in finder
+
+    @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
+    def test_metadata_search_survives_a_missing_logging_directory(self, module: str):
+        """'find' on an absent directory exits non-zero, which 'pipefail' would
+        otherwise turn into a failed script."""
+        finder = self._script(module).split("_ehio_drakkar_metadata() {")[1].split("\n}")[0]
+        assert "|| true; } | sort" in finder
 
     @pytest.mark.parametrize("module", ["preprocessing", "binning", "quantifying"])
     def test_output_step_runs_only_after_the_product_check(self, module: str):

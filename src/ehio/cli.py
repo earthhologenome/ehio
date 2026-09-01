@@ -92,7 +92,33 @@ def _require_cfg(key: str) -> str:
 # preprocessing
 # ---------------------------------------------------------------------------
 
-def _get_drakkar_version() -> str:
+def _get_drakkar_version(output_dir: str | Path | None = None) -> str:
+    """Return the drakkar version(s) a batch was processed with.
+
+    drakkar stamps every run it starts with its own version, in the run
+    metadata it leaves in the output directory
+    ('logging/drakkar_<run id>.yaml', or the output root before drakkar 2.5.0),
+    so reading it from there records the version that actually produced the
+    results rather than whichever drakkar happens to be installed now.
+
+    One batch can hold several runs — profiling and then annotating, or a batch
+    resumed after a failure — and drakkar may have been updated between them.
+    Every version that did part of the work is reported, oldest run first and
+    each version once: '2.4.4/2.4.5'.
+
+    Falls back to asking the installed drakkar when the output directory holds
+    no run metadata, which is the case for a directory already cleaned up and
+    for drakkar builds older than the metadata itself.
+    """
+    if output_dir is not None:
+        from ehio.drakkar import drakkar_versions_used, format_drakkar_versions
+        try:
+            versions = drakkar_versions_used(output_dir)
+        except OSError:
+            versions = []
+        if versions:
+            return format_drakkar_versions(versions)
+
     import re as _re
     import subprocess as _sp
     drakkar_conda_env = str(cfg.get("DRAKKAR_CONDA_ENV") or "").strip()
@@ -232,6 +258,11 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
         _die(f"Local directory not found: {local_root}")
+
+    # Read while the output directory is still there: the drakkar version(s)
+    # that produced the results come from the run metadata inside it, which
+    # the cleanup step further down may delete.
+    drakkar_version = _get_drakkar_version(local_root)
 
     # Fetch batch + entries
     _info(f"Looking up batch '{args.batch}' in Airtable...")
@@ -402,7 +433,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         batch_fields[ehio_version_field] = __version__
 
     if drakkar_version_field:
-        batch_fields[drakkar_version_field] = _get_drakkar_version()
+        batch_fields[drakkar_version_field] = drakkar_version
 
     # Mark the batch as done
     done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
@@ -573,6 +604,11 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
         _die(f"Local directory not found: {local_root}")
+
+    # Read while the output directory is still there: the drakkar version(s)
+    # that produced the results come from the run metadata inside it, which
+    # the cleanup step further down may delete.
+    drakkar_version = _get_drakkar_version(local_root)
 
     # A batch whose cataloging left no output has nothing to report, and
     # marking it done would hide an unfinished run: drakkar exits 0 on some of
@@ -828,7 +864,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     if ehio_version_field:
         batch_fields[ehio_version_field] = __version__
     if drakkar_version_field:
-        batch_fields[drakkar_version_field] = _get_drakkar_version()
+        batch_fields[drakkar_version_field] = drakkar_version
 
     done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
     batch_status_field = _require_cfg("EHI_ASB_BATCH_STATUS")
@@ -973,6 +1009,11 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     if not local_root.is_dir():
         _die(f"Local directory not found: {local_root}")
 
+    # Read while the output directory is still there: the drakkar version(s)
+    # that produced the results come from the run metadata inside it, which
+    # the cleanup step further down may delete.
+    drakkar_version = _get_drakkar_version(local_root)
+
     _info(f"Looking up batch '{args.batch}' in Airtable...")
     client = AirtableClient(api_key=token, base_id=base_id)
     batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
@@ -1096,7 +1137,7 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     if ehio_version_field:
         batch_fields[ehio_version_field] = __version__
     if drakkar_version_field:
-        batch_fields[drakkar_version_field] = _get_drakkar_version()
+        batch_fields[drakkar_version_field] = drakkar_version
     if derep_mags_field:
         derep_tsv   = local_root / "dereplicating.tsv"
         derep_count = parse_dereplicating_tsv(derep_tsv)
@@ -1243,6 +1284,8 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         parse_genome_taxonomy_tsv,
         parse_annotation_tsv,
         build_entry_update,
+        drakkar_mag_id,
+        find_gene_tables,
         ANNOTATING_TAXONOMY_KEYS,
         ANNOTATING_GTDB_KEYS,
         ANNOTATING_FUNC_KEYS,
@@ -1308,28 +1351,42 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     if not taxonomy_data:
         _info(f"genome_taxonomy.tsv not found or empty at {taxonomy_tsv}.")
 
-    # Parse per-genome annotation TSVs from annotating/final/
+    # Parse the per-genome gene tables from annotating/final/.  drakkar names
+    # them after the genome FASTA with its suffix stripped and '_genes'
+    # appended — EHA00123_bin_1.fa gives EHA00123_bin_1_genes.tsv — and writes
+    # a '_clusters.tsv' beside each of them holding a different table
+    # altogether, which is why only the gene tables are read here.
     final_dir = ann_dir / "final"
-    annotation_data: dict[str, dict] = {}
-    if final_dir.is_dir():
-        for tsv_file in sorted(final_dir.glob("*.tsv")):
-            mag_key = tsv_file.stem + ".fa"
-            annotation_data[mag_key] = parse_annotation_tsv(tsv_file)
+    annotation_data = {
+        mag_id: parse_annotation_tsv(path)
+        for mag_id, path in find_gene_tables(final_dir).items()
+    }
+    if final_dir.is_dir() and not annotation_data:
+        _info(f"No per-genome gene table (*_genes.tsv) found in {final_dir}.")
 
     # Build Airtable update payloads
     updates: list[dict] = []
+    n_annotated = 0
     for genome_name, rec in mag_by_name.items():
         metrics: dict = {}
         if genome_name in taxonomy_data:
             metrics.update(taxonomy_data[genome_name])
-        if genome_name in annotation_data:
-            metrics.update(annotation_data[genome_name])
+        # The MAG is named by its FASTA file in Airtable and by the stem of
+        # that name in the drakkar output, so the two are matched on the id.
+        mag_id = drakkar_mag_id(genome_name)
+        if mag_id in annotation_data:
+            metrics.update(annotation_data[mag_id])
             metrics["annotated"] = annotation_type_value
+            n_annotated += 1
         if not metrics:
             continue
         payload = build_entry_update(rec["id"], metrics, field_map)
         if payload["fields"]:
             updates.append(payload)
+
+    if annotation_data:
+        _info(f"Gene metrics matched for {n_annotated} of {len(mag_by_name)} MAG(s) "
+              f"from {len(annotation_data)} gene table(s).")
 
     if updates:
         _info(f"Updating {len(updates)} MAG_ENTRY records in Airtable...")
@@ -1360,20 +1417,24 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     else:
         _info(f"  genome_taxonomy.tsv not found in {ann_dir} — skipping.")
 
-    # gene_annotations.tsv.xz is already compressed; upload it under a batch-prefixed name
-    gene_ann = ann_dir / "gene_annotations.tsv.xz"
-    if gene_ann.exists():
-        gene_ann_alias = ann_dir / f"{args.batch}_gene_annotations.tsv.xz"
-        gene_ann_alias.unlink(missing_ok=True)
+    # The batch-level annotation tables are already compressed; upload them
+    # under batch-prefixed names.  cluster_annotations.tsv.xz holds the dbCAN
+    # gene clusters, antiSMASH regions, geNomad mobile elements and defense
+    # systems, and only exists for a batch whose annotation type covers them.
+    for ann_name in ("gene_annotations.tsv.xz", "cluster_annotations.tsv.xz"):
+        ann_file = ann_dir / ann_name
+        if not ann_file.exists():
+            _info(f"  {ann_name} not found in {ann_dir} — skipping.")
+            continue
+        ann_alias = ann_dir / f"{args.batch}_{ann_name}"
+        ann_alias.unlink(missing_ok=True)
         try:
-            _os.link(gene_ann, gene_ann_alias)
+            _os.link(ann_file, ann_alias)
         except OSError:
-            _shutil.copy2(gene_ann, gene_ann_alias)
-        dmb_files.append(gene_ann_alias)
-        dmb_tmp.append(gene_ann_alias)
-        _info(f"  Renamed {gene_ann.name} → {gene_ann_alias.name}")
-    else:
-        _info(f"  gene_annotations.tsv.xz not found in {ann_dir} — skipping.")
+            _shutil.copy2(ann_file, ann_alias)
+        dmb_files.append(ann_alias)
+        dmb_tmp.append(ann_alias)
+        _info(f"  Renamed {ann_file.name} → {ann_alias.name}")
 
     for fname in ("bacteria.tree", "archaea.tree"):
         p = ann_dir / fname
@@ -1425,14 +1486,27 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         _skip_msg = f", {n_ann_sk} already present (skipped)" if n_ann_sk else ""
         _info(f"Uploaded {n_ann_up} compressed annotation file(s) to {ann_remote}{_skip_msg}.")
 
-    done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
-    batch_status_field = str(cfg.get("MAG_DMB_BATCH_STATUS")   or "").strip()
+    done_status           = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    batch_status_field    = str(cfg.get("MAG_DMB_BATCH_STATUS")   or "").strip()
+    drakkar_version_field = str(cfg.get("MAG_DMB_BATCH_DRAKKAR_VERSION") or "").strip()
+
+    batch_fields: dict = {}
     if batch_status_field:
+        batch_fields[batch_status_field] = done_status
+    # This is the last step of a DMB batch, and the annotating runs come after
+    # 'ehio quantifying --output' has already written the version of the
+    # profiling run.  Rewriting it here covers every run of the batch, which is
+    # what makes an upgrade between profiling and annotating visible.
+    if drakkar_version_field:
+        batch_fields[drakkar_version_field] = _get_drakkar_version(local_root)
+
+    if batch_fields:
         client.update_records(
             batch_table,
-            [{"id": batch_record["id"], "fields": {batch_status_field: done_status}}],
+            [{"id": batch_record["id"], "fields": batch_fields}],
         )
-        _info(f"Batch '{args.batch}' status → '{done_status}'.")
+        if batch_status_field:
+            _info(f"Batch '{args.batch}' status → '{done_status}'.")
 
     return 0
 
@@ -1650,6 +1724,11 @@ def _run_amr_output(args: argparse.Namespace) -> int:
     if not local_root.is_dir():
         _die(f"Local directory not found: {local_root}")
 
+    # Read while the output directory is still there: the drakkar version(s)
+    # that produced the results come from the run metadata inside it, which
+    # the cleanup step further down may delete.
+    drakkar_version = _get_drakkar_version(local_root)
+
     # A batch whose AMR run left no summary has nothing to report, and marking
     # it done would hide an unfinished run: drakkar exits 0 on some of its own
     # error paths, so the missing output is the only sign that nothing ran.
@@ -1827,7 +1906,7 @@ def _run_amr_output(args: argparse.Namespace) -> int:
     if ehio_version_field:
         batch_fields[ehio_version_field] = __version__
     if drakkar_version_field:
-        batch_fields[drakkar_version_field] = _get_drakkar_version()
+        batch_fields[drakkar_version_field] = drakkar_version
 
     done_status = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
     batch_fields[batch_status_field] = done_status
@@ -2084,9 +2163,11 @@ def _build_parser() -> argparse.ArgumentParser:
             "Directly sets the status field of a batch record.\n"
             "Called automatically by the .sh error trap on drakkar failure;\n"
             "can also be used manually to correct a status.\n\n"
-            "With --failures-dir, the newest drakkar_<run_id>_failures.tsv found\n"
-            "in that directory is also attached to the batch's error files field,\n"
-            "so the cause of the failure is visible from Airtable."
+            "With --failures-dir, the newest drakkar failure table found in that\n"
+            "directory (logging/drakkar_<run_id>.failures.tsv, or\n"
+            "drakkar_<run_id>_failures.tsv before drakkar 2.5.0) is also attached\n"
+            "to the batch's error files field, so the cause of the failure is\n"
+            "visible from Airtable."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )

@@ -9,8 +9,12 @@ from pathlib import Path
 
 from ehio.drakkar import (
     check_assembly_type,
+    drakkar_versions_used,
     find_failure_report,
+    find_run_metadata,
+    format_drakkar_versions,
     group_samples_by_assembly,
+    read_drakkar_version,
     normalise_assembly_type,
     verify_input_files,
     write_bins_file,
@@ -383,8 +387,16 @@ class TestVerifyInputFiles:
 # ---------------------------------------------------------------------------
 
 class TestFindFailureReport:
-    def _report(self, directory: Path, run_id: str, mtime: float | None = None) -> Path:
-        path = directory / f"drakkar_{run_id}_failures.tsv"
+    """drakkar 2.5.0 writes logging/drakkar_<run id>.failures.tsv; before it,
+    the table sat in the output root as drakkar_<run id>_failures.tsv."""
+
+    def _report(self, directory: Path, run_id: str, mtime: float | None = None,
+                legacy: bool = False) -> Path:
+        if legacy:
+            path = directory / f"drakkar_{run_id}_failures.tsv"
+        else:
+            path = directory / "logging" / f"drakkar_{run_id}.failures.tsv"
+            path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("rule\tsample\n")
         if mtime is not None:
             os.utime(path, (mtime, mtime))
@@ -400,7 +412,14 @@ class TestFindFailureReport:
         report = self._report(tmp_path, "20260814-101500")
         assert find_failure_report(tmp_path) == report
 
+    def test_finds_report_of_the_legacy_layout(self, tmp_path: Path):
+        report = self._report(tmp_path, "20260814-101500", legacy=True)
+        assert find_failure_report(tmp_path) == report
+
     def test_other_drakkar_files_are_ignored(self, tmp_path: Path):
+        (tmp_path / "logging").mkdir()
+        (tmp_path / "logging" / "drakkar_20260814-101500.yaml").write_text("x")
+        (tmp_path / "logging" / "drakkar_20260814-101500.snakemake.log").write_text("x")
         (tmp_path / "drakkar_20260814-101500.yaml").write_text("x")
         (tmp_path / "drakkar_20260814-101500_resources.yaml").write_text("x")
         assert find_failure_report(tmp_path) is None
@@ -411,6 +430,11 @@ class TestFindFailureReport:
         assert find_failure_report(tmp_path) == new
         assert old.exists()
 
+    def test_newest_report_wins_across_both_layouts(self, tmp_path: Path):
+        self._report(tmp_path, "20260814-101500", mtime=1_000_000, legacy=True)
+        resumed = self._report(tmp_path, "20260901-113000", mtime=2_000_000)
+        assert find_failure_report(tmp_path) == resumed
+
     def test_since_filters_out_older_reports(self, tmp_path: Path):
         self._report(tmp_path, "20260814-101500", mtime=1_000_000)
         assert find_failure_report(tmp_path, since=1_500_000) is None
@@ -419,3 +443,142 @@ class TestFindFailureReport:
         self._report(tmp_path, "20260814-101500", mtime=1_000_000)
         fresh = self._report(tmp_path, "20260814-113000", mtime=2_000_000)
         assert find_failure_report(tmp_path, since=1_500_000) == fresh
+
+
+# ---------------------------------------------------------------------------
+# run metadata / drakkar version
+# ---------------------------------------------------------------------------
+
+def _write_metadata(output_dir: Path, run_id: str, version: str,
+                    status: str = "success", legacy: bool = False) -> Path:
+    directory = output_dir if legacy else output_dir / "logging"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"drakkar_{run_id}.yaml"
+    path.write_text(
+        f"run_id: '{run_id}'\n"
+        f"drakkar_version: {version}\n"
+        "command: preprocessing\n"
+        f"status: {status}\n"
+    )
+    return path
+
+
+class TestFindRunMetadata:
+    def test_empty_directory(self, tmp_path: Path):
+        assert find_run_metadata(tmp_path) == []
+
+    def test_finds_metadata_in_the_logging_directory(self, tmp_path: Path):
+        path = _write_metadata(tmp_path, "20260901-101500", "2.5.0")
+        assert find_run_metadata(tmp_path) == [path]
+
+    def test_finds_metadata_of_the_legacy_layout(self, tmp_path: Path):
+        path = _write_metadata(tmp_path, "20260814-101500", "2.4.4", legacy=True)
+        assert find_run_metadata(tmp_path) == [path]
+
+    def test_runs_come_back_oldest_first(self, tmp_path: Path):
+        first  = _write_metadata(tmp_path, "20260814-101500", "2.4.4", legacy=True)
+        second = _write_metadata(tmp_path, "20260901-113000", "2.5.0")
+        assert find_run_metadata(tmp_path) == [first, second]
+
+    def test_benchmark_rollup_is_not_run_metadata(self, tmp_path: Path):
+        (tmp_path / "drakkar_20260814-101500_resources.yaml").write_text("x")
+        (tmp_path / "logging").mkdir()
+        (tmp_path / "logging" / "benchmark").mkdir()
+        (tmp_path / "logging" / "benchmark" / "drakkar_20260901-101500.resources.yaml").write_text("x")
+        assert find_run_metadata(tmp_path) == []
+
+    def test_a_run_written_in_both_layouts_is_read_once(self, tmp_path: Path):
+        _write_metadata(tmp_path, "20260901-101500", "2.4.4", legacy=True)
+        current = _write_metadata(tmp_path, "20260901-101500", "2.5.0")
+        assert find_run_metadata(tmp_path) == [current]
+
+
+class TestReadDrakkarVersion:
+    def test_reads_the_version(self, tmp_path: Path):
+        path = _write_metadata(tmp_path, "20260901-101500", "2.5.0")
+        assert read_drakkar_version(path) == "2.5.0"
+
+    def test_reads_a_quoted_version(self, tmp_path: Path):
+        path = tmp_path / "drakkar_20260901-101500.yaml"
+        path.write_text("drakkar_version: '2.4.5'\nstatus: success\n")
+        assert read_drakkar_version(path) == "2.4.5"
+
+    def test_reads_a_truncated_file(self, tmp_path: Path):
+        """A run killed mid-write leaves yaml it cannot parse as a whole."""
+        path = tmp_path / "drakkar_20260901-101500.yaml"
+        path.write_text("run_id: '20260901-101500'\ndrakkar_version: 2.5.0\narguments: {unclosed\n")
+        assert read_drakkar_version(path) == "2.5.0"
+
+    def test_missing_file(self, tmp_path: Path):
+        assert read_drakkar_version(tmp_path / "absent.yaml") == ""
+
+    def test_file_without_a_version(self, tmp_path: Path):
+        path = tmp_path / "drakkar_20260901-101500.yaml"
+        path.write_text("status: success\n")
+        assert read_drakkar_version(path) == ""
+
+
+class TestDrakkarVersionsUsed:
+    def test_no_metadata(self, tmp_path: Path):
+        assert drakkar_versions_used(tmp_path) == []
+
+    def test_single_version(self, tmp_path: Path):
+        _write_metadata(tmp_path, "20260901-101500", "2.5.0")
+        assert drakkar_versions_used(tmp_path) == ["2.5.0"]
+
+    def test_repeated_runs_of_one_version_are_reported_once(self, tmp_path: Path):
+        _write_metadata(tmp_path, "20260901-101500", "2.5.0")
+        _write_metadata(tmp_path, "20260901-131500", "2.5.0")
+        assert drakkar_versions_used(tmp_path) == ["2.5.0"]
+
+    def test_a_batch_spanning_an_upgrade_reports_both(self, tmp_path: Path):
+        _write_metadata(tmp_path, "20260830-101500", "2.4.4", legacy=True)
+        _write_metadata(tmp_path, "20260831-113000", "2.4.5", legacy=True)
+        assert drakkar_versions_used(tmp_path) == ["2.4.4", "2.4.5"]
+
+    def test_versions_are_ordered_by_run(self, tmp_path: Path):
+        _write_metadata(tmp_path, "20260901-131500", "2.5.0")
+        _write_metadata(tmp_path, "20260830-101500", "2.4.4", legacy=True)
+        assert drakkar_versions_used(tmp_path) == ["2.4.4", "2.5.0"]
+
+    def test_a_failed_run_still_counts(self, tmp_path: Path):
+        """A failed run did part of the work the resumed run builds on."""
+        _write_metadata(tmp_path, "20260830-101500", "2.4.4", status="failed", legacy=True)
+        _write_metadata(tmp_path, "20260901-113000", "2.5.0")
+        assert drakkar_versions_used(tmp_path) == ["2.4.4", "2.5.0"]
+
+
+class TestFormatDrakkarVersions:
+    def test_single_version(self):
+        assert format_drakkar_versions(["2.5.0"]) == "2.5.0"
+
+    def test_several_versions(self):
+        assert format_drakkar_versions(["2.4.4", "2.4.5"]) == "2.4.4/2.4.5"
+
+    def test_no_versions(self):
+        assert format_drakkar_versions([]) == ""
+
+
+class TestReadOnlyRunsAreNotCounted:
+    """Older drakkar wrote run metadata for its read-only commands too, in
+    whatever directory they were run from."""
+
+    def _metadata(self, output_dir: Path, run_id: str, version: str, command: str) -> Path:
+        path = output_dir / f"drakkar_{run_id}.yaml"
+        path.write_text(f"drakkar_version: {version}\ncommand: {command}\nstatus: success\n")
+        return path
+
+    def test_a_config_run_does_not_count_as_a_version(self, tmp_path: Path):
+        self._metadata(tmp_path, "20260830-090000", "2.3.0", "config")
+        _write_metadata(tmp_path, "20260901-101500", "2.5.0")
+        assert drakkar_versions_used(tmp_path) == ["2.5.0"]
+
+    def test_every_workflow_command_counts(self, tmp_path: Path):
+        self._metadata(tmp_path, "20260901-090000", "2.5.0", "profiling")
+        self._metadata(tmp_path, "20260901-110000", "2.5.1", "annotating")
+        assert drakkar_versions_used(tmp_path) == ["2.5.0", "2.5.1"]
+
+    def test_metadata_without_a_command_still_counts(self, tmp_path: Path):
+        path = tmp_path / "drakkar_20260901-101500.yaml"
+        path.write_text("drakkar_version: 2.4.0\nstatus: success\n")
+        assert drakkar_versions_used(tmp_path) == ["2.4.0"]
