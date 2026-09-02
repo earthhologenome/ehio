@@ -1843,6 +1843,9 @@ def _run_amr_output(args: argparse.Namespace) -> int:
         alias = _alias(provenance, f"{args.batch}_amr_manifest.yaml")
         upload_files.append(alias)
         temporary.append(alias)
+        manifest_field = str(cfg.get("EHI_AMR_BATCH_FILE_MANIFEST") or "").strip()
+        if manifest_field:
+            attachments.append((manifest_field, alias))
     else:
         _info(f"  manifest.yaml not found in {amr_dir} — skipping.")
 

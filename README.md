@@ -281,7 +281,8 @@ diagnostics of the callers rather than results, and are not written.
 `amr_mobility`, `mobility_regions`, all `.tsv.xz`) go to `AMR/{batch}` on ERDA
 batch-prefixed, together with gzipped copies of `amr_qc.tsv` and
 `assembly_summary.tsv` and the `manifest.yaml` provenance record. The same five
-tables are attached to the AMR batch record. Airtable caps an attachment upload
+tables are attached to the AMR batch record, together with the manifest
+(`EHI_AMR_BATCH_FILE_MANIFEST`). Airtable caps an attachment upload
 at 5 MB of base64 (~3.7 MB of file), so a table above that is reported and left
 on ERDA only — the transfer is never the step that fails. A rerun clears the
 attachment fields first, since Airtable's upload endpoint appends rather than

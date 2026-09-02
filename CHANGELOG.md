@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.8.1] - 2026-09-02
+
+### Added
+
+- The AMR run manifest is attached to the AMR batch record. `drakkar amr` writes `amr/manifest.yaml` — the provenance record naming every assembly in the run, the tool and database versions behind each result, and the parameters they ran with — and `ehio amr --output` transferred it to `AMR/{batch}` on ERDA but attached nothing to Airtable, so the record showed the five result tables with no way to tell from Airtable what produced them. It now goes to the attachment field `EHI_AMR_BATCH_FILE_MANIFEST` alongside the tables, batch-prefixed as `{batch}_amr_manifest.yaml` and with the same rerun, already-attached and size handling. A run whose output holds no `manifest.yaml` still finishes as before.
+
 ## [0.8.0] - 2026-09-01
 
 ### Fixed

@@ -214,6 +214,7 @@ EHI_AMR_BATCH_FILE_HITS: "fldl6XmzqF8AZ3v9V"  # amr_hits.tsv.xz
 EHI_AMR_BATCH_FILE_LOCI: "fldIqRh0MP4RutGJB"  # amr_loci.tsv.xz
 EHI_AMR_BATCH_FILE_MOBILITY: "fldZpNiGEgoNyZ3A5"  # amr_mobility.tsv.xz
 EHI_AMR_BATCH_FILE_MOBILITY_REGIONS: "fldiCcBztduuIRy8k"  # mobility_regions.tsv.xz
+EHI_AMR_BATCH_FILE_MANIFEST: "fldceAnFVrAZuGyPa"  # {batch}_amr_manifest.yaml (drakkar run provenance)
 
 # Assembly FASTA URL in EHI_ASB_ENTRY. 'drakkar amr' inspects and hashes every
 # assembly before the run and has no downloader of its own, so 'ehio amr --input'

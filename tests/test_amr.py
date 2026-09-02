@@ -300,6 +300,7 @@ CFG_VALUES = {
     "EHI_AMR_BATCH_FILE_DRUG_CLASSES": "fldDRUGS",
     "EHI_AMR_BATCH_FILE_MOBILITY": "fldMOB",
     "EHI_AMR_BATCH_FILE_MOBILITY_REGIONS": "fldREGIONS",
+    "EHI_AMR_BATCH_FILE_MANIFEST": "fldMANIFEST",
     "EHI_ASB_ENTRY_AMR_AMRFINDER_HITS": "fldAMRFINDER",
     "EHI_ASB_ENTRY_AMR_RGI_HITS": "fldRGI",
     "EHI_ASB_ENTRY_AMR_MOBILITY_REGIONS": "fldMOBREGIONS",
@@ -516,7 +517,8 @@ class TestAmrOutput:
             "AMR001_assembly_summary.tsv.gz", "AMR001_amr_manifest.yaml",
         ])
 
-    def test_attaches_the_five_tables_to_the_batch_record(self, amr_output_dir, amr_airtable, sftp):
+    def test_attaches_the_tables_and_the_manifest_to_the_batch_record(
+            self, amr_output_dir, amr_airtable, sftp):
         cli.cmd_amr(_output_args(amr_output_dir))
         attached = {
             call[0][2]: call[0][3].name
@@ -528,7 +530,22 @@ class TestAmrOutput:
             "fldLOCI":   "AMR001_amr_loci.tsv.xz",
             "fldMOB":    "AMR001_amr_mobility.tsv.xz",
             "fldREGIONS": "AMR001_mobility_regions.tsv.xz",
+            "fldMANIFEST": "AMR001_amr_manifest.yaml",
         }
+
+    def test_the_manifest_is_attached_as_yaml(self, amr_output_dir, amr_airtable, sftp):
+        cli.cmd_amr(_output_args(amr_output_dir))
+        types = {
+            call[0][3].name: call[1]["content_type"]
+            for call in amr_airtable.upload_attachment.call_args_list
+        }
+        assert types["AMR001_amr_manifest.yaml"] == "text/yaml"
+
+    def test_a_run_without_a_manifest_still_finishes(self, amr_output_dir, amr_airtable, sftp):
+        (amr_output_dir / "amr" / "manifest.yaml").unlink()
+        assert cli.cmd_amr(_output_args(amr_output_dir)) == 0
+        attached = [c[0][2] for c in amr_airtable.upload_attachment.call_args_list]
+        assert "fldMANIFEST" not in attached
 
     def test_an_oversized_table_is_left_on_erda_only(self, amr_output_dir, amr_airtable, sftp):
         big = amr_output_dir / "amr" / "amr_hits.tsv.xz"
@@ -557,7 +574,7 @@ class TestAmrOutput:
             if call[0][0] == "tblAMR" and all(v == [] for v in call[0][1][0]["fields"].values())
         ]
         assert cleared and set(cleared[0]) == {
-            "fldHITS", "fldLOCI", "fldDRUGS", "fldMOB", "fldREGIONS",
+            "fldHITS", "fldLOCI", "fldDRUGS", "fldMOB", "fldREGIONS", "fldMANIFEST",
         }
         sftp.remove_remote_dir.assert_called_once_with("/Data/AMR/AMR001")
 
