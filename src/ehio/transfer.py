@@ -127,6 +127,27 @@ class SFTPTransfer:
         """Return True if remote_path exists on the remote host."""
         return self._remote_exists(remote_path)
 
+    def download(self, remote_path: str, local_path: Path, verbose: bool = False) -> Path:
+        """Fetch a remote file to local_path, returning it.
+
+        The content goes to a '.part' name and is renamed only once the
+        transfer finishes, so an interrupted download never leaves behind a
+        file that looks complete.  A missing remote file raises
+        FileNotFoundError, which is what paramiko already reports for it.
+        """
+        local_path = Path(local_path)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        part = local_path.with_name(local_path.name + ".part")
+        if verbose:
+            print(f"  GET {remote_path} -> {local_path}", file=sys.stderr)
+        try:
+            self._sftp.get(remote_path, str(part))
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
+        part.replace(local_path)
+        return local_path
+
     def upload_stream(
         self,
         remote_path: str,

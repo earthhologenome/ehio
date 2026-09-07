@@ -1163,10 +1163,237 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
 # annotating
 # ---------------------------------------------------------------------------
 
+def _merge_drakkar_versions(recorded: str, new: str) -> str:
+    """Append the versions of a new run to those already on a batch record.
+
+    Both sides are the slash-separated list 'ehio' writes to the drakkar
+    version field ('2.4.4/2.5.0'), oldest run first.  A version already on the
+    record is not repeated, so re-annotating twice with the same drakkar leaves
+    the field as it was.
+    """
+    from ehio.drakkar import format_drakkar_versions
+
+    merged: list[str] = []
+    for value in (recorded, new):
+        for part in str(value or "").split("/"):
+            part = part.strip()
+            if part and part not in merged:
+                merged.append(part)
+    return format_drakkar_versions(merged)
+
+
 def cmd_annotating(args: argparse.Namespace) -> int:
+    if getattr(args, "stage", False):
+        return _run_annotating_stage(args)
     if args.input:
         return _run_annotating_input(args)
     return _run_annotating_output(args)
+
+
+# Suffixes a MAG FASTA URL may carry.  The staged copy is always written as
+# plain '.fa', which is what 'drakkar annotating -b' reads and what the '*.fa'
+# glob of 'ehio annotating --input' finds.
+_MAG_FASTA_SUFFIXES = (".fa.gz", ".fna.gz", ".fasta.gz", ".fa", ".fna", ".fasta")
+
+
+def _decompress_gz(src: Path, dest: Path) -> None:
+    """Gunzip src into dest, leaving nothing behind if it fails."""
+    import gzip as _gzip
+    import shutil as _shutil
+
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with _gzip.open(src, "rb") as _fin, part.open("wb") as _fout:
+            _shutil.copyfileobj(_fin, _fout, length=1024 * 1024)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    part.replace(dest)
+
+
+def _run_annotating_stage(args: argparse.Namespace) -> int:
+    """Rebuild the dereplicated genome directory of a finished DMB batch.
+
+    A batch whose results are already on ERDA has nothing left on the cluster,
+    so the genomes a re-annotation runs over have to be put back on disk first.
+    Airtable records how many MAGs came out of dereplication but not which
+    ones, so the catalogue is read from the batch's counts table on ERDA — one
+    row per dereplicated genome — and each of those genomes is downloaded from
+    the FASTA URL on its own MAG record.
+
+    Every genome is staged as '{mag id}.fa', the name drakkar derives from it
+    everywhere else, so the directory is indistinguishable from the one a fresh
+    profiling run leaves behind.
+    """
+    import tempfile
+
+    from ehio.airtable import AirtableClient
+    from ehio.metadata import drakkar_mag_id, parse_counts_genomes
+    from ehio.transfer import SFTPTransfer
+    from ehio.urls import DownloadError, download_url, filename_from_url, is_remote_url
+
+    token       = _resolve_token(args)
+    base_id     = _require_cfg("MAG_BASE")
+    batch_table = _require_cfg("MAG_DMB_BATCH")
+    mag_table   = _require_cfg("MAG_ENTRY")
+
+    batch_code_field = _require_cfg("MAG_DMB_BATCH_CODE")
+    mag_list_field   = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
+    mag_name_field   = _require_cfg("MAG_ENTRY_NAME")
+    mag_url_field    = _require_cfg("MAG_ENTRY_URL_FASTA")
+
+    derep_dir = Path(args.annotation_dir).resolve()
+    derep_dir.mkdir(parents=True, exist_ok=True)
+
+    _info(f"Looking up batch '{args.batch}' in Airtable...")
+    client = AirtableClient(api_key=token, base_id=base_id)
+    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    if batch_record is None:
+        _die(f"Batch '{args.batch}' not found.")
+
+    mag_rec_ids = batch_record.get("fields", {}).get(mag_list_field, [])
+    if not mag_rec_ids:
+        _die(f"No MAG records linked in field {mag_list_field} of batch '{args.batch}'.")
+    _info(f"Fetching {len(mag_rec_ids)} MAG record(s) from Airtable...")
+
+    # Keyed by drakkar MAG id, so a catalogue written with the '.fa' suffix and
+    # one written without it both find their record.
+    mag_by_id: dict[str, dict] = {}
+    for rec_id in mag_rec_ids:
+        if not (isinstance(rec_id, str) and rec_id.startswith("rec")):
+            continue
+        rec = client.fetch_record_by_id(mag_table, rec_id)
+        if not rec:
+            continue
+        name = _first_value(rec.get("fields", {}).get(mag_name_field))
+        if name:
+            mag_by_id[drakkar_mag_id(name)] = rec
+
+    if not mag_by_id:
+        _die(f"Could not fetch any MAG records for batch '{args.batch}'.")
+
+    # The dereplicated catalogue.  A list given on the command line wins, so a
+    # batch whose counts table is missing or oddly shaped can still be staged.
+    catalogue: list[str] = []
+    if getattr(args, "genomes_file", None):
+        genomes_path = Path(args.genomes_file).expanduser()
+        if not genomes_path.is_file():
+            _die(f"Genome list not found: {genomes_path}")
+        catalogue = [
+            drakkar_mag_id(line) for line in genomes_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        _info(f"Read {len(catalogue)} genome(s) from {genomes_path}.")
+    else:
+        host        = _conf(args, "host",       "SFTP_HOST",        required=True)
+        user        = _conf(args, "user",       "SFTP_USER",        required=True)
+        port        = int(_conf(args, "port",   "SFTP_PORT") or 22)
+        identity    = _conf(args, "identity",   "SFTP_IDENTITY") or None
+        remote_base = _conf(args, "remote_dir", "SFTP_REMOTE_BASE", required=True)
+        counts_remote = f"{remote_base.rstrip('/')}/DMB/{args.batch}/{args.batch}_counts.tsv.gz"
+        _timeout = getattr(args, "connect_timeout", 300.0)
+
+        with tempfile.TemporaryDirectory(prefix="ehio-stage-") as tmp:
+            counts_local = Path(tmp) / f"{args.batch}_counts.tsv.gz"
+            _info(f"Downloading the genome catalogue from {counts_remote} ...")
+            try:
+                with SFTPTransfer(host=host, username=user, port=port,
+                                  key_path=identity or None, timeout=_timeout) as xfer:
+                    xfer.download(counts_remote, counts_local, verbose=getattr(args, "verbose", False))
+            except FileNotFoundError:
+                _die(
+                    f"No counts table at {counts_remote}. It is what says which of the "
+                    f"batch's MAGs survived dereplication, and Airtable does not keep "
+                    f"that list. Pass the genome names with --genomes-file instead."
+                )
+            catalogue = parse_counts_genomes(counts_local)
+
+        if not catalogue:
+            _die(
+                f"The counts table of '{args.batch}' holds no genome names. Check "
+                f"{counts_remote}, or pass the genome names with --genomes-file."
+            )
+        _info(f"Catalogue: {len(catalogue)} dereplicated genome(s).")
+
+    # Every problem is reported at once, so a batch is not staged one failure
+    # per run.
+    problems: list[str] = []
+    timeout = float(getattr(args, "download_timeout", 600.0))
+    redownload = getattr(args, "redownload", False)
+    n_staged = n_present = 0
+
+    for mag_id in catalogue:
+        record = mag_by_id.get(mag_id)
+        if record is None:
+            problems.append(
+                f"{mag_id}: in the catalogue of '{args.batch}' but not among the MAGs "
+                f"linked in field {mag_list_field} of the batch record"
+            )
+            continue
+        source = _first_value(record.get("fields", {}).get(mag_url_field))
+        if not source:
+            problems.append(f"{mag_id}: no FASTA in field {mag_url_field} of its MAG record")
+            continue
+
+        destination = derep_dir / f"{mag_id}.fa"
+        if destination.exists() and destination.stat().st_size > 0 and not redownload:
+            n_present += 1
+            continue
+
+        if is_remote_url(source):
+            name = filename_from_url(source, "")
+            if not name.lower().endswith(_MAG_FASTA_SUFFIXES):
+                problems.append(
+                    f"{mag_id}: {source} is not a FASTA "
+                    f"(expected one of {', '.join(_MAG_FASTA_SUFFIXES)})"
+                )
+                continue
+            _info(f"  {mag_id}: downloading {source} ...")
+            # Fetched next to the staged copy rather than into a temporary
+            # directory: the two are then always on the same filesystem, and
+            # renaming a multi-hundred-MB genome into place cannot fail on a
+            # cross-device link.
+            fetched = derep_dir / f"{mag_id}.download"
+            try:
+                download_url(source, fetched, timeout=timeout, overwrite=True)
+                if name.lower().endswith(".gz"):
+                    _decompress_gz(fetched, destination)
+                else:
+                    fetched.replace(destination)
+            except DownloadError as exc:
+                problems.append(f"{mag_id}: {source} could not be downloaded ({exc})")
+                continue
+            except OSError as exc:
+                problems.append(f"{mag_id}: {source} could not be unpacked ({exc})")
+                continue
+            finally:
+                fetched.unlink(missing_ok=True)
+        else:
+            local = Path(source).expanduser()
+            if not local.is_file():
+                problems.append(f"{mag_id}: FASTA not found at {local}")
+                continue
+            try:
+                if local.name.lower().endswith(".gz"):
+                    _decompress_gz(local, destination)
+                else:
+                    import shutil as _shutil
+                    _shutil.copyfile(local, destination)
+            except OSError as exc:
+                problems.append(f"{mag_id}: {local} could not be copied ({exc})")
+                continue
+        n_staged += 1
+
+    if problems:
+        detail = "\n  ".join(problems)
+        _die(
+            f"{len(problems)} of the {len(catalogue)} dereplicated genome(s) of "
+            f"'{args.batch}' could not be staged:\n  {detail}"
+        )
+
+    _present_msg = f", {n_present} already present" if n_present else ""
+    _info(f"Staged {n_staged} genome(s) in {derep_dir}{_present_msg}.")
+    return 0
 
 
 def _run_annotating_input(args: argparse.Namespace) -> int:
@@ -1345,11 +1572,23 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         if fld_id:
             field_map[metric_key] = fld_id
 
+    # A re-annotation is the functional half of the batch only: a genome's
+    # classification is fixed when it is binned, and dereplicating it neither
+    # changes it nor produces a better one.  The taxonomy already on the MAG
+    # records is therefore left alone — including when the output directory
+    # happens to hold a genome_taxonomy.tsv from some earlier run, which would
+    # otherwise be parsed and written back over it.
+    reannotate = getattr(args, "reannotate", False)
+
     # Parse genome_taxonomy.tsv
     taxonomy_tsv = ann_dir / "genome_taxonomy.tsv"
-    taxonomy_data = parse_genome_taxonomy_tsv(taxonomy_tsv)
-    if not taxonomy_data:
-        _info(f"genome_taxonomy.tsv not found or empty at {taxonomy_tsv}.")
+    if reannotate:
+        taxonomy_data: dict = {}
+        _info("Re-annotation: taxonomy is left as it is on the MAG records.")
+    else:
+        taxonomy_data = parse_genome_taxonomy_tsv(taxonomy_tsv)
+        if not taxonomy_data:
+            _info(f"genome_taxonomy.tsv not found or empty at {taxonomy_tsv}.")
 
     # Parse the per-genome gene tables from annotating/final/.  drakkar names
     # them after the genome FASTA with its suffix stripped and '_genes'
@@ -1407,7 +1646,9 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     dmb_tmp: list[Path] = []
 
     # genome_taxonomy.tsv is compressed and renamed to {batch}_genome_taxonomy.tsv.gz
-    if taxonomy_tsv.exists():
+    if reannotate:
+        _info("  Re-annotation: the taxonomy table and trees on ERDA are left as they are.")
+    elif taxonomy_tsv.exists():
         tax_gz = ann_dir / f"{args.batch}_genome_taxonomy.tsv.gz"
         with taxonomy_tsv.open("rb") as _fin, _gzip.open(tax_gz, "wb") as _fout:
             _shutil.copyfileobj(_fin, _fout)
@@ -1436,7 +1677,9 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         dmb_tmp.append(ann_alias)
         _info(f"  Renamed {ann_file.name} → {ann_alias.name}")
 
-    for fname in ("bacteria.tree", "archaea.tree"):
+    # The trees are GTDB-Tk products, so they belong to the taxonomy run that a
+    # re-annotation does not repeat.
+    for fname in () if reannotate else ("bacteria.tree", "archaea.tree"):
         p = ann_dir / fname
         if p.exists():
             dmb_files.append(p)
@@ -1498,7 +1741,18 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     # profiling run.  Rewriting it here covers every run of the batch, which is
     # what makes an upgrade between profiling and annotating visible.
     if drakkar_version_field:
-        batch_fields[drakkar_version_field] = _get_drakkar_version(local_root)
+        version = _get_drakkar_version(local_root)
+        # A re-annotation runs in a fresh output directory that holds the
+        # annotation runs and nothing else, so the version read from it does
+        # not know about the drakkar that dereplicated and profiled the batch
+        # however long ago.  That version only survives in Airtable, so it is
+        # kept and the new one appended to it rather than overwriting it.
+        if getattr(args, "reannotate", False):
+            version = _merge_drakkar_versions(
+                _first_value(batch_record.get("fields", {}).get(drakkar_version_field)),
+                version,
+            )
+        batch_fields[drakkar_version_field] = version
 
     if batch_fields:
         client.update_records(
@@ -1931,12 +2185,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"ehio {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    def _add_mode(p: argparse.ArgumentParser) -> None:
+    def _add_mode(p: argparse.ArgumentParser) -> argparse._MutuallyExclusiveGroup:
         mode = p.add_mutually_exclusive_group(required=True)
         mode.add_argument("--input", action="store_true",
             help="Input mode: fetch records from Airtable and write drakkar input files.")
         mode.add_argument("--output", action="store_true",
             help="Output mode: collect metadata, update Airtable, transfer files.")
+        return mode
 
     def _add_batch(p: argparse.ArgumentParser) -> None:
         p.add_argument("--batch", "-b", required=True, metavar="BATCH",
@@ -2051,6 +2306,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "annotating",
         help="Input/output for the genome annotation workflow.",
         description=(
+            "Stage mode:  rebuild the dereplicated genome directory of a finished\n"
+            "             batch — read the catalogue from its counts table on ERDA\n"
+            "             and download each genome from its MAG record — so an old\n"
+            "             batch can be annotated again without being profiled again.\n"
             "Input mode:  write genome paths for all MAGs linked to the batch\n"
             "             into a file for drakkar functional annotation.\n"
             "Output mode: parse GTDB-Tk taxonomy and per-genome functional annotation\n"
@@ -2060,14 +2319,27 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    _add_mode(p_ann)
+    _ann_mode = _add_mode(p_ann)
+    _ann_mode.add_argument("--stage", action="store_true",
+        help="Stage mode: download the dereplicated genomes of a finished batch into --annotation-dir.")
     _add_batch(p_ann)
     _add_token(p_ann)
     _add_verbose(p_ann)
     p_ann.add_argument("--annotation-file", "-f", default="annotation.tsv", metavar="PATH",
         help="Output paths file for drakkar annotation (input mode). Default: annotation.tsv.")
     p_ann.add_argument("--annotation-dir", "-d", default=".", metavar="DIR",
-        help="Directory containing the dereplicated genome FASTA files (input mode).")
+        help="Directory holding the dereplicated genome FASTA files (input and stage modes).")
+    p_ann.add_argument("--genomes-file", metavar="PATH",
+        help="Stage mode: read the dereplicated genome names from this file (one per line) "
+             "instead of from the batch's counts table on ERDA.")
+    p_ann.add_argument("--redownload", action="store_true",
+        help="Stage mode: fetch every genome again, even one already in --annotation-dir.")
+    p_ann.add_argument("--reannotate", action="store_true",
+        help="Output mode: this is a re-annotation of an already-processed batch. Taxonomy "
+             "is left as it is on the MAG records and on ERDA, and the drakkar version "
+             "already on the batch record is kept with the new one appended.")
+    p_ann.add_argument("--download-timeout", metavar="SECONDS", type=float, default=600.0,
+        help="Stage mode: per-genome download timeout in seconds (default: 600).")
     _add_sftp_overrides(p_ann)
     p_ann.set_defaults(func=cmd_annotating)
 

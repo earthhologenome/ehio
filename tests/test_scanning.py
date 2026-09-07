@@ -579,3 +579,100 @@ class TestVerifyReference:
             _verify_reference(str(tmp_path / "nope.fna.gz"), "G0001",
                               "EHI_GENOME_URL_RAW", self._noop)
         assert "not found" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# reannotate flag — the annotation half of a finished DMB batch, run again
+# ---------------------------------------------------------------------------
+
+class TestReannotateFlag:
+    RUN = "/projects/ehi/data/RUN/DMB0157"
+    OUT = "/projects/ehi/data/DMB/DMB0157"
+
+    def _script(self, **kwargs):
+        return build_script_content(
+            "quantifying", "DMB0157", self.RUN, self.OUT, "slurm",
+            reannotate=True, **kwargs,
+        )
+
+    def test_stages_the_genomes_before_annotating(self):
+        script = self._script()
+        derep = f"{self.OUT}/profiling_genomes/drep/dereplicated_genomes"
+        assert f"ehio annotating --stage -b DMB0157 -d {derep}" in script
+        # The staging has to be in place before the genomes are listed for
+        # drakkar and before drakkar is asked to read them.
+        assert script.index("annotating --stage") < script.index("annotating --input")
+        assert script.index("annotating --input") < script.index("drakkar annotating")
+
+    def test_goes_straight_to_the_function_status(self):
+        script = self._script()
+        assert "Annotating function" in script
+        assert "Annotating taxonomy" not in script
+
+    def test_skips_profiling_entirely(self):
+        script = self._script()
+        assert "drakkar profiling" not in script
+        assert "ehio quantifying --input" not in script
+        assert "ehio quantifying --output" not in script
+        assert "DMB0157_reads.tsv" not in script
+
+    def test_skips_taxonomy(self):
+        # A genome's classification is fixed when it is binned; dereplicating
+        # it neither changes it nor produces a better one, so GTDB-Tk has no
+        # place in a re-annotation.
+        script = self._script()
+        assert "--annotation-type taxonomy" not in script
+        assert "genome_taxonomy.tsv" not in script
+
+    def test_runs_functional_annotation(self):
+        assert "--annotation-type function" in self._script()
+
+    def test_annotation_type_still_selects_the_drakkar_flag(self):
+        script = self._script(annotation_type="kegg")
+        assert "--annotation-type kegg" in script
+        assert "--annotation-type function" not in script
+
+    def test_input_step_forces_every_genome(self):
+        # After a finished batch every MAG already carries the batch's
+        # annotation level, so without --rerun the input step would write an
+        # empty file and the whole annotation would be skipped.
+        script = self._script()
+        assert "ehio annotating --input" in script
+        input_line = next(
+            line for line in script.splitlines() if "ehio annotating --input" in line
+        )
+        assert "--rerun" in input_line
+
+    def test_output_step_keeps_the_recorded_drakkar_version(self):
+        script = self._script()
+        output_line = next(
+            line for line in script.splitlines() if "ehio annotating --output" in line
+        )
+        assert "--reannotate" in output_line
+        assert "--rerun" in output_line
+
+    def test_clears_a_stale_lock(self):
+        assert "drakkar unlock" in self._script()
+
+    def test_requires_the_staged_directory_and_the_gene_tables(self):
+        script = self._script()
+        derep = f"{self.OUT}/profiling_genomes/drep/dereplicated_genomes"
+        assert f"_ehio_require {derep}" in script
+        assert f"_ehio_require {self.OUT}/annotating/final" in script
+
+    def test_marks_success_last(self):
+        script = self._script()
+        assert script.rstrip().endswith("_EHIO_SUCCESS=1")
+
+    def test_boost_reaches_the_annotation_runs(self):
+        script = self._script(boost_time=2, boost_memory=3)
+        assert "--time-multiplier 2" in script
+        assert "--memory-multiplier 3" in script
+
+    def test_normal_quantifying_is_unchanged(self):
+        script = build_script_content(
+            "quantifying", "DMB0157", self.RUN, self.OUT, "slurm",
+        )
+        assert "drakkar profiling" in script
+        assert "annotating --stage" not in script
+        assert "--reannotate" not in script

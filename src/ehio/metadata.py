@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import json
 import re
 import sys
@@ -680,6 +681,44 @@ _FASTA_SUFFIX_RE = re.compile(r"\.(?:fa|fna|fasta)(?:\.gz)?$", re.IGNORECASE)
 def drakkar_mag_id(genome_name: str) -> str:
     """Return the MAG id drakkar derives from a genome file name."""
     return _FASTA_SUFFIX_RE.sub("", str(genome_name or "").strip())
+
+
+def parse_counts_genomes(path: Path) -> list[str]:
+    """Return the MAG ids of a DMB counts table, in file order.
+
+    The counts table of a DMB batch holds one row per dereplicated genome and
+    one column per sample, so its first column is the genome catalogue the
+    batch ended up with — the only record of which of the batch's MAGs
+    survived dereplication, since Airtable keeps the count but not the list.
+
+    The file is read gzipped or plain, the header row is dropped, and every
+    name is returned as a drakkar MAG id, so a table written with the '.fa'
+    suffix and one written without it give the same answer.  Duplicates are
+    kept once.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return []
+    opener = gzip.open if path.name.endswith(".gz") else open
+    ids: list[str] = []
+    seen: set[str] = set()
+    try:
+        with opener(path, "rt", encoding="utf-8", errors="replace", newline="") as fh:
+            reader = csv.reader(fh, delimiter="\t")
+            # The header names the samples, never a genome, so it is dropped
+            # whatever its first cell holds — a label such as 'genome', or the
+            # empty cell an R-style row-name table starts with.
+            next(reader, None)
+            for row in reader:
+                if not row:
+                    continue
+                mag_id = drakkar_mag_id(row[0].strip().strip('"'))
+                if mag_id and mag_id not in seen:
+                    seen.add(mag_id)
+                    ids.append(mag_id)
+    except (OSError, EOFError):
+        return []
+    return ids
 
 
 GENE_TABLE_SUFFIX = "_genes.tsv"

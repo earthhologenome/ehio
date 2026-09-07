@@ -265,6 +265,13 @@ RUN_BASE: "/projects/ehi/data/RUN"
 SCANNING_TRIGGER_STATUS: "Ready"     # Batch status value that triggers a launch
 SCANNING_RESUME_STATUS: "Resume"     # Same as Ready — signals an error was fixed and the job should continue from the Snakemake checkpoint
 SCANNING_RERUN_STATUS: "Rerun"       # Deletes the run and output directories and starts from scratch
+# DMB batches only: re-run the annotation half of a finished batch under the
+# current drakkar, without dereplicating or profiling it again.  The genomes
+# are staged back onto the cluster from the batch's counts table on ERDA and
+# their MAG records, then taxonomy, function and cluster annotation run over
+# them.  The counts, the mapping rates and the dereplicated MAG count already
+# in Airtable are left untouched.
+SCANNING_REANNOTATE_STATUS: "Reannotate"
 SCANNING_LAUNCHED_STATUS: "Running"          # Status written back to the batch record after launching
 SCANNING_STOPPED_STATUS: "Stopped"          # Status written when a running batch is killed via ehio stop
 PROCESSING_DONE_STATUS: "Done"              # Status written back to the batch record after output processing completes

@@ -195,6 +195,7 @@ def build_script_content(
     boost_memory: int | None = None,
     rerun: bool = False,
     resume: bool = False,
+    reannotate: bool = False,
     multicoverage: bool = False,
     ani_threshold: str = "",
     profiling_type: str = "",
@@ -372,9 +373,13 @@ def build_script_content(
     # the Snakemake lock behind in the output directory, and drakkar refuses to
     # start over a locked directory.  Clearing it is what makes a resume able to
     # continue from the checkpoint at all.
+    # A re-annotation is re-runnable in the same way — it is set back to the
+    # reannotate status and picks up where it stopped — so it clears the lock
+    # too.  On a first run the output directory has just been created and there
+    # is nothing to unlock, which is why the call is allowed to fail.
     unlock_step = (
         f"{drakkar_prefix}drakkar unlock -o {q(output_dir)} -p {q(profile)} || true\n"
-        if resume else ""
+        if resume or reannotate else ""
     )
 
     time_part   = f" --time-multiplier {boost_time}"     if boost_time   and boost_time   > 1 else ""
@@ -476,6 +481,61 @@ def build_script_content(
         taxonomy_cmd = (
             f"{drakkar_prefix}drakkar annotating -b {q(derep_genomes_dir)} -p {q(profile)}{boost_parts} --annotation-type taxonomy\n"
         )
+        function_cmd = (
+            f"{drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type {q(drakkar_ann_flag)}\n"
+        )
+
+        if reannotate:
+            # A batch whose genomes were dereplicated and profiled long ago,
+            # sent through the current drakkar's functional annotation again.
+            # Everything before the annotation is skipped: no profiling, so no
+            # reads and no MAG_DMB_BATCH_LIST_PPR are needed, and no 'ehio
+            # quantifying --output', so the counts, the mapping rates and the
+            # dereplicated MAG count already on the records are left exactly as
+            # they are.
+            #
+            # Taxonomy is skipped as well, and deliberately: a genome's
+            # classification is a property of the genome, fixed when it was
+            # binned, and dereplication neither changes it nor produces a
+            # better one.  Re-running GTDB-Tk here would rewrite the taxonomy
+            # of every MAG in the catalogue against whichever GTDB release
+            # happens to be installed, which is a different operation from
+            # annotating them again and not one a DMB batch should be doing.
+            #
+            # What the batch does need is its genomes back on disk, which is
+            # the staging step: the catalogue comes from the counts table the
+            # batch left on ERDA and each genome from its own MAG record.
+            #
+            # 'annotating --input' runs with --rerun so every genome is
+            # annotated again rather than skipped for already carrying the
+            # batch's annotation level — which, after a finished batch, all of
+            # them do.  That also leaves the cluster-upgrade file empty, so the
+            # clusters step below stays skipped and the single 'function' run
+            # covers the whole catalogue.
+            return header + (
+                f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_func_status)}\n"
+                + f"ehio annotating --stage -b {q(batch_name)} -d {q(derep_genomes_dir)}\n"
+                + f"_ehio_require {q(derep_genomes_dir)} {q('annotating --stage')}\n"
+                + unlock_step
+                + f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)}"
+                  f" -d {q(derep_genomes_dir)} --rerun\n"
+                + optional_drakkar_step(
+                    f"[ -s {q(annotation_file)} ]", function_cmd, "annotating function",
+                )
+                + f"_ehio_require {q(output_dir + '/annotating/final')} {q('annotating function')}\n"
+                + optional_drakkar_step(
+                    f"[ -s {q(annotation_clusters_file)} ]",
+                    f"{drakkar_prefix}drakkar annotating -B {q(annotation_clusters_file)} -p {q(profile)}{boost_parts} --annotation-type clusters\n",
+                    "annotating clusters",
+                )
+                # --rerun replaces ANN/{batch} on ERDA, whose per-genome tables
+                # are the ones just superseded; --reannotate keeps the drakkar
+                # version that profiled the batch on the record instead of
+                # overwriting it with the annotation run's.
+                + f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)} --rerun --reannotate\n"
+                + "_EHIO_SUCCESS=1\n"
+            )
+
         if resume:
             # mags.tsv (the MAG info table) was added to drakkar after the first
             # batches were finished, so a resumed batch that has its dereplicated
@@ -523,9 +583,7 @@ def build_script_content(
             + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_func_status)}\n"
             + ann_input_step
             + optional_drakkar_step(
-                f"[ -s {q(annotation_file)} ]",
-                f"{drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type {q(drakkar_ann_flag)}\n",
-                "annotating function",
+                f"[ -s {q(annotation_file)} ]", function_cmd, "annotating function",
             )
             + clusters_step
             + f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
@@ -629,6 +687,13 @@ def scan_module(
     trigger_status     = cfg.get("SCANNING_TRIGGER_STATUS", "Ready").strip()
     resume_status      = cfg.get("SCANNING_RESUME_STATUS",  "Resume").strip()
     rerun_status       = cfg.get("SCANNING_RERUN_STATUS",   "Rerun").strip()
+    # Only a DMB batch can be re-annotated: it is the one module whose results
+    # hold a genome catalogue that can be put back on disk and annotated again
+    # without redoing the work that produced it.
+    reannotate_status  = (
+        cfg.get("SCANNING_REANNOTATE_STATUS", "Reannotate").strip()
+        if module == "quantifying" else ""
+    )
     launched_status    = cfg.get("SCANNING_LAUNCHED_STATUS", "Running").strip()
     error_status       = cfg.get("PROCESSING_ERROR_STATUS", "Error").strip()
     profile            = cfg.get("DRAKKAR_PROFILE", "slurm").strip()
@@ -666,17 +731,18 @@ def scan_module(
             trigger_status=status,
         ) if status else []
 
-    # (record, do_rerun, do_resume)
-    pending: list[tuple[dict, bool, bool]] = (
-        [(r, False, False) for r in _fetch(trigger_status)]
-        + [(r, False, True)  for r in _fetch(resume_status)]
-        + [(r, True,  False) for r in _fetch(rerun_status)]
+    # (record, do_rerun, do_resume, do_reannotate)
+    pending: list[tuple[dict, bool, bool, bool]] = (
+        [(r, False, False, False) for r in _fetch(trigger_status)]
+        + [(r, False, True,  False) for r in _fetch(resume_status)]
+        + [(r, True,  False, False) for r in _fetch(rerun_status)]
+        + [(r, False, False, True)  for r in _fetch(reannotate_status)]
     )
 
     found    = len(pending)
     launched = 0
 
-    for record, do_rerun, do_resume in pending:
+    for record, do_rerun, do_resume, do_reannotate in pending:
         batch_name = str(record.get("fields", {}).get(batch_code_field, "")).strip()
         if not batch_name:
             continue
@@ -765,6 +831,7 @@ def scan_module(
             boost_memory=boost_memory,
             rerun=do_rerun,
             resume=do_resume,
+            reannotate=do_reannotate,
             multicoverage=multicoverage,
             ani_threshold=ani_threshold,
             profiling_type=profiling_type,
@@ -786,6 +853,10 @@ def scan_module(
             print(f"  [{module}] {batch_name}: script written → {script_path}")
             if do_resume:
                 print(f"  [{module}] {batch_name}: resume — skipping input file generation (using existing TSV)")
+            elif do_reannotate:
+                # A re-annotation never calls drakkar profiling, so it needs
+                # neither the bins file nor the reads file that step reads.
+                print(f"  [{module}] {batch_name}: reannotate — no profiling input files needed")
             else:
                 try:
                     _generate_input_files(module, batch_name, run_dir, token)

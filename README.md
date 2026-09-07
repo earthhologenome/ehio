@@ -227,7 +227,8 @@ Bridges the taxonomic and functional annotation step of a DMB batch, which runs 
 
 | Direction | What it does |
 |-----------|-------------|
-| `--input` | Lists the dereplicated genomes that still need annotating, skipping the MAGs whose `MAG_ENTRY_ANNOTATED` value already covers the batch's annotation type (`kegg` ⊂ `genes` ⊂ `all`). A MAG at `genes` in an `all` batch is written to a second file, so it gets cluster annotation only instead of being annotated from scratch. |
+| `--stage` | Rebuilds the dereplicated genome directory of a batch whose results are already on ERDA, so an old batch can be annotated again without being profiled again. See [Re-annotating a finished batch](#re-annotating-a-finished-batch). |
+| `--input` | Lists the dereplicated genomes that still need annotating, skipping the MAGs whose `MAG_ENTRY_ANNOTATED` value already covers the batch's annotation type (`kegg` ⊂ `genes` ⊂ `all`). A MAG at `genes` in an `all` batch is written to a second file, so it gets cluster annotation only instead of being annotated from scratch. `--rerun` annotates every genome regardless. |
 | `--output` | Writes taxonomy and gene metrics back to `MAG_ENTRY`, transfers the batch-level tables to `{SFTP_REMOTE_BASE}/DMB/{batch}` and the per-genome tables to `{SFTP_REMOTE_BASE}/ANN/{batch}`, and marks the batch done. |
 
 `--output` reads two things from `annotating/`:
@@ -238,6 +239,31 @@ Bridges the taxonomic and functional annotation step of a DMB batch, which runs 
 A MAG is named by its FASTA file in Airtable (`EHA00123_bin_1.fa`) and by that name with the suffix stripped in every drakkar output path (`EHA00123_bin_1_genes.tsv`), so the two are matched on the stripped id. `final/{mag}_clusters.tsv` sits beside the gene tables and holds a different table — the dbCAN gene clusters, antiSMASH regions, geNomad mobile elements and defense systems — so it is transferred but not parsed.
 
 Once a MAG has its metrics, `MAG_ENTRY_ANNOTATED` is set to the batch's annotation type, which is what lets the next batch skip it.
+
+#### Re-annotating a finished batch
+
+A DMB batch that finished long ago can be sent through the current drakkar's annotation without being dereplicated or profiled again: set its status to `SCANNING_REANNOTATE_STATUS` (default `Reannotate`) and `ehio scanning` launches it. Only DMB batches are scanned for this status.
+
+The batch's genomes are no longer on the cluster, so they are put back first. Airtable records how many MAGs came out of dereplication but not which ones, so the catalogue is read from the batch's own counts table on ERDA — `DMB/{batch}/{batch}_counts.tsv.gz`, one row per dereplicated genome — and each of those genomes is downloaded from the FASTA URL on its `MAG_ENTRY` record and staged as `{mag}.fa`, exactly as a profiling run would have left it. A genome already in the directory is kept, so a re-annotation that stopped halfway downloads nothing twice.
+
+```bash
+# Stage on its own, without launching anything
+ehio annotating --stage -b DMB0157 -d /projects/ehi/data/DMB/DMB0157/profiling_genomes/drep/dereplicated_genomes
+
+# Supply the catalogue by hand when the counts table is missing
+ehio annotating --stage -b DMB0157 -d DEREP_DIR --genomes-file genomes.txt
+```
+
+A genome in the catalogue with no MAG record, no FASTA URL, or a URL that cannot be downloaded stops the batch before drakkar starts, with every problem reported at once.
+
+What the re-annotation then runs is the **functional** annotation and nothing else: gene annotation over the staged catalogue and, for an `all` batch, cluster annotation. `ehio annotating --input` runs with `--rerun`, because after a finished batch every MAG already carries the batch's annotation level and would otherwise be skipped.
+
+Two steps of a normal DMB batch are deliberately not repeated:
+
+- **`drakkar profiling`**, so the counts, the mapping rates and the dereplicated MAG count already in Airtable are left untouched, and neither the reads nor `MAG_DMB_BATCH_LIST_PPR` are needed.
+- **GTDB-Tk taxonomy.** A genome's classification is a property of the genome, fixed when it was binned; dereplication neither changes it nor produces a better one. The taxonomy ranks on the `MAG_ENTRY` records, and `{batch}_genome_taxonomy.tsv.gz` and the trees in `DMB/{batch}` on ERDA, are left exactly as they are — including when the output directory happens to hold a `genome_taxonomy.tsv` from an earlier run, which `--reannotate` makes `ehio annotating --output` ignore rather than write back.
+
+So what a re-annotation rewrites is the gene metrics on every `MAG_ENTRY` record of the catalogue (`coding_density`, `genes_number`, `genes_unannotated`, `genes_kegg`, `annotated`) and `ANN/{batch}` on ERDA, whose per-genome tables the new ones supersede. The drakkar version on the batch record is **kept** and the new one appended to it (`2.4.4/2.5.0`), so the version that dereplicated and profiled the batch is not lost.
 
 ---
 
