@@ -186,7 +186,8 @@ MAG_PPR_READS2: "fldPwaMMW43G7J6vO" # Field in MAG_PPR with the preprocessed rev
 #         and write a drakkar amr assembly manifest
 # Output: parse amr/amr_qc.tsv, write the per-assembly AMR stats back to
 #         EHI_ASB_ENTRY, transfer the aggregate tables to AMR/{batch} and
-#         attach them to the AMR batch record
+#         attach them to the AMR batch record, and transfer the prodigal gene
+#         calls (.faa, .ffn, gzipped) to AMR/{batch}/genes
 #
 # The AMR batch table lives in EHI_BASE and links to the assembly entries of
 # EHI_ASB_ENTRY, so an assembly can be run through the AMR workflow long after
@@ -243,7 +244,8 @@ SFTP_IDENTITY: ""                    # Path to SSH private key (leave empty to u
 #   binning        →  {SFTP_REMOTE_BASE}/ASB/{EHI_ASB_BATCH_CODE}   (assemblies, gzipped, plus the batch summary tables)
 #                     {SFTP_REMOTE_BASE}/MAG/{EHI_ASB_BATCH_CODE}   (bin FASTAs, gzipped)
 #   quantifying    →  {SFTP_REMOTE_BASE}/DMB/{MAG_DMB_BATCH_CODE}
-#   amr            →  {SFTP_REMOTE_BASE}/AMR/{EHI_AMR_BATCH_CODE}
+#   amr            →  {SFTP_REMOTE_BASE}/AMR/{EHI_AMR_BATCH_CODE}         (result tables, batch-prefixed)
+#                     {SFTP_REMOTE_BASE}/AMR/{EHI_AMR_BATCH_CODE}/genes   (prodigal .faa/.ffn gene calls, gzipped)
 SFTP_REMOTE_BASE: "/EarthHologenomeInitiative/Data"
 
 # ---- Local HPC directories (used by scanning) ----------------------------

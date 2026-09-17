@@ -1945,6 +1945,26 @@ def _content_type_of(path: Path) -> str:
     return _AMR_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
+# Gene calls 'drakkar amr' makes with prodigal before AMRFinderPlus, one pair per
+# assembly: {assembly}.faa (proteins) and {assembly}.ffn (nucleotides).
+_AMR_GENE_CALL_SUFFIXES = (".faa", ".ffn")
+
+
+def _find_amr_gene_calls(amr_dir: Path) -> list[Path]:
+    """Return the prodigal .faa and .ffn files of a drakkar amr run.
+
+    The .gff and .amrfinder.gff files in the same folder are AMRFinderPlus
+    intermediates and are left out.
+    """
+    prodigal_dir = amr_dir / "raw" / "prodigal"
+    if not prodigal_dir.is_dir():
+        return []
+    return sorted(
+        p for p in prodigal_dir.iterdir()
+        if p.suffix in _AMR_GENE_CALL_SUFFIXES and p.is_file()
+    )
+
+
 def _run_amr_output(args: argparse.Namespace) -> int:
     """Parse amr_qc.tsv, update EHI_ASB_ENTRY, transfer and attach the AMR tables."""
     import gzip as _gzip
@@ -2103,20 +2123,52 @@ def _run_amr_output(args: argparse.Namespace) -> int:
     else:
         _info(f"  manifest.yaml not found in {amr_dir} — skipping.")
 
+    # The prodigal gene calls go to their own subfolder, named after the
+    # assembly and gzipped into the connection: the .ffn is about as large as
+    # the assembly, so no temporary .gz is written to the local disk.
+    gene_calls = _find_amr_gene_calls(amr_dir)
+    gene_dir   = f"{remote_dir}/genes"
+    if not gene_calls:
+        _info(f"  No prodigal gene calls found in {amr_dir / 'raw' / 'prodigal'} — skipping.")
+
     try:
-        if upload_files:
-            _info(f"Transferring {len(upload_files)} file(s) to {user}@{host}:{remote_dir} ...")
+        if upload_files or gene_calls:
+            _verbose = getattr(args, "verbose", False)
             _timeout = getattr(args, "connect_timeout", 300.0)
             with SFTPTransfer(host=host, username=user, port=port,
                               key_path=identity or None, timeout=_timeout) as xfer:
                 if rerun:
                     xfer.remove_remote_dir(remote_dir)
                     _info(f"Deleted remote directory {remote_dir} for rerun.")
-                n_up, n_sk = xfer.upload_flat(
-                    upload_files, remote_dir, verbose=getattr(args, "verbose", False)
-                )
-            _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
-            _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
+                if upload_files:
+                    _info(f"Transferring {len(upload_files)} file(s) to {user}@{host}:{remote_dir} ...")
+                    n_up, n_sk = xfer.upload_flat(upload_files, remote_dir, verbose=_verbose)
+                    _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
+                    _info(f"Transferred {n_up} file(s) to {remote_dir}{_skip_msg}.")
+                if gene_calls:
+                    total_mb = sum(p.stat().st_size for p in gene_calls) / (1024 * 1024)
+                    _info(
+                        f"Transferring {len(gene_calls)} gene call file(s) ({total_mb:.0f} MB) "
+                        f"to {user}@{host}:{gene_dir} ..."
+                    )
+                    n_up = n_sk = 0
+                    for source in gene_calls:
+                        remote_path = f"{gene_dir}/{source.name}.gz"
+                        if xfer.remote_exists(remote_path):
+                            n_sk += 1
+                            if _verbose:
+                                print(f"  SKIP {source} (already exists remotely)", file=sys.stderr)
+                            continue
+                        size_mb = source.stat().st_size / (1024 * 1024)
+                        _info(f"  Compressing and uploading {source.name} ({size_mb:.0f} MB) ...")
+                        xfer.upload_stream(
+                            remote_path,
+                            lambda handle, src=source: _gzip_into(src, handle),
+                            verbose=_verbose,
+                        )
+                        n_up += 1
+                    _skip_msg = f", {n_sk} already present (skipped)" if n_sk else ""
+                    _info(f"Transferred {n_up} gene call file(s) to {gene_dir}{_skip_msg}.")
 
         # uploadAttachment appends to whatever the field already holds, so a
         # rerun clears the fields first instead of stacking a second copy of
@@ -2356,7 +2408,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "             assembly manifest pointing at the local copies.\n"
             "Output mode: parse amr/amr_qc.tsv, write the per-assembly AMR stats\n"
             "             back to EHI_ASB_ENTRY, upload the aggregate tables to\n"
-            "             AMR/{batch} via SFTP and attach them to the batch record."
+            "             AMR/{batch} via SFTP and attach them to the batch record,\n"
+            "             and upload the prodigal gene calls to AMR/{batch}/genes."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )

@@ -274,7 +274,7 @@ Bridges the antimicrobial resistance step. Connects to `EHI_BASE` only.
 | Direction | What it does |
 |-----------|-------------|
 | `--input` | Looks up the batch in `EHI_AMR_BATCH`, follows `EHI_AMR_BATCH_LIST_ASSEMBLIES` to the linked `EHI_ASB_ENTRY` records, downloads every assembly FASTA from `EHI_ASB_ENTRY_ASSEMBLY_URL` into the batch staging directory, and writes a drakkar amr manifest (`assembly_id`, `assembly_path`, `assembly_type`) pointing at the local copies. |
-| `--output` | Parses `amr/amr_qc.tsv`, writes the per-assembly AMR counts back to the assembly records in `EHI_ASB_ENTRY`, transfers the aggregate tables to `{SFTP_REMOTE_BASE}/AMR/{batch}` and attaches them to the AMR batch record. |
+| `--output` | Parses `amr/amr_qc.tsv`, writes the per-assembly AMR counts back to the assembly records in `EHI_ASB_ENTRY`, transfers the aggregate tables to `{SFTP_REMOTE_BASE}/AMR/{batch}` and attaches them to the AMR batch record, and transfers the prodigal gene calls to `{SFTP_REMOTE_BASE}/AMR/{batch}/genes`. |
 
 ```bash
 ehio amr --input -b AMR001 -f assemblies.tsv -d /projects/ehi/data/AMR/AMR001/data/assemblies
@@ -313,6 +313,21 @@ at 5 MB of base64 (~3.7 MB of file), so a table above that is reported and left
 on ERDA only — the transfer is never the step that fails. A rerun clears the
 attachment fields first, since Airtable's upload endpoint appends rather than
 replaces.
+
+**Gene calls.** `drakkar amr` calls genes with prodigal before AMRFinderPlus runs,
+and keeps one pair of files per assembly in `amr/raw/prodigal/`. Both are gzipped
+straight into the SFTP connection, so no temporary `.gz` is written to disk:
+
+| Local | ERDA |
+|---|---|
+| `amr/raw/prodigal/{assembly}.faa` (proteins) | `AMR/{batch}/genes/{assembly}.faa.gz` |
+| `amr/raw/prodigal/{assembly}.ffn` (nucleotides) | `AMR/{batch}/genes/{assembly}.ffn.gz` |
+
+The `.gff` and `.amrfinder.gff` files in the same folder are AMRFinderPlus
+intermediates and are not sent. Files already on ERDA are skipped, so a resumed
+batch only sends what is missing. `--rerun` deletes `AMR/{batch}`, including
+`genes/`, before anything is sent. A run whose output has no prodigal folder
+still finishes.
 
 ---
 

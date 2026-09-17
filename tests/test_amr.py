@@ -487,6 +487,7 @@ def _output_args(local_dir: Path, **overrides) -> argparse.Namespace:
 def sftp():
     transfer = MagicMock()
     transfer.upload_flat.return_value = (8, 0)
+    transfer.remote_exists.return_value = False
     ctx = MagicMock()
     ctx.__enter__ = lambda self: transfer
     ctx.__exit__ = lambda self, *exc: False
@@ -604,3 +605,77 @@ class TestAmrOutput:
         summary = tmp_path / "RUN" / "AMR001" / "AMR001_output.tsv"
         assert summary.is_file()
         assert "EHA00405" in summary.read_text()
+
+
+def _with_gene_calls(output_dir: Path) -> Path:
+    """Add the prodigal outputs drakkar amr leaves in amr/raw/prodigal."""
+    prodigal = output_dir / "amr" / "raw" / "prodigal"
+    prodigal.mkdir(parents=True)
+    for assembly in ("EHA00405", "EHA00406"):
+        (prodigal / f"{assembly}.faa").write_text(f">{assembly}_1\nMKV\n")
+        (prodigal / f"{assembly}.ffn").write_text(f">{assembly}_1\nATGAAAGTT\n")
+        (prodigal / f"{assembly}.gff").write_text("##gff-version 3\n")
+        (prodigal / f"{assembly}.amrfinder.gff").write_text("##gff-version 3\n")
+    return prodigal
+
+
+class TestAmrGeneCalls:
+    def test_faa_and_ffn_go_gzipped_to_the_genes_folder(self, amr_output_dir, amr_airtable, sftp):
+        _with_gene_calls(amr_output_dir)
+        assert cli.cmd_amr(_output_args(amr_output_dir)) == 0
+        remote = sorted(c[0][0] for c in sftp.upload_stream.call_args_list)
+        assert remote == [
+            "/Data/AMR/AMR001/genes/EHA00405.faa.gz",
+            "/Data/AMR/AMR001/genes/EHA00405.ffn.gz",
+            "/Data/AMR/AMR001/genes/EHA00406.faa.gz",
+            "/Data/AMR/AMR001/genes/EHA00406.ffn.gz",
+        ]
+
+    def test_the_uploaded_content_is_the_gzipped_file(self, amr_output_dir, amr_airtable, sftp):
+        import gzip
+        import io
+
+        prodigal = _with_gene_calls(amr_output_dir)
+        sent: dict[str, bytes] = {}
+
+        def _stream(remote_path, writer, verbose=False):
+            buffer = io.BytesIO()
+            writer(buffer)
+            sent[remote_path] = gzip.decompress(buffer.getvalue())
+
+        sftp.upload_stream.side_effect = _stream
+        cli.cmd_amr(_output_args(amr_output_dir))
+        assert sent["/Data/AMR/AMR001/genes/EHA00405.ffn.gz"] == (
+            prodigal / "EHA00405.ffn"
+        ).read_bytes()
+
+    def test_gff_intermediates_are_not_sent(self, amr_output_dir, amr_airtable, sftp):
+        _with_gene_calls(amr_output_dir)
+        cli.cmd_amr(_output_args(amr_output_dir))
+        remote = [c[0][0] for c in sftp.upload_stream.call_args_list]
+        assert not any(".gff" in path for path in remote)
+        flat = [p.name for p in sftp.upload_flat.call_args[0][0]]
+        assert not any(name.endswith((".faa", ".ffn", ".gff")) for name in flat)
+
+    def test_files_already_on_erda_are_skipped(self, amr_output_dir, amr_airtable, sftp):
+        _with_gene_calls(amr_output_dir)
+        sftp.remote_exists.side_effect = lambda path: path.endswith(".faa.gz")
+        cli.cmd_amr(_output_args(amr_output_dir))
+        remote = sorted(c[0][0] for c in sftp.upload_stream.call_args_list)
+        assert remote == [
+            "/Data/AMR/AMR001/genes/EHA00405.ffn.gz",
+            "/Data/AMR/AMR001/genes/EHA00406.ffn.gz",
+        ]
+
+    def test_rerun_clears_the_batch_folder_before_the_gene_calls_go_up(
+            self, amr_output_dir, amr_airtable, sftp):
+        _with_gene_calls(amr_output_dir)
+        cli.cmd_amr(_output_args(amr_output_dir, rerun=True))
+        calls = [c[0] for c in sftp.method_calls if c[0] in ("remove_remote_dir", "upload_stream")]
+        assert calls[0] == "remove_remote_dir"
+        assert calls.count("upload_stream") == 4
+
+    def test_a_run_without_gene_calls_still_finishes(self, amr_output_dir, amr_airtable, sftp):
+        assert cli.cmd_amr(_output_args(amr_output_dir)) == 0
+        sftp.upload_stream.assert_not_called()
+        sftp.upload_flat.assert_called_once()

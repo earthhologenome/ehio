@@ -9,6 +9,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.8.3] - 2026-09-17
+
+### Added
+
+- **`ehio amr --output` sends the AMR run's gene calls to ERDA.** Before AMRFinderPlus runs, `drakkar amr` calls genes with prodigal and keeps them as `amr/raw/prodigal/{assembly}.faa` (proteins) and `.ffn` (nucleotides). These now go to `{SFTP_REMOTE_BASE}/AMR/{batch}/genes/` as `{assembly}.faa.gz` and `{assembly}.ffn.gz`, over the same connection as the result tables. wmw 0.6.12 added the same transfer.
+  - The `.ffn` is about as large as the assembly, so both files are gzipped straight into the SFTP connection, as the binning assemblies are, and no temporary `.gz` is written to the local disk. Each file is written under a `.part` name and renamed only when it is complete, so an interrupted transfer never leaves a truncated file that looks finished.
+  - A transfer runs in the batch's own screen session, and only after `amr/amr_qc.tsv` exists. That means prodigal has finished writing the files, so ehio does not need the separate screen session wmw uses.
+  - Files already on ERDA are skipped, so a resumed batch only sends what is missing. `--rerun` deletes `AMR/{batch}` before anything is sent, and that includes `genes/`. A failed transfer fails the batch, as a failed table transfer does.
+  - The `.gff` and `.amrfinder.gff` files in the same folder are AMRFinderPlus intermediates and are not sent. A run whose output has no prodigal folder finishes as before.
 ## [0.8.2] - 2026-09-07
 
 ### Added
