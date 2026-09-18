@@ -233,6 +233,37 @@ EHI_ASB_ENTRY_AMR_MULTI_TOOL_LOCI: "fldg26JVzTd21SCnJ"  # multi_tool_loci
 EHI_ASB_ENTRY_AMR_MOBILITY_LINKS: "fld9aNIZXTAyc5dMW"  # mobility_links
 EHI_ASB_ENTRY_AMR_MOBILE_LOCI: "fld5jq9mMekfLevpc"  # mobile_loci
 
+# ---- ehi-core -------------------------------------------------------------
+# ehi-core is the EHI's own database for the bioinformatic pipeline, taking over
+# from the Airtable tables as they run out of room. Batches are still created in
+# Airtable, and everything ehio writes there is written to the core as well:
+# statuses, versions, QC, assembly, AMR and annotation metrics, and the DMB
+# mappings. A batch or entry the core does not hold yet is added from its
+# Airtable record the first time ehio touches it.
+#
+# MAGs live in the core alone: Airtable's MAG table is full, and two databases
+# numbering new MAGs would give one EHM code to two genomes. So 'ehio binning
+# --output' creates new MAGs in the core only, and quantifying and annotating
+# read a DMB batch's MAGs from the core (after copying in the ones linked to the
+# batch in Airtable).
+#
+# The pipeline token is never stored here: export EHI_CORE_TOKEN (the value of
+# the core-pipeline-token secret) or pass --core-token. Until a token is set,
+# ehio runs on Airtable alone and says so. Leave EHI_CORE_URL empty to switch
+# the core off altogether.
+EHI_CORE_URL: "https://ehi-core-backend-874005116816.europe-west1.run.app"
+# While Airtable is still the record, a failed write to the core is reported and
+# the batch carries on. Set to "true" to fail the batch instead (and to require
+# the token). Commands working on MAGs always stop when the core fails.
+EHI_CORE_REQUIRED: "false"
+# Public address of SFTP_REMOTE_BASE on ERDA. Airtable builds file URLs with
+# formulas; the core stores them, so ehio writes them from this.
+ERDA_SHARE_BASE: "https://sid.erda.dk/share_redirect/BaMZodj9sA"
+# Link field in EHI_ASB_ENTRY pointing at the preprocessed sample
+# (PreprocessedSample). Lets ehio link an assembly the core does not hold yet to
+# its preprocessing; leave empty to skip that link.
+EHI_ASB_ENTRY_PREPROCESSING: ""
+
 # ---- SFTP settings --------------------------------------------------------
 SFTP_HOST: "io.erda.dk"
 SFTP_USER: "antton.alberdi@snm.ku.dk"

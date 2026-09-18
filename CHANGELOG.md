@@ -9,6 +9,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.9.0] - 2026-09-18
+
+### Added
+
+- **Everything ehio writes to Airtable is written to ehi-core too.** ehi-core is the EHI's own database for the bioinformatic pipeline, taking over from the Airtable tables as they run out of room. It covers batch statuses (scanning, `set-status`, `stop`, done), ehio and drakkar versions, QC, assembly, AMR and annotation metrics, and the DMB mappings. ehio reaches the core at `EHI_CORE_URL` with the pipeline token (`EHI_CORE_TOKEN` or `--core-token`, the `core-pipeline-token` secret). `ehio scanning` passes the token on to the batches it launches.
+  - Records are matched by the codes Airtable gave them. A batch, entry or hologenome created in Airtable after the core was loaded is added from its Airtable record the first time ehio reads it, so an output step always has a row to write to. Facts copied from Airtable only fill empty cells.
+  - The core stores the file URLs Airtable builds with formulas, so ehio writes the public ERDA address of what it uploads: the reads and host BAM of a preprocessing, each assembly, each MAG's FASTA, the AMR gene calls and the hits and loci tables. `ERDA_SHARE_BASE` is the share that maps onto `SFTP_REMOTE_BASE`.
+  - `quantifying --output` records which of a batch's MAGs dereplication kept, read from the counts table. Airtable only ever held their number.
+  - While Airtable is still the record, a core that can't be reached, or a record it refuses, is reported and the batch carries on. `EHI_CORE_REQUIRED: "true"` fails the batch instead. A write the core refuses as a whole is retried record by record, so one bad record costs only itself. Until a token is set, ehio runs on Airtable alone and says so. `EHI_CORE_URL: ""` switches the core off.
+  - New config keys: `EHI_CORE_URL`, `EHI_CORE_REQUIRED`, `ERDA_SHARE_BASE`, and the optional `EHI_ASB_ENTRY_PREPROCESSING`, which links a new assembly to its preprocessing in the core.
+
+### Changed
+
+- **MAGs live in ehi-core alone.** Airtable's MAG table is full, and two databases each numbering new MAGs would give one EHM code to two genomes. With the core in use:
+  - `ehio binning --output` creates a batch's new MAGs in the core only, after their FASTAs reach ERDA, and the core numbers them.
+  - `ehio quantifying --input` and `ehio annotating --stage`, `--input` and `--output` read a DMB batch's MAGs from the core. The MAGs linked to the batch in Airtable are first copied in, including how far each was annotated, and linked to the batch there.
+  - `ehio annotating --output` still annotates the MAGs Airtable holds there, and every MAG in the core.
+  - These commands stop when the core can't be reached, rather than run on only the MAGs Airtable knows about.
+
+### Fixed
+
+- **A full Airtable table is reported as a full table.** Airtable caps how many records a single table may hold, separately from the base's total — on an Enterprise plan a base can take 250,000 records but one table only 100,000 — and rejects further creates with a 422 carrying `LIMIT_CHECK_TOO_MANY_RECORDS_IN_TABLE`. ehio passed that on as "a field id or value does not match the table schema", the explanation for every other 422, which sent the reader to check field ids that were fine while the base's usage showed plenty of room. The error now says the table is full and that this is a per-table cap the base's free space does not lift. A 422 for a full base gets its own message too.
+
 ## [0.8.3] - 2026-09-17
 
 ### Added
@@ -18,6 +41,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - A transfer runs in the batch's own screen session, and only after `amr/amr_qc.tsv` exists. That means prodigal has finished writing the files, so ehio does not need the separate screen session wmw uses.
   - Files already on ERDA are skipped, so a resumed batch only sends what is missing. `--rerun` deletes `AMR/{batch}` before anything is sent, and that includes `genes/`. A failed transfer fails the batch, as a failed table transfer does.
   - The `.gff` and `.amrfinder.gff` files in the same folder are AMRFinderPlus intermediates and are not sent. A run whose output has no prodigal folder finishes as before.
+
 ## [0.8.2] - 2026-09-07
 
 ### Added

@@ -720,3 +720,102 @@ class TestAnnotatingOutputReannotate:
         self._run(tmp_path, with_taxonomy=False)
         fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
         assert fields["fldGENES"] == 1
+
+
+# ---------------------------------------------------------------------------
+# With ehi-core: a DMB batch's MAGs are read from the core, which also holds
+# the MAGs Airtable has no room for
+# ---------------------------------------------------------------------------
+
+from tests.fake_core import FakeCoreClient, using  # noqa: E402
+
+CORE_MAGS = [
+    {"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": "recM1",
+     "fasta_url": "https://erda/Data/MAG/ABB0659/EHA00123_bin_1.fa.gz", "annotation_level": "genes"},
+    # A MAG only the core holds: binned after Airtable's MAG table filled up.
+    {"code": "EHM100001", "name": "EHA00124_bin_3.fa", "airtable_record_id": None,
+     "fasta_url": "https://erda/Data/MAG/ABB0700/EHA00124_bin_3.fa.gz", "annotation_level": None},
+]
+
+
+class TestWithTheCore:
+    def test_staging_reads_the_mags_from_the_core(self, tmp_path, stage_airtable):
+        fake = FakeCoreClient(CORE_MAGS)
+        fetched: list[str] = []
+
+        def _download(url, dest, timeout=None, overwrite=False):
+            fetched.append(url)
+            return _fake_download(url, dest, timeout, overwrite)
+
+        ctx, _ = _fake_sftp()
+        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
+             patch("ehio.urls.download_url", side_effect=_download):
+            assert cli.cmd_annotating(_stage_args(tmp_path)) == 0
+        assert "https://erda/Data/MAG/ABB0700/EHA00124_bin_3.fa.gz" in fetched
+
+    def test_the_mags_linked_in_airtable_are_copied_into_the_core_first(self, tmp_path, stage_airtable):
+        fake = FakeCoreClient(CORE_MAGS)
+        ctx, _ = _fake_sftp()
+        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
+             patch("ehio.urls.download_url", side_effect=_fake_download):
+            cli.cmd_annotating(_stage_args(tmp_path))
+        copied = fake.rows("mags")
+        assert [row["key"]["name"] for row in copied] == ["EHA00123_bin_1.fa", "EHA00124_bin_3.fa", "EHA00125_bin_2.fa"]
+        assert copied[0]["airtable_record_id"] == "recM1"
+        assert fake.links == [("DMB0157", ["recM1", "recM2", "recM3"], None)]
+
+    def test_input_skips_the_mags_the_core_has_annotated_far_enough(self, tmp_path, stage_airtable):
+        fake = FakeCoreClient(CORE_MAGS)
+        genomes = tmp_path / "genomes"
+        genomes.mkdir()
+        for mag in CORE_MAGS:
+            (genomes / mag["name"]).write_text(">c\nACGT\n")
+        stage_airtable.fetch_batch_record.return_value["fields"]["fldANNTYPE"] = "genes"
+        out = tmp_path / "annotation.tsv"
+        args = _stage_args(tmp_path, stage=False, input=True, annotation_dir=str(genomes),
+                           annotation_file=str(out))
+        config = {**STAGE_CFG, "MAG_DMB_BATCH_ANNOTATION_TYPE": "fldANNTYPE"}
+        with using(fake), patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)):
+            assert cli.cmd_annotating(args) == 0
+        assert out.read_text().splitlines() == [str(genomes / "EHA00124_bin_3.fa")]
+
+    def test_output_annotates_every_mag_in_the_core_and_airtables_in_airtable(self, tmp_path, output_airtable):
+        fake = FakeCoreClient([
+            {"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": "recM1"},
+            {"code": "EHM100001", "name": "EHA00200_bin_1.fa", "airtable_record_id": None},
+        ])
+        local = _output_dir(tmp_path)
+        write_gene_table(local / "annotating" / "final" / "EHA00200_bin_1_genes.tsv", [
+            gene_row("g1", "c1", 1, 30, "prodigal"),
+        ])
+        ctx, _ = _uploading_sftp()
+        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx):
+            assert cli.cmd_annotating(_out_args(local, reannotate=False)) == 0
+
+        airtable_mags = output_airtable.update_records.call_args_list[0][0][1]
+        assert [update["id"] for update in airtable_mags] == ["recM1"]
+
+        annotated = {row["key"]["name"]: row["values"] for row in fake.rows("mags") if row["values"].get("annotated")}
+        assert set(annotated) == {"EHA00123_bin_1.fa", "EHA00200_bin_1.fa"}
+        assert annotated["EHA00200_bin_1.fa"]["annotation_level"] == "all"
+        assert annotated["EHA00123_bin_1.fa"]["tax_phylum"] == "Firmicutes"
+        assert fake.rows("dereplication_batches")[-1]["values"]["status"] == "Done"
+
+    def test_a_core_failure_on_the_mags_fails_the_output(self, tmp_path, output_airtable):
+        from ehio.core import CoreError
+
+        fake = FakeCoreClient([{"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": "recM1"}])
+        calls = {"n": 0}
+        real_upsert = fake.upsert
+
+        def upsert(changes):
+            calls["n"] += 1
+            if calls["n"] > 1:  # the copy of the Airtable MAGs goes through; the annotation does not
+                raise CoreError("ehi-core is down")
+            return real_upsert(changes)
+
+        fake.upsert = upsert
+        ctx, _ = _uploading_sftp()
+        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx):
+            with pytest.raises(CoreError):
+                cli.cmd_annotating(_out_args(_output_dir(tmp_path)))

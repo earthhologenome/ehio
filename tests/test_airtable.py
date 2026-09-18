@@ -205,6 +205,54 @@ class TestUpdateRecords:
 
 
 # ---------------------------------------------------------------------------
+# create_records
+# ---------------------------------------------------------------------------
+
+class TestCreateRecords:
+    def test_full_table_is_reported_as_a_table_limit(self):
+        from ehio.airtable import AirtableError
+
+        client, mock_api = _make_client(base_id="appMAG")
+        mock_api.table.return_value.batch_create.side_effect = _http_error(
+            422, "LIMIT_CHECK_TOO_MANY_RECORDS_IN_TABLE"
+        )
+
+        with pytest.raises(AirtableError) as excinfo:
+            client.create_records("tblMAG_ENTRY", [{"fldA": "bin_1.fa"}])
+        message = str(excinfo.value)
+        assert "in a single table" in message
+        assert "field id" not in message
+        assert "tblMAG_ENTRY" in message
+        assert "appMAG" in message
+
+    def test_full_base_is_reported_as_a_base_limit(self):
+        from ehio.airtable import AirtableError
+
+        client, mock_api = _make_client()
+        mock_api.table.return_value.batch_create.side_effect = _http_error(
+            422, "LIMIT_CHECK_TOO_MANY_RECORDS_IN_BASE"
+        )
+
+        with pytest.raises(AirtableError) as excinfo:
+            client.create_records("tblMAG_ENTRY", [{"fldA": "bin_1.fa"}])
+        message = str(excinfo.value)
+        assert "its Airtable plan allows" in message
+        assert "in a single table" not in message
+
+    def test_other_422_still_points_at_the_schema(self):
+        from ehio.airtable import AirtableError
+
+        client, mock_api = _make_client()
+        mock_api.table.return_value.batch_create.side_effect = _http_error(
+            422, "Unknown field name"
+        )
+
+        with pytest.raises(AirtableError) as excinfo:
+            client.create_records("tblMAG_ENTRY", [{"fldA": "bin_1.fa"}])
+        assert "field id" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
 # Error handling on reads
 # ---------------------------------------------------------------------------
 

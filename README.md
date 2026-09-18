@@ -6,6 +6,10 @@
 2. **Output** — transfers Drakkar result files to remote storage via SFTP and updates Airtable records with processing status.
 3. **Scanning** — monitors Airtable batch tables for pending work and automatically launches Drakkar runs in named `screen` sessions.
 
+Airtable is running out of room, so the EHI's own database, **ehi-core**, is
+taking over from it. For now, everything ehio writes to Airtable is also
+written to the core. MAGs live in the core alone (see [ehi-core](#ehi-core)).
+
 ---
 
 ## Installation
@@ -101,6 +105,64 @@ list of accessible bases.
 
 The token needs the `data.records:read` and `data.records:write` scopes, and both
 `EHI_BASE` and `MAG_BASE` must be added to its list of accessible bases.
+
+### ehi-core token
+
+ehio reaches ehi-core at `EHI_CORE_URL` with the pipeline token, the value of
+the `core-pipeline-token` secret. Like the Airtable token, it is never stored
+in the config:
+
+```bash
+export EHI_CORE_TOKEN="..."   # gcloud secrets versions access latest --secret=core-pipeline-token
+```
+
+or pass it per command with `--core-token`. `ehio scanning` hands it on to
+the batches it launches. Until a token is set, ehio runs on Airtable alone and
+says so on every command.
+
+---
+
+## ehi-core
+
+ehi-core is the EHI's own database for the bioinformatic pipeline, taking over
+from the Airtable tables as they run out of room. Batches are still created and
+launched from Airtable. Everything ehio writes to Airtable is written to the
+core too:
+
+| Step | Written to the core |
+|---|---|
+| any status change (scanning, `set-status`, `stop`, done) | the batch's status |
+| `preprocessing --output` | QC and Nonpareil metrics, the ERDA URLs of the reads and host BAM, versions |
+| `binning --output` | assembly metrics, the ERDA URL of each assembly, versions |
+| `amr --output` | AMR metrics, the ERDA URLs of the gene calls and the hits and loci tables, versions |
+| `quantifying --output` | the mappings under Airtable's DM codes, which MAGs dereplication kept, versions |
+| `annotating --output` | taxonomy, GTDB and gene metrics, and how far each MAG was annotated |
+
+Each record is matched by the code Airtable gave it. A batch, entry or
+hologenome the core doesn't hold yet (created in Airtable after the core was
+loaded) is added from its Airtable record the first time ehio reads it, so the
+output step always has a row to write to. Facts copied from Airtable only fill
+empty cells: they never overwrite what the core holds.
+
+**MAGs live in the core alone.** Airtable's MAG table is full. Two databases
+each numbering new MAGs would also give one EHM code to two genomes. So:
+
+- `binning --output` creates the new MAGs in the core only. The core gives
+  them their EHM codes, with the ERDA URL of their FASTA.
+- `quantifying --input` and all three `annotating` modes read a DMB batch's
+  MAGs from the core. The MAGs linked to the batch in Airtable are first copied
+  in, with the annotation depth Airtable holds, and linked to the batch there.
+- `annotating --output` annotates every MAG in the core. It still annotates
+  the MAGs Airtable holds there too.
+
+What happens when the core can't be reached:
+
+- While Airtable is still the record, a failed write to the core is reported
+  and the batch carries on. `EHI_CORE_REQUIRED: "true"` makes it fail the
+  batch instead.
+- The commands working on MAGs always stop, because the core may hold MAGs
+  Airtable doesn't.
+- `EHI_CORE_URL: ""` switches the core off, and ehio behaves as it did before.
 
 ---
 

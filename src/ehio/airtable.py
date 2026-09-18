@@ -107,6 +107,25 @@ def _explain(
             f"Airtable could not find {where} (404 Not Found). Check the base and "
             f"table ids in the config (ehio config --edit). Airtable said: {detail}"
         )
+    if status == 422 and "TOO_MANY_RECORDS_IN_TABLE" in detail:
+        # A full table is a 422 too, but no field is at fault.  Airtable caps a
+        # single table separately from the base total, so the base can still
+        # have room to spare.
+        return (
+            f"Airtable refused to {action} {where}: the table holds as many "
+            "records as Airtable allows in a single table. This cap is separate "
+            "from the base's total record limit, so it applies even when the "
+            "base has room. The records themselves are fine; nothing more can be "
+            "added to this table until records are removed from it. "
+            f"Airtable said: {detail}"
+        )
+    if status == 422 and "TOO_MANY_RECORDS" in detail:
+        return (
+            f"Airtable refused to {action} {where}: the base holds as many "
+            "records as its Airtable plan allows. The records themselves are "
+            "fine; delete or archive records the base no longer needs, or raise "
+            f"the plan's limit. Airtable said: {detail}"
+        )
     if status == 422:
         return (
             f"Airtable rejected the request to {action} {where} (422 Unprocessable). "

@@ -117,3 +117,17 @@ def drakkar_output(tmp_path: Path) -> Path:
         (nonpareil_dir / f"{sample}_np.tsv").write_text(NONPAREIL_TSV)
 
     return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# ehi-core
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_core_token(monkeypatch):
+    """No test reaches the real ehi-core: without a token, a config that names
+    EHI_CORE_URL runs on Airtable alone."""
+    from ehio import core
+
+    monkeypatch.delenv("EHI_CORE_TOKEN", raising=False)
+    core._VERIFIED.clear()

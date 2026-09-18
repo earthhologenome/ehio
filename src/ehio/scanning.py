@@ -91,10 +91,12 @@ def session_exists(name: str) -> bool:
     return bool(re.search(rf"\d+\.{re.escape(name)}(\t| )", result.stdout))
 
 
-def launch_screen(session_name: str, script_path: str, token: str = "") -> None:
+def launch_screen(session_name: str, script_path: str, token: str = "", core_token: str = "") -> None:
     env = {**os.environ}
     if token:
         env["AIRTABLE_TOKEN"] = token
+    if core_token:
+        env["EHI_CORE_TOKEN"] = core_token
     subprocess.run(
         ["screen", "-dmS", session_name, "bash", script_path],
         env=env,
@@ -249,7 +251,8 @@ def build_script_content(
         "#!/usr/bin/env bash\n"
         f"# ehio-generated script — batch {batch_name} ({module})\n"
         "# Do not edit manually; re-run ehio scanning to regenerate.\n"
-        "# AIRTABLE_TOKEN must be exported in the environment before launching.\n"
+        "# AIRTABLE_TOKEN, and EHI_CORE_TOKEN when ehi-core is in use, must be exported\n"
+        "# in the environment before launching.\n"
         "\n"
         "set -euo pipefail\n"
         f"exec >> {q(out_file)} 2>> {q(err_file)}\n"
@@ -597,14 +600,18 @@ def build_script_content(
 # Input-file generator (used by dry-run)
 # ---------------------------------------------------------------------------
 
-def _generate_input_files(module: str, batch_name: str, run_dir: str, token: str) -> None:
+def _generate_input_files(
+    module: str, batch_name: str, run_dir: str, token: str, core_token: str = ""
+) -> None:
     """Run 'ehio <module> --input' to write the TSV (and bins file) into run_dir.
 
     Uses the same Python interpreter so the installed package is always found.
-    The Airtable token is injected via the environment.
+    The Airtable and ehi-core tokens are injected via the environment.
     """
     tsv_path = str(Path(run_dir) / f"{batch_name}.tsv")
     env      = {**os.environ, "AIRTABLE_TOKEN": token}
+    if core_token:
+        env["EHI_CORE_TOKEN"] = core_token
 
     if module == "preprocessing":
         cmd = [sys.executable, "-m", "ehio", "preprocessing", "--input",
@@ -646,6 +653,7 @@ def _mark_batch_error(
     module: str,
     batch_name: str,
     dry_run: bool = False,
+    core=None,
 ) -> None:
     """Set a batch status to the error status, reporting (not raising) failures."""
     if dry_run:
@@ -666,6 +674,21 @@ def _mark_batch_error(
             f"'{error_status}': {exc}",
             file=sys.stderr,
         )
+    _mirror_status(core, module, batch_name, record, error_status)
+
+
+def _mirror_status(core, module: str, batch_name: str, record: dict, status: str) -> None:
+    """The status ehio just set in Airtable, in ehi-core too, never raising:
+    a scan goes on to the next batch whatever the core says."""
+    if not core:
+        return
+    from ehio import mirror
+    from ehio.core import CoreError
+
+    try:
+        core.mirror(f"Status of batch '{batch_name}'", [mirror.batch(module, batch_name, record, status=status)])
+    except CoreError as exc:
+        print(f"  [{module}] {batch_name}: WARNING — {exc}", file=sys.stderr)
 
 
 def scan_module(
@@ -673,8 +696,13 @@ def scan_module(
     token: str,
     dry_run: bool = False,
     verbose: bool = False,
+    core=None,
+    core_token: str = "",
 ) -> tuple[int, int]:
     """Scan one module's batch table for pending batches and launch them.
+
+    `core` (an ehio.core.CoreSession) receives the statuses the scan sets, and
+    `core_token` is handed to the launched batch.
 
     Returns (found, launched).
     """
@@ -766,7 +794,7 @@ def scan_module(
                 print(f"  [{module}] {batch_name}: ERROR — {exc}", file=sys.stderr)
                 _mark_batch_error(
                     client, batch_table, batch_status_field, error_status,
-                    record, module, batch_name, dry_run=dry_run,
+                    record, module, batch_name, dry_run=dry_run, core=core,
                 )
                 continue
             ref_desc = ref_flag if ref_flag else "(no reference)"
@@ -859,7 +887,7 @@ def scan_module(
                 print(f"  [{module}] {batch_name}: reannotate — no profiling input files needed")
             else:
                 try:
-                    _generate_input_files(module, batch_name, run_dir, token)
+                    _generate_input_files(module, batch_name, run_dir, token, core_token)
                     tsv_path = Path(run_dir) / f"{batch_name}.tsv"
                     print(f"  [{module}] {batch_name}: input file written → {tsv_path}")
                 except subprocess.CalledProcessError as exc:
@@ -876,7 +904,7 @@ def scan_module(
         script_path.write_text(script_content, encoding="utf-8")
         script_path.chmod(0o755)
 
-        launch_screen(batch_name, str(script_path), token=token)
+        launch_screen(batch_name, str(script_path), token=token, core_token=core_token)
         try:
             client.update_records(
                 batch_table,
@@ -888,6 +916,7 @@ def scan_module(
                 f"status in {batch_table} could not be set to '{launched_status}'. "
                 f"Fix the token permissions and set the status manually."
             ) from exc
+        _mirror_status(core, module, batch_name, record, launched_status)
         print(f"  [{module}] {batch_name}: launched — script at {script_path}")
         launched += 1
 
@@ -903,6 +932,8 @@ def run_scan(
     modules: list[str] | None = None,
     dry_run: bool = False,
     verbose: bool = False,
+    core=None,
+    core_token: str = "",
 ) -> int:
     """Scan all (or selected) modules and launch any pending batches.
 
@@ -917,7 +948,9 @@ def run_scan(
     total_launched = 0
 
     for module in targets:
-        found, launched = scan_module(module, token, dry_run=dry_run, verbose=verbose)
+        found, launched = scan_module(
+            module, token, dry_run=dry_run, verbose=verbose, core=core, core_token=core_token,
+        )
         total_found    += found
         total_launched += launched
         if found:
