@@ -12,10 +12,17 @@ class FakeCoreClient:
 
     url = "https://core.test/api"
 
-    def __init__(self, mags: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        mags: list[dict[str, Any]] | None = None,
+        batches: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self.mags = list(mags or [])
         self.upserts: list[list] = []
         self.links: list[tuple] = []
+        # {batch code: {"row": {...}, "entries": [...]}}, as the core answers.
+        self.batches = dict(batches or {})
+        self.groupings: list[tuple] = []
 
     def ping(self) -> None:
         pass
@@ -26,6 +33,21 @@ class FakeCoreClient:
             {"table": table, "code": row["key"].get("code") or row["key"].get("name"), "action": "created"}
             for table, rows in changes for row in rows
         ]
+
+    def batch_entries(self, table: str, batch: str):
+        from ehio.core import CoreError
+
+        found = self.batches.get(batch)
+        if found is None:
+            raise CoreError(f"ehi-core could not read the entries of {batch} (404)", status=404)
+        return {"table": table, "batch": batch,
+                "row": found.get("row") or {"code": batch},
+                "entries": list(found.get("entries") or [])}
+
+    def link_assembly_preprocessings(self, batch: str, assemblies):
+        self.groupings.append((batch, {k: list(v) for k, v in assemblies.items()}))
+        return {"batch": batch, "assemblies": len(assemblies),
+                "samples": sum(len(v) for v in assemblies.values())}
 
     def batch_mags(self, batch: str):
         return self.mags

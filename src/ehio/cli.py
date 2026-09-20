@@ -137,14 +137,149 @@ def _core(args: argparse.Namespace, *, holds: bool = False):
     return CoreSession(client, required=required)
 
 
-def _dmb_mags(client, core, batch_record: dict, batch: str) -> list[dict]:
+def _dmb_reads(client, batch, code: str, *, need_reads: bool = True):
+    """The preprocessed samples a DMB batch maps against its MAGs, and the
+    keys they are read through.
+
+    Airtable keeps them as a link from the batch out to its PPR table, one
+    record fetched at a time; the core answers with the whole list at once.
+    `need_reads` is for the input step, which writes the reads into a sample
+    sheet; the output step only names the samples.
+    """
+    from ehio.batches import Fields
+
+    if batch.from_core:
+        if not batch.entries:
+            _die(f"ehi-core holds no samples for batch '{code}'.")
+        _info(f"Read {len(batch.entries)} sample(s) from ehi-core.")
+        return batch.entries, batch.fields
+
+    ppr_table      = _require_cfg("MAG_PPR")
+    ppr_list_field = _require_cfg("MAG_DMB_BATCH_LIST_PPR")
+    _reads = _require_cfg if need_reads else (lambda key: str(cfg.get(key) or "").strip())
+    fields = Fields(
+        sample=_require_cfg("MAG_PPR_EHI"),
+        reads1=_reads("MAG_PPR_READS1"),
+        reads2=_reads("MAG_PPR_READS2"),
+    )
+    rec_ids = batch.record.get("fields", {}).get(ppr_list_field, [])
+    if not rec_ids:
+        _die(f"No PPR records linked in field {ppr_list_field} of batch '{code}'.")
+    _info(f"Fetching {len(rec_ids)} PPR record(s)...")
+    records = []
+    for rec_id in rec_ids:
+        if isinstance(rec_id, str) and rec_id.startswith("rec"):
+            record = client.fetch_record_by_id(ppr_table, rec_id)
+            if record:
+                records.append(record)
+    if not records:
+        _die(f"Could not fetch any PPR records for batch '{code}'.")
+    return records, fields
+
+
+def _create_airtable_mappings(client, batch_code, batch_record, ppr_records, all_metrics, ppr_ehi_field):
+    """Create a DMB batch's MAG_DMB_ENTRY records, one per preprocessed sample.
+
+    Returns (preprocessing code, DM code, mapping rate) per sample, which is
+    what the core is told about them.
+    """
+    entry_table       = _require_cfg("MAG_DMB_ENTRY")
+    entry_batch_field = _require_cfg("MAG_DMB_ENTRY_BATCH")
+    entry_ppr_field   = _require_cfg("MAG_DMB_ENTRY_PPR")
+    entry_rate_field  = str(cfg.get("MAG_DMB_ENTRY_MAPPING_RATE") or "").strip()
+    batch_rec_id      = batch_record["id"]
+
+    records_to_create: list[dict] = []
+    for ppr_rec in ppr_records:
+        metrics = all_metrics.get(_first_value(ppr_rec.get("fields", {}).get(ppr_ehi_field)), {})
+        rec_fields: dict = {
+            entry_batch_field: [batch_rec_id],
+            entry_ppr_field:   [ppr_rec["id"]],
+        }
+        if entry_rate_field and metrics.get("mapping_rate") is not None:
+            rec_fields[entry_rate_field] = metrics["mapping_rate"]
+        records_to_create.append(rec_fields)
+
+    existing = client._table(entry_table).all(
+        formula=f'FIND("{batch_rec_id}", ARRAYJOIN({{{entry_batch_field}}}))'
+    )
+    dm_records = existing
+    if existing:
+        _info(f"{len(existing)} MAG_DMB_ENTRY record(s) already exist for this batch — skipping creation.")
+    elif records_to_create:
+        _info(f"Creating {len(records_to_create)} MAG_DMB_ENTRY records...")
+        dm_records = client.create_records(entry_table, records_to_create)
+        _info("MAG_DMB_ENTRY records created.")
+
+    dm_code_field = str(cfg.get("MAG_DMB_ENTRY_CODE") or "").strip()
+    dm_code_by_ppr = {
+        _first_value(rec.get("fields", {}).get(entry_ppr_field)):
+            _first_value(rec.get("fields", {}).get(dm_code_field)) if dm_code_field else None
+        for rec in dm_records or []
+    }
+    return [
+        (
+            mirror.cell(ppr_rec.get("fields", {}), "MAG_PPR_CODE"),
+            dm_code_by_ppr.get(ppr_rec["id"]),
+            all_metrics.get(_first_value(ppr_rec.get("fields", {}).get(ppr_ehi_field)), {}).get("mapping_rate"),
+        )
+        for ppr_rec in ppr_records
+    ]
+
+
+def _reference_record(batch, entries: list[dict]) -> dict:
+    """The record the host reference genome is resolved from.
+
+    The genome table stays in Airtable, so a batch read from the core names its
+    genome by code, which the resolver already accepts alongside the record id
+    an Airtable link cell holds.
+    """
+    if not batch.from_core:
+        return batch.record
+    field = str(cfg.get("EHI_PPR_BATCH_REFERENCE") or "").strip()
+    code = next(
+        (str(e.get("reference_genome_code") or "").strip() for e in entries
+         if str(e.get("reference_genome_code") or "").strip()),
+        "",
+    )
+    return {"id": batch.code, "fields": {field: code}} if field and code else {"fields": {}}
+
+
+def _open_batch(module: str, args: argparse.Namespace, core):
+    """The batch a command was given, from Airtable or from ehi-core.
+
+    Airtable holds today's batches, so it is looked in first and a batch it
+    holds is read exactly as before. A batch it does not hold is read from the
+    core, which is where the EHI is moving; emptying a module's Airtable keys
+    in the config leaves the core as the only place looked at.
+    """
+    from ehio.batches import open_batch
+
+    _info(f"Looking up batch '{args.batch}'...")
+    try:
+        return open_batch(module, args.batch, _resolve_token(args), core)
+    except LookupError as exc:
+        _die(str(exc))
+
+
+def _dmb_mags(client, core, batch_record: dict | None, batch: str) -> list[dict]:
     """The MAGs a DMB batch works on, each shaped by ehio.mirror.
 
     Without the core they are the MAG records linked to the batch in Airtable.
     With it, the core is where they are read from, since it also holds the MAGs
     Airtable has no room for: the Airtable records are first copied in (only
     what the core lacks) and linked to the batch there.
+
+    A batch Airtable does not hold (`batch_record` is None) has nothing to copy
+    in, so its MAGs are read from the core and nothing else is touched.
     """
+    if batch_record is None:
+        mags = core.client.batch_mags(batch)
+        if not mags:
+            _die(f"ehi-core holds no MAGs for batch '{batch}'.")
+        _info(f"Read {len(mags)} MAG(s) of batch '{batch}' from ehi-core.")
+        return [mirror.mag_from_core(mag) for mag in mags]
+
     mag_table      = _require_cfg("MAG_ENTRY")
     mag_list_field = _require_cfg("MAG_DMB_BATCH_LIST_MAGS")
     rec_ids = [
@@ -229,71 +364,54 @@ def cmd_preprocessing(args: argparse.Namespace) -> int:
 
 
 def _run_preprocessing_input(args: argparse.Namespace) -> int:
-    """Fetch batch+entries from Airtable and write a drakkar sample TSV."""
-    from ehio.airtable import AirtableClient
+    """Fetch batch+entries and write a drakkar sample TSV."""
     from ehio.drakkar import write_sample_file, verify_input_files, verify_remote_urls
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("EHI_BASE")
-    batch_table = _require_cfg("EHI_PPR_BATCH")
-    entry_table = _require_cfg("EHI_PPR_ENTRY")
+    core  = _core(args)
+    batch = _open_batch("preprocessing", args, core)
+    fields = batch.fields
 
-    batch_code_field  = _require_cfg("EHI_PPR_BATCH_CODE")
-    entry_batch_field = _require_cfg("EHI_PPR_ENTRY_BATCH")
-    entry_code_field  = _require_cfg("EHI_PPR_ENTRY_CODE")
-    reads1_field      = _require_cfg("EHI_PPR_ENTRY_RAW_FILE_FORWARD")
-    reads2_field      = _require_cfg("EHI_PPR_ENTRY_RAW_FILE_REVERSE")
-
-    _info(f"Looking up batch '{args.batch}' in Airtable...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record, entries = client.fetch_batch_and_entries(
-        batch_table=batch_table,
-        batch_code_field=batch_code_field,
-        batch_code=args.batch,
-        entry_table=entry_table,
-        entry_batch_field=entry_batch_field,
-    )
-
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found in {batch_table}.")
-    _info(f"Found {len(entries)} entries for batch '{args.batch}'.")
-    if not entries:
+    _info(f"Found {len(batch.entries)} entries for batch '{args.batch}'.")
+    if not batch.entries:
         _die(f"No entries found for batch '{args.batch}'.")
 
     # The batch and its libraries may have been created in Airtable after the
     # core was loaded; the output step needs their rows there.
-    _core(args).mirror(f"Batch '{args.batch}'", [
-        mirror.batch("preprocessing", args.batch, batch_record),
-        *mirror.preprocessings(args.batch, entries),
-    ])
+    if not batch.from_core:
+        core.mirror(f"Batch '{args.batch}'", [
+            mirror.batch("preprocessing", args.batch, batch.record),
+            *mirror.preprocessings(args.batch, batch.entries),
+        ])
 
     out_path = Path(args.sample_file)
     n = write_sample_file(
-        entries,
+        batch.entries,
         out_path,
-        sample_field=entry_code_field,
-        reads1_field=reads1_field,
-        reads2_field=reads2_field,
+        sample_field=fields.sample,
+        reads1_field=fields.reads1,
+        reads2_field=fields.reads2,
     )
     _info(f"Wrote {n} samples to {out_path}")
 
-    missing = verify_input_files(entries, entry_code_field, [reads1_field, reads2_field])
+    read_fields = [fields.reads1, fields.reads2]
+    missing = verify_input_files(batch.entries, fields.sample, read_fields)
     if missing:
         for sample, path in missing:
             print(f"  WARNING: [{sample}] file not found: {path}", file=sys.stderr)
-        _die(f"{len(missing)} input file(s) missing — fix paths in Airtable before launching drakkar.")
+        _die(f"{len(missing)} input file(s) missing — fix the paths in {batch.source} "
+             f"before launching drakkar.")
 
     if getattr(args, "no_url_check", False):
         _info("Skipping raw-read URL check (--no-url-check).")
     else:
         _info("Checking that raw-read URLs are downloadable...")
-        unreachable = verify_remote_urls(entries, entry_code_field, [reads1_field, reads2_field])
+        unreachable = verify_remote_urls(batch.entries, fields.sample, read_fields)
         if unreachable:
             for sample, url, reason in unreachable:
                 print(f"  WARNING: [{sample}] URL not downloadable: {url} ({reason})", file=sys.stderr)
             _die(
                 f"{len(unreachable)} raw-read URL(s) not downloadable — fix them in "
-                f"{entry_table} before launching drakkar."
+                f"{batch.source} before launching drakkar."
             )
     return 0
 
@@ -338,15 +456,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     from ehio.reference import upload_reference_index_status
     from ehio.transfer import SFTPTransfer
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("EHI_BASE")
-    batch_table = _require_cfg("EHI_PPR_BATCH")
-    entry_table = _require_cfg("EHI_PPR_ENTRY")
-
-    batch_code_field  = _require_cfg("EHI_PPR_BATCH_CODE")
-    entry_batch_field = _require_cfg("EHI_PPR_ENTRY_BATCH")
-    entry_code_field  = _require_cfg("EHI_PPR_ENTRY_CODE")
-    ehi_number_field  = _require_cfg("EHI_PPR_ENTRY_EHI_NUMBER")
+    token = _resolve_token(args)
 
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
@@ -358,27 +468,25 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     # the cleanup step further down may delete.
     drakkar_version = _get_drakkar_version(local_root)
 
-    # Fetch batch + entries
-    _info(f"Looking up batch '{args.batch}' in Airtable...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record, entries = client.fetch_batch_and_entries(
-        batch_table=batch_table,
-        batch_code_field=batch_code_field,
-        batch_code=args.batch,
-        entry_table=entry_table,
-        entry_batch_field=entry_batch_field,
-    )
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found.")
+    batch = _open_batch("preprocessing", args, core)
+    entries = batch.entries
     if not entries:
         _die(f"No entries found for batch '{args.batch}'.")
+    batch_record = batch.record
+    entry_code_field = batch.fields.sample
+    ehi_number_field = "hologenome_code" if batch.from_core else _require_cfg("EHI_PPR_ENTRY_EHI_NUMBER")
+    client = None if batch.from_core else AirtableClient(
+        api_key=token, base_id=_require_cfg("EHI_BASE")
+    )
+    entry_table = "" if batch.from_core else _require_cfg("EHI_PPR_ENTRY")
 
     # Build field_map: metric_key → field_id (resolved from config)
     field_map: dict[str, str] = {}
-    for metric_key, config_key in PREPROCESSING_METRIC_KEYS.items():
-        fld_id = str(cfg.get(config_key) or "").strip()
-        if fld_id:
-            field_map[metric_key] = fld_id
+    if not batch.from_core:
+        for metric_key, config_key in PREPROCESSING_METRIC_KEYS.items():
+            fld_id = str(cfg.get(config_key) or "").strip()
+            if fld_id:
+                field_map[metric_key] = fld_id
 
     # Read all QC metrics from the drakkar-generated summary TSV
     stats_tsv = local_root / "preprocessing.tsv"
@@ -391,9 +499,9 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     all_metrics: dict[str, dict] = {}
     updates: list[dict] = []
     for entry in entries:
-        fields = entry.get("fields", {})
+        fields = entry.get("fields", entry)
         sample = str(fields.get(entry_code_field, "")).strip()
-        ehi    = str(fields.get(ehi_number_field, "")).strip()
+        ehi    = str(fields.get(ehi_number_field, "") or "").strip()
         if not sample:
             continue
         if ehi:
@@ -402,9 +510,10 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         if not metrics:
             print(f"  Warning: no stats found for sample '{sample}' in {stats_tsv}", file=sys.stderr)
         all_metrics[sample] = metrics
-        payload = build_entry_update(entry["id"], metrics, field_map)
-        if payload["fields"]:
-            updates.append(payload)
+        if field_map:
+            payload = build_entry_update(entry["id"], metrics, field_map)
+            if payload["fields"]:
+                updates.append(payload)
 
     # Write summary TSV keyed by EHI number (fall back to sample code if missing)
     metrics_by_ehi = {code_to_ehi.get(s, s): m for s, m in all_metrics.items()}
@@ -419,12 +528,14 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         _info(f"Updating {len(updates)} entry records in Airtable...")
         client.update_records(entry_table, updates)
         _info("Airtable update complete.")
-    else:
+    elif not batch.from_core:
         _info("No QC metrics found to update.")
-    core.mirror(f"QC metrics of batch '{args.batch}'", [
-        mirror.batch("preprocessing", args.batch, batch_record),
-        *mirror.preprocessings(args.batch, entries, all_metrics),
-    ])
+    core.mirror(f"QC metrics of batch '{args.batch}'", (
+        [*mirror.preprocessing_metrics(all_metrics)] if batch.from_core else [
+            mirror.batch("preprocessing", args.batch, batch_record),
+            *mirror.preprocessings(args.batch, entries, all_metrics),
+        ]
+    ))
 
     # Transfer preprocessed output files via SFTP
     ppr_dir = local_root / "preprocessing"
@@ -490,7 +601,7 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
     keep_for_reference = False
     try:
         ref_status = upload_reference_index_status(
-            batch_record, local_root, token,
+            _reference_record(batch, entries), local_root, token,
             host=host, user=user, port=port, identity=identity or None,
             remote_base=remote_base,
             timeout=getattr(args, "connect_timeout", 300.0),
@@ -534,19 +645,18 @@ def _run_preprocessing_output(args: argparse.Namespace) -> int:
         batch_fields[drakkar_version_field] = drakkar_version
 
     # Mark the batch as done
-    done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
-    batch_status_field = _require_cfg("EHI_PPR_BATCH_STATUS")
-    batch_fields[batch_status_field] = done_status
-
-    client.update_records(
-        batch_table,
-        [{"id": batch_record["id"], "fields": batch_fields}],
-    )
+    done_status = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    if not batch.from_core:
+        batch_fields[_require_cfg("EHI_PPR_BATCH_STATUS")] = done_status
+        client.update_records(
+            _require_cfg("EHI_PPR_BATCH"),
+            [{"id": batch_record["id"], "fields": batch_fields}],
+        )
     # Airtable builds the read and BAM URLs with formulas; the core stores them.
     core.mirror(f"Batch '{args.batch}'", [
         *mirror.preprocessing_files(args.batch, code_to_ehi, {f.name for f in files_to_transfer}),
         mirror.batch(
-            "preprocessing", args.batch, batch_record,
+            "preprocessing", args.batch, None if batch.from_core else batch_record,
             status=done_status, ehio_version=__version__, drakkar_version=drakkar_version,
         ),
     ])
@@ -565,7 +675,6 @@ def cmd_binning(args: argparse.Namespace) -> int:
 
 
 def _run_binning_input(args: argparse.Namespace) -> int:
-    from ehio.airtable import AirtableClient
     from ehio.drakkar import (
         write_sample_file,
         verify_input_files,
@@ -573,52 +682,37 @@ def _run_binning_input(args: argparse.Namespace) -> int:
         check_assembly_type,
     )
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("EHI_BASE")
-    batch_table = _require_cfg("EHI_ASB_BATCH")
-    entry_table = _require_cfg("EHI_ASB_ENTRY")
+    core   = _core(args)
+    batch  = _open_batch("binning", args, core)
+    fields = batch.fields
+    if not batch.from_core:
+        fields.reads1 = _conf(args, "reads1_field", "EHI_ASB_ENTRY_READS1", required=True)
+        fields.reads2 = _conf(args, "reads2_field", "EHI_ASB_ENTRY_READS2", required=True)
 
-    batch_code_field     = _require_cfg("EHI_ASB_BATCH_CODE")
-    batch_type_field     = str(cfg.get("EHI_ASB_BATCH_TYPE") or "").strip()
-    entry_batch_field    = _require_cfg("EHI_ASB_ENTRY_BATCH")
-    ehi_number_field     = _require_cfg("EHI_ASB_ENTRY_EHI_NUMBER")
-    assembly_code_field  = _require_cfg("EHI_ASB_ENTRY_ASSEMBLY_CODE")
-
-    reads1_field = _conf(args, "reads1_field", "EHI_ASB_ENTRY_READS1", required=True)
-    reads2_field = _conf(args, "reads2_field", "EHI_ASB_ENTRY_READS2", required=True)
-
-    _info(f"Looking up batch '{args.batch}'...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record, entries = client.fetch_batch_and_entries(
-        batch_table=batch_table,
-        batch_code_field=batch_code_field,
-        batch_code=args.batch,
-        entry_table=entry_table,
-        entry_batch_field=entry_batch_field,
-    )
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found.")
-    _info(f"Found {len(entries)} entries for batch '{args.batch}'.")
-    if not entries:
+    _info(f"Found {len(batch.entries)} entries for batch '{args.batch}'.")
+    if not batch.entries:
         _die(f"No entries found for batch '{args.batch}'.")
 
-    _core(args).mirror(f"Batch '{args.batch}'", [
-        mirror.batch("binning", args.batch, batch_record),
-        *mirror.assemblies(args.batch, entries),
-    ])
+    if not batch.from_core:
+        core.mirror(f"Batch '{args.batch}'", [
+            mirror.batch("binning", args.batch, batch.record),
+            *mirror.assemblies(args.batch, batch.entries),
+        ])
+        # Which samples each assembly is built from is a link of its own in the
+        # core, because a coassembly has several; Airtable keeps it the other
+        # way round, as the assembly code carried by each entry.
+        _mirror_assembly_grouping(core, args.batch, batch)
 
     # The assembly codes of the entries decide the grouping; the batch type says
     # what that grouping is meant to be.  Checking them against each other here
     # keeps a mismatch from surfacing as an empty drakkar run.
-    if batch_type_field:
-        assembly_type = normalise_assembly_type(
-            batch_record.get("fields", {}).get(batch_type_field)
-        )
+    assembly_type = normalise_assembly_type(batch.value("EHI_ASB_BATCH_TYPE", "batch_type"))
+    if assembly_type or batch.from_core:
         _info(f"Batch assembly type: {assembly_type or '(unset)'}")
         error, warning = check_assembly_type(
-            entries, assembly_type,
-            sample_field=ehi_number_field,
-            assembly_field=assembly_code_field,
+            batch.entries, assembly_type,
+            sample_field=fields.sample,
+            assembly_field=fields.assembly,
         )
         if warning:
             print(f"  WARNING: {warning}", file=sys.stderr)
@@ -627,21 +721,46 @@ def _run_binning_input(args: argparse.Namespace) -> int:
 
     out_path = Path(args.sample_file)
     n = write_sample_file(
-        entries,
+        batch.entries,
         out_path,
-        sample_field=ehi_number_field,
-        reads1_field=reads1_field,
-        reads2_field=reads2_field,
-        assembly_field=assembly_code_field,
+        sample_field=fields.sample,
+        reads1_field=fields.reads1,
+        reads2_field=fields.reads2,
+        assembly_field=fields.assembly,
     )
     _info(f"Wrote {n} samples to {out_path}")
 
-    missing = verify_input_files(entries, ehi_number_field, [reads1_field, reads2_field])
+    missing = verify_input_files(batch.entries, fields.sample, [fields.reads1, fields.reads2])
     if missing:
         for sample, path in missing:
             print(f"  WARNING: [{sample}] file not found: {path}", file=sys.stderr)
-        _die(f"{len(missing)} input file(s) missing — fix paths in Airtable before launching drakkar.")
+        _die(f"{len(missing)} input file(s) missing — fix the paths in {batch.source} "
+             f"before launching drakkar.")
     return 0
+
+
+def _mirror_assembly_grouping(core, batch_code: str, batch) -> None:
+    """Tell the core which preprocessed samples each assembly is built from.
+
+    Airtable holds one entry per sample, carrying the code of the assembly it
+    belongs to; the core links an assembly to every sample it was built from,
+    so a coassembly keeps all of them instead of one.
+    """
+    if not core:
+        return
+    grouping: dict[str, list[str]] = {}
+    for entry in batch.entries:
+        fields = entry.get("fields", entry)
+        assembly = str(fields.get(batch.fields.assembly) or "").strip()
+        sample = mirror.cell(fields, "EHI_ASB_ENTRY_PREPROCESSING")
+        if assembly and sample:
+            grouping.setdefault(assembly, []).append(str(sample))
+    if not grouping:
+        return
+    core.mirror_call(
+        f"The samples each assembly of '{batch_code}' is built from",
+        lambda client: client.link_assembly_preprocessings(batch_code, grouping),
+    )
 
 
 _GZIP_COMPRESS_LEVEL = 6
@@ -700,16 +819,7 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     )
     from ehio.transfer import SFTPTransfer
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("EHI_BASE")
-    batch_table = _require_cfg("EHI_ASB_BATCH")
-    entry_table = _require_cfg("EHI_ASB_ENTRY")
-
-    batch_code_field     = _require_cfg("EHI_ASB_BATCH_CODE")
-    entry_batch_field    = _require_cfg("EHI_ASB_ENTRY_BATCH")
-    entry_code_field     = _require_cfg("EHI_ASB_ENTRY_CODE")
-    ehi_number_field     = str(cfg.get("EHI_ASB_ENTRY_EHI_NUMBER") or "").strip()
-    assembly_code_field  = str(cfg.get("EHI_ASB_ENTRY_ASSEMBLY_CODE") or "").strip()
+    token = _resolve_token(args)
 
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
@@ -732,25 +842,27 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     # The MAGs of the batch are created in the core, so it has to be there.
     core = _core(args, holds=True)
 
-    _info(f"Looking up batch '{args.batch}' in Airtable...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record, entries = client.fetch_batch_and_entries(
-        batch_table=batch_table,
-        batch_code_field=batch_code_field,
-        batch_code=args.batch,
-        entry_table=entry_table,
-        entry_batch_field=entry_batch_field,
-    )
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found.")
+    batch = _open_batch("binning", args, core)
+    entries = batch.entries
     if not entries:
         _die(f"No entries found for batch '{args.batch}'.")
+    batch_record = batch.record
+    # A core entry is one sample of an assembly, so the assembly code is what
+    # the metrics are keyed by there as well as here.
+    entry_code_field    = batch.fields.code
+    ehi_number_field    = batch.fields.sample
+    assembly_code_field = batch.fields.assembly
+    client = None if batch.from_core else AirtableClient(
+        api_key=token, base_id=_require_cfg("EHI_BASE")
+    )
+    entry_table = "" if batch.from_core else _require_cfg("EHI_ASB_ENTRY")
 
     field_map: dict[str, str] = {}
-    for metric_key, config_key in BINNING_METRIC_KEYS.items():
-        fld_id = str(cfg.get(config_key) or "").strip()
-        if fld_id:
-            field_map[metric_key] = fld_id
+    if not batch.from_core:
+        for metric_key, config_key in BINNING_METRIC_KEYS.items():
+            fld_id = str(cfg.get(config_key) or "").strip()
+            if fld_id:
+                field_map[metric_key] = fld_id
 
     # Read assembly metrics from the drakkar cataloging summary (keyed by assembly code)
     stats_tsv = local_root / "cataloging.tsv"
@@ -762,14 +874,14 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     metrics_by_entry: dict[str, dict] = {}
     updates: list[dict] = []
     for entry in entries:
-        fields = entry.get("fields", {})
-        entry_code = str(fields.get(entry_code_field, "")).strip()
+        fields = entry.get("fields", entry)
+        entry_code = str(fields.get(entry_code_field, "") or "").strip()
         if not entry_code:
             continue
         # Use EHI number as the output-TSV key (one row per sample); fall back to entry code
-        ehi_number = str(fields.get(ehi_number_field, entry_code)).strip() if ehi_number_field else entry_code
+        ehi_number = str(fields.get(ehi_number_field) or entry_code).strip() if ehi_number_field else entry_code
         # Metrics are keyed by assembly code in cataloging.tsv
-        assembly_code = str(fields.get(assembly_code_field, entry_code)).strip() if assembly_code_field else entry_code
+        assembly_code = str(fields.get(assembly_code_field) or entry_code).strip() if assembly_code_field else entry_code
         assembly_metrics = assembly_stats.get(assembly_code, {})
         if not assembly_metrics:
             print(f"  Warning: no stats found for assembly '{assembly_code}' in {stats_tsv}", file=sys.stderr)
@@ -782,9 +894,10 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         }
         all_metrics[ehi_number] = metrics
         metrics_by_entry[entry_code] = metrics
-        payload = build_entry_update(entry["id"], metrics, field_map)
-        if payload["fields"]:
-            updates.append(payload)
+        if field_map:
+            payload = build_entry_update(entry["id"], metrics, field_map)
+            if payload["fields"]:
+                updates.append(payload)
 
     run_base = str(cfg.get("RUN_BASE") or "").strip()
     tsv_out: Path | None = None
@@ -797,12 +910,14 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         _info(f"Updating {len(updates)} entry records in Airtable...")
         client.update_records(entry_table, updates)
         _info("Airtable update complete.")
-    else:
+    elif not batch.from_core:
         _info("No assembly/binning metrics found to update.")
-    core.mirror(f"Assembly metrics of batch '{args.batch}'", [
-        mirror.batch("binning", args.batch, batch_record),
-        *mirror.assemblies(args.batch, entries, metrics_by_entry),
-    ])
+    core.mirror(f"Assembly metrics of batch '{args.batch}'", (
+        mirror.assembly_metrics(metrics_by_entry) if batch.from_core else [
+            mirror.batch("binning", args.batch, batch_record),
+            *mirror.assemblies(args.batch, entries, metrics_by_entry),
+        ]
+    ))
 
     host     = _conf(args, "host",     "SFTP_HOST",     required=True)
     user     = _conf(args, "user",     "SFTP_USER",     required=True)
@@ -947,18 +1062,17 @@ def _run_binning_output(args: argparse.Namespace) -> int:
     if drakkar_version_field:
         batch_fields[drakkar_version_field] = drakkar_version
 
-    done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
-    batch_status_field = _require_cfg("EHI_ASB_BATCH_STATUS")
-    batch_fields[batch_status_field] = done_status
-
-    client.update_records(
-        batch_table,
-        [{"id": batch_record["id"], "fields": batch_fields}],
-    )
+    done_status = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    if not batch.from_core:
+        batch_fields[_require_cfg("EHI_ASB_BATCH_STATUS")] = done_status
+        client.update_records(
+            _require_cfg("EHI_ASB_BATCH"),
+            [{"id": batch_record["id"], "fields": batch_fields}],
+        )
     core.mirror(f"Batch '{args.batch}'", [
         *mirror.assembly_files(args.batch, {fna.stem: _assembly_remote_name(fna) for fna in assembly_fastas}),
         mirror.batch(
-            "binning", args.batch, batch_record,
+            "binning", args.batch, None if batch.from_core else batch_record,
             status=done_status, ehio_version=__version__, drakkar_version=drakkar_version,
         ),
     ])
@@ -1038,31 +1152,20 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
     from ehio.drakkar import write_bins_file, write_quality_file, write_sample_file, verify_input_files
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("MAG_BASE")
-    batch_table = _require_cfg("MAG_DMB_BATCH")
-    ppr_table   = _require_cfg("MAG_PPR")
-
-    batch_code_field      = _require_cfg("MAG_DMB_BATCH_CODE")
-    ppr_list_field        = _require_cfg("MAG_DMB_BATCH_LIST_PPR")
-    ppr_ehi_field         = _require_cfg("MAG_PPR_EHI")
-    reads1_field          = _require_cfg("MAG_PPR_READS1")
-    reads2_field          = _require_cfg("MAG_PPR_READS2")
-    # The fields a MAG is read through when it comes from Airtable.
-    for key in ("MAG_ENTRY", "MAG_DMB_BATCH_LIST_MAGS", "MAG_ENTRY_NAME", "MAG_ENTRY_URL_FASTA",
-                "MAG_ENTRY_CHECKM_COMPLETENESS", "MAG_ENTRY_CHECKM_CONTAMINATION"):
-        _require_cfg(key)
-
+    token = _resolve_token(args)
     # With the core in use the batch's MAGs are read from it.
-    core = _core(args, holds=True)
+    core  = _core(args, holds=True)
+    batch = _open_batch("quantifying", args, core)
 
-    _info(f"Looking up batch '{args.batch}'...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found.")
+    client = None
+    if not batch.from_core:
+        # The fields a MAG is read through when it comes from Airtable.
+        for key in ("MAG_ENTRY", "MAG_DMB_BATCH_LIST_MAGS", "MAG_ENTRY_NAME", "MAG_ENTRY_URL_FASTA",
+                    "MAG_ENTRY_CHECKM_COMPLETENESS", "MAG_ENTRY_CHECKM_CONTAMINATION"):
+            _require_cfg(key)
+        client = AirtableClient(api_key=token, base_id=_require_cfg("MAG_BASE"))
 
-    mags = _dmb_mags(client, core, batch_record, args.batch)
+    mags = _dmb_mags(client, core, batch.record if not batch.from_core else None, args.batch)
 
     quality_path = Path(args.quality_file)
     n_quality = write_quality_file(
@@ -1077,31 +1180,19 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     n_mags = write_bins_file(mags, mags_path, bins_field="fasta_url")
     _info(f"Wrote {n_mags} MAG URLs to {mags_path}")
 
-    # Fetch PPR records from MAG_PPR
-    ppr_rec_ids = batch_record.get("fields", {}).get(ppr_list_field, [])
-    if not ppr_rec_ids:
-        _die(f"No PPR records linked in field {ppr_list_field} of batch '{args.batch}'.")
-    _info(f"Fetching {len(ppr_rec_ids)} PPR record(s)...")
-    ppr_records = []
-    for rec_id in ppr_rec_ids:
-        if isinstance(rec_id, str) and rec_id.startswith("rec"):
-            rec = client.fetch_record_by_id(ppr_table, rec_id)
-            if rec:
-                ppr_records.append(rec)
-    if not ppr_records:
-        _die(f"Could not fetch any PPR records for batch '{args.batch}'.")
+    ppr_records, fields = _dmb_reads(client, batch, args.batch)
 
     reads_path = Path(args.reads_file)
     n_reads = write_sample_file(
         ppr_records,
         reads_path,
-        sample_field=ppr_ehi_field,
-        reads1_field=reads1_field,
-        reads2_field=reads2_field,
+        sample_field=fields.sample,
+        reads1_field=fields.reads1,
+        reads2_field=fields.reads2,
     )
     _info(f"Wrote {n_reads} read entries to {reads_path}")
 
-    missing_reads = verify_input_files(ppr_records, ppr_ehi_field, [reads1_field, reads2_field])
+    missing_reads = verify_input_files(ppr_records, fields.sample, [fields.reads1, fields.reads2])
     if missing_reads:
         for sample, path in missing_reads:
             print(f"  WARNING: [{sample}] reads file not found: {path}", file=sys.stderr)
@@ -1113,7 +1204,8 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
 
     total_missing = len(missing_reads) + len(missing_mags)
     if total_missing:
-        _die(f"{total_missing} input file(s) missing — fix paths in Airtable before launching drakkar.")
+        _die(f"{total_missing} input file(s) missing — fix the paths in {batch.source} "
+             f"before launching drakkar.")
     return 0
 
 
@@ -1128,18 +1220,7 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     )
     from ehio.transfer import SFTPTransfer
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("MAG_BASE")
-    batch_table = _require_cfg("MAG_DMB_BATCH")
-    entry_table = _require_cfg("MAG_DMB_ENTRY")
-    ppr_table   = _require_cfg("MAG_PPR")
-
-    batch_code_field  = _require_cfg("MAG_DMB_BATCH_CODE")
-    ppr_list_field    = _require_cfg("MAG_DMB_BATCH_LIST_PPR")
-    ppr_ehi_field     = _require_cfg("MAG_PPR_EHI")
-    entry_batch_field = _require_cfg("MAG_DMB_ENTRY_BATCH")
-    entry_ppr_field   = _require_cfg("MAG_DMB_ENTRY_PPR")
-    entry_rate_field  = str(cfg.get("MAG_DMB_ENTRY_MAPPING_RATE") or "").strip()
+    token = _resolve_token(args)
 
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
@@ -1154,25 +1235,13 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     # survived dereplication, which Airtable only ever counted.
     kept_mags = parse_counts_genomes(local_root / "profiling_genomes" / "final" / "counts.tsv")
 
-    _info(f"Looking up batch '{args.batch}' in Airtable...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found.")
-
-    # Fetch PPR records linked to this batch
-    ppr_rec_ids = batch_record.get("fields", {}).get(ppr_list_field, [])
-    if not ppr_rec_ids:
-        _die(f"No PPR records linked in field {ppr_list_field} of batch '{args.batch}'.")
-    _info(f"Fetching {len(ppr_rec_ids)} PPR record(s)...")
-    ppr_records = []
-    for rec_id in ppr_rec_ids:
-        if isinstance(rec_id, str) and rec_id.startswith("rec"):
-            rec = client.fetch_record_by_id(ppr_table, rec_id)
-            if rec:
-                ppr_records.append(rec)
-    if not ppr_records:
-        _die(f"Could not fetch any PPR records for batch '{args.batch}'.")
+    batch = _open_batch("quantifying", args, core)
+    batch_record = batch.record
+    client = None if batch.from_core else AirtableClient(
+        api_key=token, base_id=_require_cfg("MAG_BASE")
+    )
+    ppr_records, read_fields = _dmb_reads(client, batch, args.batch, need_reads=False)
+    ppr_ehi_field = read_fields.sample
 
     # Parse per-sample mapping rates from drakkar output
     profiling_tsv = local_root / "profiling_genomes.tsv"
@@ -1180,55 +1249,29 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     if not per_sample:
         _info(f"profiling_genomes.tsv not found or empty at {profiling_tsv}; mapping rates will be empty.")
 
-    # Create MAG_DMB_ENTRY records — one per PPR record
-    batch_rec_id = batch_record["id"]
-    records_to_create: list[dict] = []
-    all_metrics: dict[str, dict] = {}
-    for ppr_rec in ppr_records:
-        ehi_raw = ppr_rec.get("fields", {}).get(ppr_ehi_field, "")
-        if isinstance(ehi_raw, list):
-            ehi_raw = ehi_raw[0] if ehi_raw else ""
-        ehi = str(ehi_raw).strip()
-        metrics = per_sample.get(ehi, {})
-        all_metrics[ehi] = metrics
-        rec_fields: dict = {
-            entry_batch_field: [batch_rec_id],
-            entry_ppr_field:   [ppr_rec["id"]],
-        }
-        if entry_rate_field:
-            rate = metrics.get("mapping_rate")
-            if rate is not None:
-                rec_fields[entry_rate_field] = rate
-        records_to_create.append(rec_fields)
+    all_metrics: dict[str, dict] = {
+        _first_value((rec.get("fields", rec)).get(ppr_ehi_field)):
+            per_sample.get(_first_value((rec.get("fields", rec)).get(ppr_ehi_field)), {})
+        for rec in ppr_records
+    }
 
-    _existing_formula = f'FIND("{batch_rec_id}", ARRAYJOIN({{{entry_batch_field}}}))'
-    _existing_entries = client._table(entry_table).all(formula=_existing_formula)
-    dm_records = _existing_entries
-    if _existing_entries:
-        _info(f"{len(_existing_entries)} MAG_DMB_ENTRY record(s) already exist for this batch — skipping creation.")
-    elif records_to_create:
-        _info(f"Creating {len(records_to_create)} MAG_DMB_ENTRY records...")
-        dm_records = client.create_records(entry_table, records_to_create)
-        _info("MAG_DMB_ENTRY records created.")
+    if batch.from_core:
+        # The core numbers its own mappings and already links them to the
+        # batch, so only the rate each run measured is left to write.
+        mappings = [
+            (entry.get("preprocessing_code"), entry.get("code"),
+             all_metrics.get(str(entry.get(ppr_ehi_field) or ""), {}).get("mapping_rate"))
+            for entry in ppr_records
+        ]
+    else:
+        mappings = _create_airtable_mappings(
+            client, args.batch, batch_record, ppr_records, all_metrics, ppr_ehi_field
+        )
 
     if core:
-        # The same mappings in the core, under the DM codes Airtable gave them.
-        dm_code_field = str(cfg.get("MAG_DMB_ENTRY_CODE") or "").strip()
-        dm_code_by_ppr = {
-            _first_value(rec.get("fields", {}).get(entry_ppr_field)):
-                _first_value(rec.get("fields", {}).get(dm_code_field)) if dm_code_field else None
-            for rec in dm_records or []
-        }
         core.mirror(f"Mappings of batch '{args.batch}'", [
-            mirror.batch("quantifying", args.batch, batch_record),
-            *mirror.mappings(args.batch, [
-                (
-                    mirror.cell(ppr_rec.get("fields", {}), "MAG_PPR_CODE"),
-                    dm_code_by_ppr.get(ppr_rec["id"]),
-                    all_metrics.get(_first_value(ppr_rec.get("fields", {}).get(ppr_ehi_field)), {}).get("mapping_rate"),
-                )
-                for ppr_rec in ppr_records
-            ]),
+            *([] if batch.from_core else [mirror.batch("quantifying", args.batch, batch_record)]),
+            *mirror.mappings(args.batch, mappings),
         ])
         if kept_mags:
             core.mirror_call(
@@ -1313,16 +1356,15 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
         else:
             _info(f"dereplicating.tsv not found or output_bin_number missing at {derep_tsv}.")
 
-    done_status        = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
-    batch_status_field = _require_cfg("MAG_DMB_BATCH_STATUS")
-    batch_fields[batch_status_field] = done_status
-
-    client.update_records(
-        batch_table,
-        [{"id": batch_record["id"], "fields": batch_fields}],
-    )
+    done_status = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+    if not batch.from_core:
+        batch_fields[_require_cfg("MAG_DMB_BATCH_STATUS")] = done_status
+        client.update_records(
+            _require_cfg("MAG_DMB_BATCH"),
+            [{"id": batch_record["id"], "fields": batch_fields}],
+        )
     core.mirror(f"Batch '{args.batch}'", [mirror.batch(
-        "quantifying", args.batch, batch_record,
+        "quantifying", args.batch, None if batch.from_core else batch_record,
         status=done_status, ehio_version=__version__, drakkar_version=drakkar_version,
     )])
     _info(f"Batch '{args.batch}' status → '{done_status}'.")
@@ -1424,23 +1466,20 @@ def _run_annotating_stage(args: argparse.Namespace) -> int:
     from ehio.transfer import SFTPTransfer
     from ehio.urls import DownloadError, download_url, filename_from_url, is_remote_url
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("MAG_BASE")
-    batch_table = _require_cfg("MAG_DMB_BATCH")
-
-    batch_code_field = _require_cfg("MAG_DMB_BATCH_CODE")
-    for key in ("MAG_ENTRY", "MAG_DMB_BATCH_LIST_MAGS", "MAG_ENTRY_NAME", "MAG_ENTRY_URL_FASTA"):
-        _require_cfg(key)
+    token = _resolve_token(args)
+    _MAG_KEYS = ("MAG_ENTRY", "MAG_DMB_BATCH_LIST_MAGS", "MAG_ENTRY_NAME", "MAG_ENTRY_URL_FASTA")
 
     derep_dir = Path(args.annotation_dir).resolve()
     derep_dir.mkdir(parents=True, exist_ok=True)
     core = _core(args, holds=True)
 
-    _info(f"Looking up batch '{args.batch}' in Airtable...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found.")
+    batch = _open_batch("quantifying", args, core)
+    batch_record = None if batch.from_core else batch.record
+    client = None
+    if not batch.from_core:
+        for key in _MAG_KEYS:
+            _require_cfg(key)
+        client = AirtableClient(api_key=token, base_id=_require_cfg("MAG_BASE"))
 
     # Keyed by drakkar MAG id, so a catalogue written with the '.fa' suffix and
     # one written without it both find their record.
@@ -1576,13 +1615,8 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     """Check which MAGs need functional annotation and write their paths to a file."""
     from ehio.airtable import AirtableClient
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("MAG_BASE")
-    batch_table = _require_cfg("MAG_DMB_BATCH")
-
-    batch_code_field = _require_cfg("MAG_DMB_BATCH_CODE")
-    for key in ("MAG_ENTRY", "MAG_DMB_BATCH_LIST_MAGS", "MAG_ENTRY_NAME"):
-        _require_cfg(key)
+    token = _resolve_token(args)
+    _MAG_KEYS = ("MAG_ENTRY", "MAG_DMB_BATCH_LIST_MAGS", "MAG_ENTRY_NAME")
 
     force_reannotate = getattr(args, "rerun", False)
 
@@ -1590,19 +1624,18 @@ def _run_annotating_input(args: argparse.Namespace) -> int:
     out_file = Path(args.annotation_file)
     core = _core(args, holds=True)
 
-    _info(f"Looking up batch '{args.batch}' in Airtable...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found.")
+    batch = _open_batch("quantifying", args, core)
+    batch_record = None if batch.from_core else batch.record
+    client = None
+    if not batch.from_core:
+        for key in _MAG_KEYS:
+            _require_cfg(key)
+        client = AirtableClient(api_key=token, base_id=_require_cfg("MAG_BASE"))
 
-    # Read requested annotation type from batch record (kegg / genes / all)
-    ann_type_field = str(cfg.get("MAG_DMB_BATCH_ANNOTATION_TYPE") or "").strip()
-    requested_type = "all"
-    if ann_type_field:
-        raw = batch_record.get("fields", {}).get(ann_type_field)
-        if raw:
-            requested_type = str(raw).strip().lower()
+    # Read requested annotation type from the batch record (kegg / genes / all)
+    requested_type = str(
+        batch.value("MAG_DMB_BATCH_ANNOTATION_TYPE", "annotation_type") or "all"
+    ).strip().lower() or "all"
 
     # Annotation hierarchy: kegg ⊂ genes ⊂ all.
     # "true" is treated as legacy equivalent of "all".
@@ -1681,14 +1714,8 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     )
     from ehio.transfer import SFTPTransfer
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("MAG_BASE")
-    batch_table = _require_cfg("MAG_DMB_BATCH")
-    mag_table   = _require_cfg("MAG_ENTRY")
-
-    batch_code_field = _require_cfg("MAG_DMB_BATCH_CODE")
-    for key in ("MAG_DMB_BATCH_LIST_MAGS", "MAG_ENTRY_NAME"):
-        _require_cfg(key)
+    token = _resolve_token(args)
+    _MAG_KEYS = ("MAG_ENTRY", "MAG_DMB_BATCH_LIST_MAGS", "MAG_ENTRY_NAME")
 
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
@@ -1700,19 +1727,18 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     # The MAGs live in the core, so their annotation has to reach it.
     core = _core(args, holds=True)
 
-    _info(f"Looking up batch '{args.batch}' in Airtable...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found.")
+    batch = _open_batch("quantifying", args, core)
+    batch_record = None if batch.from_core else batch.record
+    client = None
+    if not batch.from_core:
+        for key in _MAG_KEYS:
+            _require_cfg(key)
+        client = AirtableClient(api_key=token, base_id=_require_cfg("MAG_BASE"))
 
-    # Read annotation type written to Airtable status (kegg / genes / all)
-    ann_type_field = str(cfg.get("MAG_DMB_BATCH_ANNOTATION_TYPE") or "").strip()
-    annotation_type_value = "all"
-    if ann_type_field:
-        raw = batch_record.get("fields", {}).get(ann_type_field)
-        if raw:
-            annotation_type_value = str(raw).strip().lower()
+    # Read the annotation type the batch asks for (kegg / genes / all)
+    annotation_type_value = str(
+        batch.value("MAG_DMB_BATCH_ANNOTATION_TYPE", "annotation_type") or "all"
+    ).strip().lower() or "all"
 
     # The batch's MAGs, keyed by MAG_ENTRY_NAME
     mag_by_name: dict[str, dict] = {
@@ -1789,7 +1815,7 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
 
     if updates:
         _info(f"Updating {len(updates)} MAG_ENTRY records in Airtable...")
-        client.update_records(mag_table, updates)
+        client.update_records(_require_cfg("MAG_ENTRY"), updates)
         _info("Airtable update complete.")
     elif not core_units:
         _info("No annotation metrics found to update.")
@@ -1911,15 +1937,18 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         # however long ago.  That version only survives in Airtable, so it is
         # kept and the new one appended to it rather than overwriting it.
         if getattr(args, "reannotate", False):
+            # The version that dereplicated and profiled the batch, however
+            # long ago, only survives on the batch record, so it is kept and
+            # the new one appended rather than overwriting it.
             version = _merge_drakkar_versions(
-                _first_value(batch_record.get("fields", {}).get(drakkar_version_field)),
+                _first_value(batch.value("MAG_DMB_BATCH_DRAKKAR_VERSION", "drakkar_version")),
                 version,
             )
         batch_fields[drakkar_version_field] = version
 
-    if batch_fields:
+    if batch_fields and not batch.from_core:
         client.update_records(
-            batch_table,
+            _require_cfg("MAG_DMB_BATCH"),
             [{"id": batch_record["id"], "fields": batch_fields}],
         )
         if batch_status_field:
@@ -1928,7 +1957,8 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         core_batch = {"status": done_status}
         if drakkar_version_field:
             core_batch["drakkar_version"] = batch_fields[drakkar_version_field]
-        core.mirror(f"Batch '{args.batch}'", [mirror.batch("quantifying", args.batch, batch_record, **core_batch)])
+        core.mirror(f"Batch '{args.batch}'",
+                    [mirror.batch("quantifying", args.batch, batch_record, **core_batch)])
 
     return 0
 
@@ -1997,34 +2027,16 @@ def _run_amr_input(args: argparse.Namespace) -> int:
     downloader of its own, so the ERDA URLs held in Airtable are fetched here
     and the manifest points at the local copies.
     """
-    from ehio.airtable import AirtableClient
     from ehio.drakkar import write_amr_manifest
     from ehio.urls import DownloadError, download_url, filename_from_url, is_remote_url
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("EHI_BASE")
-    batch_table = _require_cfg("EHI_AMR_BATCH")
-    entry_table = _require_cfg("EHI_ASB_ENTRY")
-
-    batch_code_field    = _require_cfg("EHI_AMR_BATCH_CODE")
-    assembly_list_field = _require_cfg("EHI_AMR_BATCH_LIST_ASSEMBLIES")
-    assembly_url_field  = _require_cfg("EHI_ASB_ENTRY_ASSEMBLY_URL")
-    assembly_code_field = (
-        str(cfg.get("EHI_ASB_ENTRY_ASSEMBLY_CODE") or "").strip()
-        or _require_cfg("EHI_ASB_ENTRY_CODE")
-    )
+    core  = _core(args)
+    batch = _open_batch("amr", args, core)
+    assembly_code_field = batch.fields.code
+    assembly_url_field  = batch.fields.url
 
     manifest_path  = Path(args.manifest_file)
     assemblies_dir = Path(args.assemblies_dir).resolve()
-
-    _info(f"Looking up batch '{args.batch}' in Airtable...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found in {batch_table}.")
-
-    rec_ids = _linked_assembly_ids(batch_record, assembly_list_field, args.batch)
-    _info(f"Fetching {len(rec_ids)} assembly record(s) from Airtable...")
 
     rows: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -2033,17 +2045,16 @@ def _run_amr_input(args: argparse.Namespace) -> int:
     timeout = float(getattr(args, "download_timeout", 600.0))
     redownload = getattr(args, "redownload", False)
 
-    for rec_id in rec_ids:
-        record = client.fetch_record_by_id(entry_table, rec_id)
-        if not record:
-            problems.append(f"{rec_id}: assembly record not found in {entry_table}")
-            continue
+    for record in _amr_assemblies(args, batch, problems):
         records.append(record)
-        fields   = record.get("fields", {})
+        fields   = record.get("fields", record)
         code     = _first_value(fields.get(assembly_code_field))
         source   = _first_value(fields.get(assembly_url_field))
         if not code:
-            problems.append(f"{rec_id}: assembly record has no code in field {assembly_code_field}")
+            problems.append(
+                f"{record.get('id', '?')}: assembly record has no code "
+                f"in field {assembly_code_field}"
+            )
             continue
         if code in seen:
             _info(f"  {code}: linked to the batch more than once — kept once.")
@@ -2101,11 +2112,42 @@ def _run_amr_input(args: argparse.Namespace) -> int:
     _info(f"Wrote {n} assembly/assemblies to {manifest_path}.")
 
     # The batch, and which assemblies it runs over, in the core too.
-    _core(args).mirror(f"Batch '{args.batch}'", [
-        mirror.batch("amr", args.batch, batch_record),
-        *mirror.amr_assemblies(args.batch, records),
-    ])
+    if not batch.from_core:
+        core.mirror(f"Batch '{args.batch}'", [
+            mirror.batch("amr", args.batch, batch.record),
+            *mirror.amr_assemblies(args.batch, records),
+        ])
     return 0
+
+
+def _amr_assemblies(args: argparse.Namespace, batch, problems: list[str]):
+    """The assembly records an AMR batch runs over.
+
+    Airtable links the batch out to its assembly entries, one record fetched at
+    a time; the core answers with the whole list at once.
+    """
+    if batch.from_core:
+        if not batch.entries:
+            _die(f"ehi-core holds no assemblies for batch '{args.batch}'.")
+        _info(f"Read {len(batch.entries)} assembly/assemblies of '{args.batch}' from ehi-core.")
+        return batch.entries
+
+    from ehio.airtable import AirtableClient
+
+    entry_table = _require_cfg("EHI_ASB_ENTRY")
+    rec_ids = _linked_assembly_ids(
+        batch.record, _require_cfg("EHI_AMR_BATCH_LIST_ASSEMBLIES"), args.batch
+    )
+    _info(f"Fetching {len(rec_ids)} assembly record(s) from Airtable...")
+    client = AirtableClient(api_key=_resolve_token(args), base_id=_require_cfg("EHI_BASE"))
+    records = []
+    for rec_id in rec_ids:
+        record = client.fetch_record_by_id(entry_table, rec_id)
+        if record:
+            records.append(record)
+        else:
+            problems.append(f"{rec_id}: assembly record not found in {entry_table}")
+    return records
 
 
 # Content types used when a result file is attached to the batch record.
@@ -2157,18 +2199,7 @@ def _run_amr_output(args: argparse.Namespace) -> int:
     )
     from ehio.transfer import SFTPTransfer
 
-    token       = _resolve_token(args)
-    base_id     = _require_cfg("EHI_BASE")
-    batch_table = _require_cfg("EHI_AMR_BATCH")
-    entry_table = _require_cfg("EHI_ASB_ENTRY")
-
-    batch_code_field    = _require_cfg("EHI_AMR_BATCH_CODE")
-    batch_status_field  = _require_cfg("EHI_AMR_BATCH_STATUS")
-    assembly_list_field = _require_cfg("EHI_AMR_BATCH_LIST_ASSEMBLIES")
-    assembly_code_field = (
-        str(cfg.get("EHI_ASB_ENTRY_ASSEMBLY_CODE") or "").strip()
-        or _require_cfg("EHI_ASB_ENTRY_CODE")
-    )
+    token = _resolve_token(args)
 
     local_root = Path(args.local_dir).resolve()
     if not local_root.is_dir():
@@ -2193,31 +2224,27 @@ def _run_amr_output(args: argparse.Namespace) -> int:
         _die(f"No assemblies found in {qc_tsv}.")
     core = _core(args)
 
-    _info(f"Looking up batch '{args.batch}' in Airtable...")
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
-    if batch_record is None:
-        _die(f"Batch '{args.batch}' not found in {batch_table}.")
-    batch_record_id = batch_record["id"]
-
-    rec_ids = _linked_assembly_ids(batch_record, assembly_list_field, args.batch)
+    batch = _open_batch("amr", args, core)
+    batch_record = batch.record
+    batch_record_id = None if batch.from_core else batch_record["id"]
+    assembly_code_field = batch.fields.code
+    client = None if batch.from_core else AirtableClient(
+        api_key=token, base_id=_require_cfg("EHI_BASE")
+    )
+    entry_table = "" if batch.from_core else _require_cfg("EHI_ASB_ENTRY")
 
     field_map: dict[str, str] = {}
-    for metric_key, config_key in AMR_METRIC_KEYS.items():
-        fld_id = str(cfg.get(config_key) or "").strip()
-        if fld_id:
-            field_map[metric_key] = fld_id
+    if not batch.from_core:
+        for metric_key, config_key in AMR_METRIC_KEYS.items():
+            fld_id = str(cfg.get(config_key) or "").strip()
+            if fld_id:
+                field_map[metric_key] = fld_id
 
-    _info(f"Fetching {len(rec_ids)} assembly record(s)...")
     all_metrics: dict[str, dict] = {}
     updates: list[dict] = []
-    records: list[dict] = []
-    for rec_id in rec_ids:
-        record = client.fetch_record_by_id(entry_table, rec_id)
-        if not record:
-            continue
-        records.append(record)
-        code = _first_value(record.get("fields", {}).get(assembly_code_field))
+    records: list[dict] = list(_amr_assemblies(args, batch, []))
+    for record in records:
+        code = _first_value(record.get("fields", record).get(assembly_code_field))
         if not code:
             continue
         metrics = assembly_stats.get(code)
@@ -2226,9 +2253,10 @@ def _run_amr_output(args: argparse.Namespace) -> int:
                   file=sys.stderr)
             continue
         all_metrics[code] = metrics
-        payload = build_entry_update(record["id"], metrics, field_map)
-        if payload["fields"]:
-            updates.append(payload)
+        if field_map:
+            payload = build_entry_update(record["id"], metrics, field_map)
+            if payload["fields"]:
+                updates.append(payload)
 
     run_base = str(cfg.get("RUN_BASE") or "").strip()
     if run_base and all_metrics:
@@ -2240,12 +2268,14 @@ def _run_amr_output(args: argparse.Namespace) -> int:
         _info(f"Updating {len(updates)} assembly record(s) in Airtable...")
         client.update_records(entry_table, updates)
         _info("Airtable update complete.")
-    else:
+    elif not batch.from_core:
         _info("No AMR metrics found to update.")
-    core.mirror(f"AMR metrics of batch '{args.batch}'", [
-        mirror.batch("amr", args.batch, batch_record),
-        *mirror.amr_assemblies(args.batch, records, all_metrics),
-    ])
+    core.mirror(f"AMR metrics of batch '{args.batch}'", (
+        mirror.amr_metrics(args.batch, all_metrics, all_metrics) if batch.from_core else [
+            mirror.batch("amr", args.batch, batch_record),
+            *mirror.amr_assemblies(args.batch, records, all_metrics),
+        ]
+    ))
 
     # Build the batch-prefixed copies that go to ERDA and to the attachment
     # fields.  The .tsv.xz tables drakkar writes are already compressed, so they
@@ -2356,15 +2386,21 @@ def _run_amr_output(args: argparse.Namespace) -> int:
         # uploadAttachment appends to whatever the field already holds, so a
         # rerun clears the fields first instead of stacking a second copy of
         # every table on the record.
-        if attachments and rerun:
+        if attachments and rerun and not batch.from_core:
             client.update_records(
-                batch_table,
+                _require_cfg("EHI_AMR_BATCH"),
                 [{"id": batch_record_id, "fields": {fld: [] for fld, _ in attachments}}],
             )
             _info("Cleared the AMR attachment fields for rerun.")
-            batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+            batch_record = client.fetch_batch_record(
+                _require_cfg("EHI_AMR_BATCH"), _require_cfg("EHI_AMR_BATCH_CODE"), args.batch
+            )
 
+        # An attachment needs an Airtable record to hang on; the core keeps the
+        # ERDA URLs of the same files instead.
         batch_fields_now = batch_record.get("fields", {}) if batch_record else {}
+        if batch.from_core:
+            attachments = []
         for field_id, path in attachments:
             attached = batch_fields_now.get(field_id) or []
             if any(str(a.get("filename", "")) == path.name
@@ -2381,7 +2417,7 @@ def _run_amr_output(args: argparse.Namespace) -> int:
                 continue
             try:
                 client.upload_attachment(
-                    batch_table, batch_record_id, field_id, path,
+                    _require_cfg("EHI_AMR_BATCH"), batch_record_id, field_id, path,
                     content_type=_content_type_of(path),
                 )
             except AirtableError as exc:
@@ -2401,8 +2437,11 @@ def _run_amr_output(args: argparse.Namespace) -> int:
         batch_fields[drakkar_version_field] = drakkar_version
 
     done_status = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
-    batch_fields[batch_status_field] = done_status
-    client.update_records(batch_table, [{"id": batch_record_id, "fields": batch_fields}])
+    if not batch.from_core:
+        batch_fields[_require_cfg("EHI_AMR_BATCH_STATUS")] = done_status
+        client.update_records(
+            _require_cfg("EHI_AMR_BATCH"), [{"id": batch_record_id, "fields": batch_fields}]
+        )
     # The attachments are copies of ERDA files; the core keeps their URLs.
     uploaded = {path.name for path in upload_files}
     tables = {
@@ -2410,10 +2449,13 @@ def _run_amr_output(args: argparse.Namespace) -> int:
         for column, name in (("hits_url", "amr_hits.tsv.xz"), ("loci_url", "amr_loci.tsv.xz"))
         if f"{args.batch}_{name}" in uploaded
     }
+    gene_call_files = {f"{p.name}.gz" for p in gene_calls}
     core.mirror(f"Batch '{args.batch}'", [
-        *mirror.amr_assemblies(args.batch, records, gene_calls={f"{p.name}.gz" for p in gene_calls}),
+        *(mirror.amr_metrics(args.batch, all_metrics, gene_calls=gene_call_files)
+          if batch.from_core
+          else mirror.amr_assemblies(args.batch, records, gene_calls=gene_call_files)),
         mirror.batch(
-            "amr", args.batch, batch_record,
+            "amr", args.batch, None if batch.from_core else batch_record,
             status=done_status, ehio_version=__version__, drakkar_version=drakkar_version, **tables,
         ),
     ])
@@ -2661,13 +2703,14 @@ def _build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     p_scan = sub.add_parser(
         "scanning",
-        help="Scan Airtable batch tables for pending batches and launch them in screen sessions.",
+        help="Scan the batch tables for pending batches and launch them in screen sessions.",
         description=(
-            "Queries each configured batch table for records whose status matches\n"
-            "SCANNING_TRIGGER_STATUS, then for each pending batch:\n"
+            "Queries each batch table in Airtable and in ehi-core for batches whose\n"
+            "status matches SCANNING_TRIGGER_STATUS, then for each pending batch:\n"
             "  1. Creates a screen session named after the batch.\n"
             "  2. Runs: ehio <module> --input -b BATCH && drakkar <cmd> ...\n"
-            "  3. Updates the batch record status to SCANNING_LAUNCHED_STATUS.\n\n"
+            "  3. Sets the status to SCANNING_LAUNCHED_STATUS in both databases.\n\n"
+            "A batch both databases hold is launched once, as ehi-core has it.\n"
             "Already-running screen sessions are skipped automatically."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -2889,19 +2932,29 @@ def cmd_set_status(args: argparse.Namespace) -> int:
 
     client = AirtableClient(api_key=token, base_id=base_id)
     batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    core = _core(args)
+    # A batch created in ehi-core has no Airtable record, and the exit trap of
+    # a failed run has nothing else to report its error to.
     if not batch_record:
-        _die(f"Batch '{args.batch}' not found in {batch_table}.")
-
-    client.update_records(
-        batch_table,
-        [{"id": batch_record["id"], "fields": {status_field: args.status}}],
-    )
-    _core(args).mirror(f"Status of batch '{args.batch}'", [
+        if not core:
+            _die(f"Batch '{args.batch}' not found in {batch_table}.")
+        _info(f"Batch '{args.batch}' is not in {batch_table} — ehi-core alone holds it.")
+    else:
+        client.update_records(
+            batch_table,
+            [{"id": batch_record["id"], "fields": {status_field: args.status}}],
+        )
+    results = core.mirror(f"Status of batch '{args.batch}'", [
         mirror.batch(args.module, args.batch, batch_record, status=args.status),
     ])
+    if not batch_record and any(r.get("action") == "created" for r in results):
+        _warn(f"ehi-core held no batch '{args.batch}' either; it was created with this status.")
     _info(f"Batch '{args.batch}' status → '{args.status}'.")
 
     if args.failures_dir:
+        if not batch_record:
+            _info("The failure report needs an Airtable record to attach to — not uploaded.")
+            return 0
         try:
             since = float(args.failures_since) if args.failures_since else None
         except ValueError:
@@ -2991,7 +3044,8 @@ def cmd_scanning(args: argparse.Namespace) -> int:
     modules = [args.module] if args.module else None
     core = _core(args)
 
-    print("Scanning Airtable for pending batches...")
+    where = "Airtable and ehi-core" if core else "Airtable"
+    print(f"Scanning {where} for pending batches...")
     total = run_scan(
         token=token,
         modules=modules,
@@ -3077,8 +3131,13 @@ def cmd_stop(args: argparse.Namespace) -> int:
 
     client = AirtableClient(api_key=token, base_id=base_id)
     batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+    core = _core(args)
+    # A batch created in ehi-core has no Airtable record, and stopping it still
+    # has to kill its session and jobs and say so somewhere.
     if not batch_record:
-        _die(f"Batch '{args.batch}' not found in {batch_table}.")
+        if not core:
+            _die(f"Batch '{args.batch}' not found in {batch_table}.")
+        _info(f"Batch '{args.batch}' is not in {batch_table} — ehi-core alone holds it.")
 
     output_dir, run_dir, out_file = _batch_dirs(args.module, args.batch)
 
@@ -3108,11 +3167,12 @@ def cmd_stop(args: argparse.Namespace) -> int:
     else:
         _cancel_batch_jobs(args.batch, output_dir, run_dir, out_file)
 
-    client.update_records(
-        batch_table,
-        [{"id": batch_record["id"], "fields": {status_field: stopped_status}}],
-    )
-    _core(args).mirror(f"Status of batch '{args.batch}'", [
+    if batch_record:
+        client.update_records(
+            batch_table,
+            [{"id": batch_record["id"], "fields": {status_field: stopped_status}}],
+        )
+    core.mirror(f"Status of batch '{args.batch}'", [
         mirror.batch(args.module, args.batch, batch_record, status=stopped_status),
     ])
     _info(f"Batch '{args.batch}' status → '{stopped_status}'.")

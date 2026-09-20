@@ -149,6 +149,36 @@ class CoreClient:
         )
         return [{"table": group["table"], **row} for group in result["results"] for row in group["rows"]]
 
+    def pending_batches(self, table: str, statuses: list[str]) -> list[dict[str, Any]]:
+        """The batches of one batch table whose status is one of `statuses`.
+
+        This is the core's side of the scan that reads Airtable's batch
+        statuses: each batch comes back as the editor holds it, so the scan
+        reads the reference genome, the boosts and the batch type from it.
+        """
+        query = "&".join(f"status={quote(status, safe='')}" for status in statuses)
+        path = f"/{quote(table, safe='')}/pending?{query}"
+        return self._call("GET", path, f"read the pending {table}")["batches"]
+
+    def batch_entries(self, table: str, batch: str) -> dict[str, Any]:
+        """What a batch works on, with the batch's own row.
+
+        An assembly batch comes back one row per sample, the way Airtable's
+        entries are and the sample sheet needs, so a coassembly gives one row
+        per library with the assembly code they share.
+        """
+        path = f"/{quote(table, safe='')}/{quote(batch, safe='')}/entries"
+        return self._call("GET", path, f"read the entries of {batch}")
+
+    def link_assembly_preprocessings(
+        self, batch: str, assemblies: dict[str, list[str]]
+    ) -> dict[str, Any]:
+        """Set which preprocessed samples each assembly of a batch was built
+        from — the grouping a binning run was launched with."""
+        path = f"/assembly_batches/{quote(batch, safe='')}/assemblies"
+        return self._call("POST", path, f"group the assemblies of {batch}",
+                          {"assemblies": {k: list(v) for k, v in assemblies.items()}})
+
     def batch_mags(self, batch: str) -> list[dict[str, Any]]:
         """The MAGs a dereplication batch took in, with 'is_representative'."""
         path = f"/dereplication_batches/{quote(batch, safe='')}/mags"

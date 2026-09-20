@@ -1,14 +1,16 @@
 # ehio
 
-**ehio** is a bridge between Airtable metadata databases and [Drakkar](https://github.com/alberdilab/drakkar) bioinformatics workflows. It handles three concerns:
+**ehio** is a bridge between the EHI's metadata databases and [Drakkar](https://github.com/alberdilab/drakkar) bioinformatics workflows. It handles three concerns:
 
-1. **Input** — fetches sample metadata and file URLs from Airtable and generates the input files that Drakkar expects.
-2. **Output** — transfers Drakkar result files to remote storage via SFTP and updates Airtable records with processing status.
-3. **Scanning** — monitors Airtable batch tables for pending work and automatically launches Drakkar runs in named `screen` sessions.
+1. **Input** — fetches sample metadata and file URLs and generates the input files that Drakkar expects.
+2. **Output** — transfers Drakkar result files to remote storage via SFTP and writes back the processing status and metrics.
+3. **Scanning** — monitors the batch tables for pending work and automatically launches Drakkar runs in named `screen` sessions.
 
 Airtable is running out of room, so the EHI's own database, **ehi-core**, is
-taking over from it. For now, everything ehio writes to Airtable is also
-written to the core. MAGs live in the core alone (see [ehi-core](#ehi-core)).
+taking over from it. A batch can live in either: Airtable is looked in first,
+because it holds today's batches, and a batch it does not hold is read from the
+core and run entirely from there. Everything ehio writes to Airtable is also
+written to the core, and MAGs live in the core alone (see [ehi-core](#ehi-core)).
 
 ---
 
@@ -125,9 +127,10 @@ says so on every command.
 ## ehi-core
 
 ehi-core is the EHI's own database for the bioinformatic pipeline, taking over
-from the Airtable tables as they run out of room. Batches are still created and
-launched from Airtable. Everything ehio writes to Airtable is written to the
-core too:
+from the Airtable tables as they run out of room. A batch can now be created in
+either database and `ehio scanning` launches it (see
+[`ehio scanning`](#ehio-scanning)); everything ehio writes to Airtable is
+written to the core too:
 
 | Step | Written to the core |
 |---|---|
@@ -143,6 +146,35 @@ hologenome the core doesn't hold yet (created in Airtable after the core was
 loaded) is added from its Airtable record the first time ehio reads it, so the
 output step always has a row to write to. Facts copied from Airtable only fill
 empty cells: they never overwrite what the core holds.
+
+### Running a batch from the core alone
+
+Every command takes its batch from whichever database holds it. Airtable is
+looked in first; a batch it does not hold is read from the core, and its input
+files, its results and its status are all handled there:
+
+| Step | Read from the core |
+|---|---|
+| `preprocessing --input` | each library's raw read URLs, through the preprocessings of the batch |
+| `binning --input` | one row per sample of each assembly, with the reads preprocessing produced |
+| `quantifying --input` | the batch's MAGs, and the preprocessed samples it maps against them |
+| `amr --input` | the assemblies the batch runs over, with their ERDA URLs |
+| `annotating` | the batch's MAGs and the annotation depth it asks for |
+| every `--output` | the same entries, to write the metrics and the file URLs back to |
+
+The core answers with the batch's own row too — the assembly type, the ANI
+threshold, the annotation type, the reference genome — because that is what the
+run is launched with.
+
+Two things still live in Airtable and are read from there whichever database
+holds the batch: the **reference genome table** (a core batch names its genome
+by code, which the resolver already accepts) and the laboratory tables. A
+failure report can only be attached to an Airtable record, so a core batch
+keeps its result files on ERDA and the core keeps their URLs.
+
+**Switching Airtable off.** Emptying a module's Airtable keys — `EHI_BASE` /
+`MAG_BASE`, its batch table and its batch code field — leaves the core as the
+only database looked at for that module. Nothing else has to change.
 
 **MAGs live in the core alone.** Airtable's MAG table is full. Two databases
 each numbering new MAGs would also give one EHM code to two genomes. So:
@@ -395,16 +427,26 @@ still finishes.
 
 ### `ehio scanning`
 
-Polls all four batch tables for records whose status field matches `SCANNING_TRIGGER_STATUS` (default: `ready`). For each pending batch it finds:
+Polls all four batch tables, in Airtable **and in ehi-core**, for batches whose status matches `SCANNING_TRIGGER_STATUS` (default: `ready`). For each pending batch it finds:
 
 1. Checks whether a `screen` session named after the batch already exists — skips if so.
 2. For preprocessing batches, resolves the reference genome (`-x` indexed tarball, else `-r` raw fasta) and verifies it can be downloaded; if not, the batch is marked `PROCESSING_ERROR_STATUS` and skipped instead of being launched.
 3. Creates a detached `screen` session: `screen -dmS BATCH_NAME bash -c "..."`.
 4. The session runs the full `ehio --input` + `drakkar` command chain.
-5. Updates the batch record status to `SCANNING_LAUNCHED_STATUS` (default: `running`).
+5. Sets the batch status to `SCANNING_LAUNCHED_STATUS` (default: `running`) in both databases.
+
+**Both databases are scanned.** ehi-core is taking over from Airtable, and the scan reads both so the change can be made one batch at a time:
+
+- A batch both databases hold is launched **once**. It keeps the code Airtable gave it, because the run directory and the screen session are named after that, and is otherwise described by the core — the boosts, the assembly or profiling type, the ANI threshold, the annotation type and the reference genome. When the two disagree about what the batch is waiting for, that is printed and the core's answer is taken.
+- A batch **only the core holds** is launched too, read entirely from the core (see [Running a batch from the core alone](#running-a-batch-from-the-core-alone)), and its status is set in the core alone.
+- A batch **only Airtable holds** is launched as it always was, and the status write creates its row in the core, the way every other Airtable fact reaches it.
+- A core that can't be reached, or one too old to know the route, is reported and the scan carries on with Airtable — unless `EHI_CORE_REQUIRED`. With `EHI_CORE_URL` empty, the scan is Airtable's alone, as before.
+- An Airtable batch table that isn't configured no longer ends the scan for that module: the core is still scanned.
+
+The core is read through `GET /api/pipeline/{table}/pending`, which takes one `status` parameter per status to look for and matches it however it is capitalised.
 
 ```bash
-# Scan all four modules
+# Scan all four modules in both databases
 ehio scanning
 
 # Scan one module only
@@ -440,7 +482,7 @@ drakkar amr -f RUN_DIR/BATCH_assemblies.tsv -o OUTPUT_DIR -p slurm
 
 `OUTPUT_DIR` is constructed as `{MODULE_OUTPUT_BASE}/{BATCH_NAME}`.
 
-If any step fails, the exit trap of the launch script appends a failure report to `{BATCH}.err`, sets the batch status to `PROCESSING_ERROR_STATUS` and attaches drakkar's own failure report — `OUTPUT_DIR/logging/drakkar_<run_id>.failures.tsv`, one row per failed job with its failure category — to the batch record, so the source of the error can be read straight from Airtable. The attachment field is configured per module with `EHI_PPR_BATCH_ERROR_FILES`, `EHI_ASB_BATCH_ERROR_FILES`, `MAG_DMB_BATCH_ERROR_FILES` and `EHI_AMR_BATCH_ERROR_FILES`; leave a key empty to disable uploading for that module.
+If any step fails, the exit trap of the launch script appends a failure report to `{BATCH}.err`, sets the batch status to `PROCESSING_ERROR_STATUS` (in both databases) and attaches drakkar's own failure report — `OUTPUT_DIR/logging/drakkar_<run_id>.failures.tsv`, one row per failed job with its failure category — to the batch record, so the source of the error can be read straight from Airtable. The attachment field is configured per module with `EHI_PPR_BATCH_ERROR_FILES`, `EHI_ASB_BATCH_ERROR_FILES`, `MAG_DMB_BATCH_ERROR_FILES` and `EHI_AMR_BATCH_ERROR_FILES`; leave a key empty to disable uploading for that module.
 
 Every drakkar call in the script is bracketed by a check of the run metadata drakkar writes for the run it starts (`drakkar_<run_id>.yaml`, stamped `status: success` once the workflow ends), because drakkar reports some of its own errors — a Snakemake lock, a missing input file — by printing a message and exiting 0. drakkar 2.5.0 moved that file, the failure table and the Snakemake log into `OUTPUT_DIR/logging/`; before it they sat in the output root and in `OUTPUT_DIR/log/`. ehio reads both layouts everywhere, so a batch launched under one drakkar and resumed under another is still checked, and its failure report is still found.
 
@@ -455,7 +497,7 @@ A running batch is a screen session holding the drakkar workflow, plus the Slurm
 1. Writes a stop marker (`{RUN_BASE}/{batch}/.ehio_stopped`), so the exit trap of the dying launch script reports the stop instead of flagging the batch as an error.
 2. Quits the screen session. This comes first on purpose — while the workflow is alive it resubmits any job cancelled under it (the drakkar slurm profile runs with `retries` and `keep-going`).
 3. Cancels every queued or running Slurm job of the batch, re-checking the queue afterwards in case jobs were submitted while it was cancelling.
-4. Sets the batch status to `SCANNING_STOPPED_STATUS` (default: `Stopped`).
+4. Sets the batch status to `SCANNING_STOPPED_STATUS` (default: `Stopped`) in both databases. A batch only ehi-core holds is stopped the same way, and its status set in the core alone.
 
 The jobs of a batch are recognised in two independent ways, so orphans left by an earlier session are caught as well: by the directory they were submitted from ( `{MODULE_OUTPUT_BASE}/{batch}` or `{RUN_BASE}/{batch}`), and by the snakemake run ids that the Slurm executor uses as job names and logs as `SLURM run ID: <uuid>` in `{RUN_BASE}/{batch}/{batch}.out` — a batch can hold several of those, since quantifying calls drakkar more than once.
 
@@ -477,7 +519,7 @@ ehio jobs -m preprocessing -b PPR001
 ## Overall data flow
 
 ```
-Airtable (EHI_BASE / MAG_BASE)
+Airtable (EHI_BASE / MAG_BASE)  +  ehi-core
         │
         │  ehio <module> --input -b BATCH
         ▼
@@ -494,7 +536,7 @@ Airtable (EHI_BASE / MAG_BASE)
   SFTP remote storage  +  Airtable status updated
 ```
 
-`ehio scanning` automates the middle two steps by watching Airtable for batches marked `ready` and launching the sequence in a named screen session.
+`ehio scanning` automates the middle two steps by watching both databases for batches marked `ready` and launching the sequence in a named screen session.
 
 ---
 

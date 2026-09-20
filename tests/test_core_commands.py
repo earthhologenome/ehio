@@ -263,3 +263,61 @@ class TestStatus:
         assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
         airtable.update_records.assert_called_once()
         assert "ehi-core is down" in capsys.readouterr().err
+
+    def test_a_batch_only_the_core_holds_still_reaches_its_status(self):
+        """A batch created in ehi-core has no Airtable record, and the exit trap
+        of a failed run has nothing else to report its error to."""
+        airtable = MagicMock()
+        airtable.fetch_batch_record.return_value = None
+        fake = FakeCoreClient()
+        args = argparse.Namespace(
+            module="preprocessing", batch="PRB0500", status="Error",
+            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
+        )
+        patches = [*_patched({}, airtable), using(fake)]
+        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
+        assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
+        airtable.update_records.assert_not_called()
+        [row] = fake.rows("preprocessing_batches")
+        assert (row["key"], row["values"]) == ({"code": "PRB0500"}, {"status": "Error"})
+
+    def test_a_batch_neither_database_holds_is_reported(self, capsys):
+        airtable = MagicMock()
+        airtable.fetch_batch_record.return_value = None
+        fake = FakeCoreClient()   # every upsert comes back as "created"
+        args = argparse.Namespace(
+            module="preprocessing", batch="PRB9999", status="Error",
+            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
+        )
+        patches = [*_patched({}, airtable), using(fake)]
+        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
+        assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
+        assert "held no batch 'PRB9999' either" in capsys.readouterr().err
+
+    def test_without_the_core_a_batch_airtable_lacks_is_still_an_error(self):
+        airtable = MagicMock()
+        airtable.fetch_batch_record.return_value = None
+        args = argparse.Namespace(
+            module="preprocessing", batch="PRB0500", status="Error",
+            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
+        )
+        patches = [*_patched({}, airtable)]
+        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
+        with pytest.raises(SystemExit):
+            _run(patches, lambda: cli.cmd_set_status(args))
+
+    def test_a_failure_report_needs_an_airtable_record_to_attach_to(self, capsys):
+        airtable = MagicMock()
+        airtable.fetch_batch_record.return_value = None
+        fake = FakeCoreClient()
+        args = argparse.Namespace(
+            module="preprocessing", batch="PRB0500", status="Error",
+            failures_dir="/tmp/logging", failures_since=None,
+            airtable_token=None, core_token=None,
+        )
+        patches = [*_patched({}, airtable), using(fake)]
+        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
+        with patch.object(cli, "_upload_failure_report") as upload:
+            assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
+        upload.assert_not_called()
+        assert "needs an Airtable record" in capsys.readouterr().err

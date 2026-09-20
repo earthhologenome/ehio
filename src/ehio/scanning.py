@@ -641,55 +641,300 @@ def _generate_input_files(
 
 
 # ---------------------------------------------------------------------------
+# Where the scan finds its batches
+# ---------------------------------------------------------------------------
+#
+# Airtable is running out of room and ehi-core is taking over from it, so the
+# scan reads both batch tables and launches each batch once.  A batch both
+# databases hold keeps the code Airtable gave it, because the run directory and
+# the screen session on the cluster are named after that, and is otherwise
+# described by the core: that is the database the EHI is moving to, and ehio
+# has been writing every status it sets into it.  The status a launch sets goes
+# back to whichever of the two holds the batch, so a batch created in the core
+# alone is launched and reported without Airtable knowing anything about it.
+
+# The core table behind each module's Airtable batch table.
+_CORE_BATCH_TABLE = {
+    "preprocessing": "preprocessing_batches",
+    "binning":       "assembly_batches",
+    "quantifying":   "dereplication_batches",
+    "amr":           "amr_batches",
+}
+
+# The core column holding what the Airtable field of this config key holds.
+_CORE_COLUMN = {
+    "EHI_PPR_BATCH_BOOST_TIME":      "boost_time",
+    "EHI_ASB_BATCH_BOOST_TIME":      "boost_time",
+    "MAG_DMB_BATCH_BOOST_TIME":      "boost_time",
+    "EHI_AMR_BATCH_BOOST_TIME":      "boost_time",
+    "EHI_PPR_BATCH_BOOST_MEMORY":    "boost_memory",
+    "EHI_ASB_BATCH_BOOST_MEMORY":    "boost_memory",
+    "MAG_DMB_BATCH_BOOST_MEMORY":    "boost_memory",
+    "EHI_AMR_BATCH_BOOST_MEMORY":    "boost_memory",
+    "EHI_ASB_BATCH_TYPE":            "batch_type",
+    "MAG_DMB_BATCH_TYPE":            "batch_type",
+    "MAG_DMB_BATCH_ANI":             "ani_threshold",
+    "MAG_DMB_BATCH_ANNOTATION_TYPE": "annotation_type",
+    "EHI_PPR_BATCH_REFERENCE":       "reference_genome_code",
+}
+
+
+class PendingBatch:
+    """One batch waiting to be launched, as the databases holding it describe it.
+
+    `kind` is what its status asks for: a plain launch (''), a 'resume' of a
+    failed run, a 'rerun' from scratch, or a 'reannotate' of a finished DMB
+    batch.  `record` is the Airtable record and `row` the core row; a batch in
+    both has both, and then the core's values are the ones read.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        kind: str,
+        status: str,
+        record: dict | None = None,
+        row: dict | None = None,
+    ) -> None:
+        self.code = code
+        self.kind = kind
+        self.status = status
+        self.record = record
+        self.row = row
+
+    @property
+    def where(self) -> str:
+        held = [name for name, seen in (("Airtable", self.record), ("ehi-core", self.row)) if seen]
+        return " and ".join(held) or "nowhere"
+
+    def value(self, config_key: str) -> Any:
+        """A batch's field: the core's, when the core holds it, else Airtable's."""
+        column = _CORE_COLUMN.get(config_key)
+        if self.row and column:
+            held = self.row.get(column)
+            if held not in (None, ""):
+                return held
+        field = str(cfg.get(config_key) or "").strip()
+        if not (self.record and field):
+            return None
+        held = (self.record.get("fields") or {}).get(field)
+        return held if held not in (None, "") else None
+
+    def text(self, config_key: str) -> str:
+        held = self.value(config_key)
+        return "" if held is None else str(held).strip()
+
+    def number(self, config_key: str) -> int | None:
+        try:
+            held = self.value(config_key)
+            return int(held) if held is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def reference_record(self) -> dict:
+        """The record the reference genome is resolved from.
+
+        The genome table stays in Airtable, so the core holds only the genome's
+        code — which is one of the two things the resolver already accepts, the
+        other being the record id an Airtable link cell holds.
+        """
+        field = str(cfg.get("EHI_PPR_BATCH_REFERENCE") or "").strip()
+        code  = str((self.row or {}).get("reference_genome_code") or "").strip()
+        if field and code:
+            return {"id": self.code, "fields": {field: code}}
+        return self.record or {}
+
+
+class AirtableBatches:
+    """A module's batch table in Airtable, as the scan reads and writes it."""
+
+    name = "Airtable"
+
+    def __init__(self, module: str, token: str) -> None:
+        self.module       = module
+        self.base_id      = cfg.get(_PRIMARY_BASE[module], "").strip()
+        self.table        = cfg.get(_BATCH_TABLE_KEY[module], "").strip()
+        self.code_field   = cfg.get(_BATCH_CODE_CFG[module], "").strip()
+        self.status_field = cfg.get(_BATCH_STATUS_CFG[module], "").strip()
+        self._token       = token
+
+    def missing(self) -> list[str]:
+        """The config keys this source needs and does not have."""
+        return [key for key, value in (
+            (_PRIMARY_BASE[self.module],     self.base_id),
+            (_BATCH_TABLE_KEY[self.module],  self.table),
+            (_BATCH_CODE_CFG[self.module],   self.code_field),
+            (_BATCH_STATUS_CFG[self.module], self.status_field),
+        ) if not value]
+
+    @property
+    def client(self) -> AirtableClient:
+        return AirtableClient(api_key=self._token, base_id=self.base_id)
+
+    def holds(self, batch: PendingBatch) -> bool:
+        return batch.record is not None
+
+    def pending(self, statuses: dict[str, str]) -> list[PendingBatch]:
+        client = self.client
+        found: list[PendingBatch] = []
+        for kind, status in statuses.items():
+            if not status:
+                continue
+            for record in client.fetch_pending_batches(
+                batch_table=self.table,
+                batch_status_field=self.status_field,
+                trigger_status=status,
+            ):
+                code = str((record.get("fields") or {}).get(self.code_field, "")).strip()
+                if code:
+                    found.append(PendingBatch(code, kind, status, record=record))
+        return found
+
+    def set_status(self, batch: PendingBatch, status: str) -> None:
+        self.client.update_records(
+            self.table, [{"id": batch.record["id"], "fields": {self.status_field: status}}]
+        )
+
+
+class CoreBatches:
+    """A module's batch table in ehi-core, read through the pipeline API.
+
+    A core that cannot be reached, or one too old to know the route, is
+    reported and leaves the scan to Airtable, unless EHI_CORE_REQUIRED — which
+    is what CoreSession already means by required.
+    """
+
+    name = "ehi-core"
+
+    def __init__(self, module: str, core) -> None:
+        self.module = module
+        self.core   = core
+        self.table  = _CORE_BATCH_TABLE[module]
+
+    def holds(self, batch: PendingBatch) -> bool:
+        # A batch Airtable alone held is created in the core by the status
+        # write, the way every other Airtable fact reaches it.
+        return batch.row is not None or batch.record is not None
+
+    def pending(self, statuses: dict[str, str]) -> list[PendingBatch]:
+        wanted = {kind: status for kind, status in statuses.items() if status}
+        if not wanted:
+            return []
+        rows = self.core.mirror_call(
+            f"The pending {self.table}",
+            lambda client: client.pending_batches(self.table, list(wanted.values())),
+        )
+        by_status = {status.strip().lower(): kind for kind, status in wanted.items()}
+        found: list[PendingBatch] = []
+        for row in rows or []:
+            code   = str(row.get("code") or "").strip()
+            status = str(row.get("status") or "").strip()
+            kind   = by_status.get(status.lower())
+            if code and kind is not None:
+                found.append(PendingBatch(code, kind, status, row=row))
+        return found
+
+    def set_status(self, batch: PendingBatch, status: str) -> None:
+        from ehio import mirror
+
+        self.core.mirror(
+            f"Status of batch '{batch.code}'",
+            [mirror.batch(self.module, batch.code, batch.record, status=status)],
+        )
+
+
+def _sources(module: str, token: str, core=None, verbose: bool = False) -> list:
+    """The databases this module's batches are scanned in, Airtable first.
+
+    A missing Airtable table is no longer the end of the scan: the core may
+    hold the module's batches on its own, which is where this is going.
+    """
+    sources: list = []
+    airtable = AirtableBatches(module, token)
+    missing  = airtable.missing()
+    if token and not missing:
+        sources.append(airtable)
+    elif verbose:
+        why = f"missing config: {', '.join(missing)}" if missing else "no Airtable token"
+        print(f"  [{module}] not scanning Airtable — {why}", file=sys.stderr)
+    if core:
+        sources.append(CoreBatches(module, core))
+    return sources
+
+
+def _merge(module: str, sources: list, statuses: dict[str, str], verbose: bool = False) -> list[PendingBatch]:
+    """Every pending batch of a module, each one once.
+
+    When the two databases disagree about what a batch is waiting for, that is
+    said and the core's answer is taken: it is worth seeing while ehio is still
+    writing to both.
+    """
+    merged: dict[str, PendingBatch] = {}
+    for source in sources:
+        for batch in source.pending(statuses):
+            held = merged.get(batch.code.upper())
+            if held is None:
+                merged[batch.code.upper()] = batch
+                continue
+            # Airtable is read first, so this is the core's copy of the batch.
+            if held.status.strip().lower() != batch.status.strip().lower():
+                print(
+                    f"  [{module}] {held.code}: '{held.status}' in Airtable but "
+                    f"'{batch.status}' in ehi-core — taking ehi-core's.",
+                    file=sys.stderr,
+                )
+            held.kind, held.status, held.row = batch.kind, batch.status, batch.row
+
+    batches = sorted(merged.values(), key=lambda batch: batch.code)
+    if verbose:
+        for batch in batches:
+            print(f"  [{module}] {batch.code}: '{batch.status}' in {batch.where}", file=sys.stderr)
+    return batches
+
+
+def _set_status(
+    module: str,
+    batch: PendingBatch,
+    status: str,
+    sources: list,
+    dry_run: bool = False,
+    strict: bool = False,
+) -> None:
+    """Set a batch's status wherever the batch is held.
+
+    A failure is reported and the scan carries on, except under `strict`: a
+    batch whose screen session is already running must not be left looking
+    unlaunched, or the next pass would launch it again.
+    """
+    if dry_run:
+        print(f"  [{module}] {batch.code}: dry-run — status not set to '{status}'", file=sys.stderr)
+        return
+    written = False
+    for source in sources:
+        if not source.holds(batch):
+            continue
+        try:
+            source.set_status(batch, status)
+            written = True
+        except AirtableError as exc:
+            if strict:
+                raise AirtableError(
+                    f"{exc}\n  The screen session for {batch.code} was launched, but its "
+                    f"status in {source.table} could not be set to '{status}'. "
+                    f"Fix the token permissions and set the status manually."
+                ) from exc
+            print(
+                f"  [{module}] {batch.code}: WARNING — could not set the status to "
+                f"'{status}' in {source.name}: {exc}",
+                file=sys.stderr,
+            )
+    if written:
+        print(f"  [{module}] {batch.code}: status → '{status}'", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Per-module scan
 # ---------------------------------------------------------------------------
-
-def _mark_batch_error(
-    client: AirtableClient,
-    batch_table: str,
-    batch_status_field: str,
-    error_status: str,
-    record: dict,
-    module: str,
-    batch_name: str,
-    dry_run: bool = False,
-    core=None,
-) -> None:
-    """Set a batch status to the error status, reporting (not raising) failures."""
-    if dry_run:
-        print(
-            f"  [{module}] {batch_name}: dry-run — status not set to '{error_status}'",
-            file=sys.stderr,
-        )
-        return
-    try:
-        client.update_records(
-            batch_table,
-            [{"id": record["id"], "fields": {batch_status_field: error_status}}],
-        )
-        print(f"  [{module}] {batch_name}: status → '{error_status}'", file=sys.stderr)
-    except AirtableError as exc:
-        print(
-            f"  [{module}] {batch_name}: WARNING — could not set status to "
-            f"'{error_status}': {exc}",
-            file=sys.stderr,
-        )
-    _mirror_status(core, module, batch_name, record, error_status)
-
-
-def _mirror_status(core, module: str, batch_name: str, record: dict, status: str) -> None:
-    """The status ehio just set in Airtable, in ehi-core too, never raising:
-    a scan goes on to the next batch whatever the core says."""
-    if not core:
-        return
-    from ehio import mirror
-    from ehio.core import CoreError
-
-    try:
-        core.mirror(f"Status of batch '{batch_name}'", [mirror.batch(module, batch_name, record, status=status)])
-    except CoreError as exc:
-        print(f"  [{module}] {batch_name}: WARNING — {exc}", file=sys.stderr)
-
 
 def scan_module(
     module: str,
@@ -699,17 +944,14 @@ def scan_module(
     core=None,
     core_token: str = "",
 ) -> tuple[int, int]:
-    """Scan one module's batch table for pending batches and launch them.
+    """Scan a module's batch tables for pending batches and launch them.
 
-    `core` (an ehio.core.CoreSession) receives the statuses the scan sets, and
-    `core_token` is handed to the launched batch.
+    Airtable and ehi-core are both scanned; `core` (an ehio.core.CoreSession)
+    is the second of the two as well as where the statuses the scan sets are
+    written, and `core_token` is handed to the launched batch.
 
     Returns (found, launched).
     """
-    base_id            = cfg.get(_PRIMARY_BASE[module], "").strip()
-    batch_table        = cfg.get(_BATCH_TABLE_KEY[module], "").strip()
-    batch_code_field   = cfg.get(_BATCH_CODE_CFG[module], "").strip()
-    batch_status_field = cfg.get(_BATCH_STATUS_CFG[module], "").strip()
     output_base        = cfg.get(_OUTPUT_BASE_CFG[module], "").strip()
     run_base           = cfg.get(_RUN_BASE_CFG, "").strip()
     trigger_status     = cfg.get("SCANNING_TRIGGER_STATUS", "Ready").strip()
@@ -734,46 +976,36 @@ def scan_module(
     ppr_fraction  = _bool_cfg("DRAKKAR_PPR_FRACTION")
     ppr_nonpareil = _bool_cfg("DRAKKAR_PPR_NONPAREIL")
 
-    if not all([base_id, batch_table, batch_code_field, batch_status_field, output_base, run_base]):
+    if not (output_base and run_base):
         if verbose:
             missing = [k for k, v in {
-                _PRIMARY_BASE[module]:     base_id,
-                _BATCH_TABLE_KEY[module]:  batch_table,
-                _BATCH_CODE_CFG[module]:   batch_code_field,
-                _BATCH_STATUS_CFG[module]: batch_status_field,
-                _OUTPUT_BASE_CFG[module]:  output_base,
-                _RUN_BASE_CFG:             run_base,
+                _OUTPUT_BASE_CFG[module]: output_base,
+                _RUN_BASE_CFG:            run_base,
             }.items() if not v]
-            print(
-                f"  [{module}] skipped — missing config: {', '.join(missing)}",
-                file=sys.stderr,
-            )
+            print(f"  [{module}] skipped — missing config: {', '.join(missing)}", file=sys.stderr)
         return 0, 0
 
-    client = AirtableClient(api_key=token, base_id=base_id)
+    sources = _sources(module, token, core, verbose=verbose)
+    if not sources:
+        if verbose:
+            print(f"  [{module}] skipped — no database to scan.", file=sys.stderr)
+        return 0, 0
 
-    def _fetch(status: str) -> list:
-        return client.fetch_pending_batches(
-            batch_table=batch_table,
-            batch_status_field=batch_status_field,
-            trigger_status=status,
-        ) if status else []
-
-    # (record, do_rerun, do_resume, do_reannotate)
-    pending: list[tuple[dict, bool, bool, bool]] = (
-        [(r, False, False, False) for r in _fetch(trigger_status)]
-        + [(r, False, True,  False) for r in _fetch(resume_status)]
-        + [(r, True,  False, False) for r in _fetch(rerun_status)]
-        + [(r, False, False, True)  for r in _fetch(reannotate_status)]
-    )
+    pending = _merge(module, sources, {
+        "":           trigger_status,
+        "resume":     resume_status,
+        "rerun":      rerun_status,
+        "reannotate": reannotate_status,
+    }, verbose=verbose)
 
     found    = len(pending)
     launched = 0
 
-    for record, do_rerun, do_resume, do_reannotate in pending:
-        batch_name = str(record.get("fields", {}).get(batch_code_field, "")).strip()
-        if not batch_name:
-            continue
+    for batch in pending:
+        batch_name     = batch.code
+        do_rerun       = batch.kind == "rerun"
+        do_resume      = batch.kind == "resume"
+        do_reannotate  = batch.kind == "reannotate"
 
         if session_exists(batch_name):
             print(
@@ -782,6 +1014,9 @@ def scan_module(
             )
             continue
 
+        if batch.record is None:
+            print(f"  [{module}] {batch_name}: in ehi-core only.", file=sys.stderr)
+
         output_dir  = str(Path(output_base) / batch_name)
         run_dir     = str(Path(run_base)    / batch_name)
         script_path = Path(run_dir) / f"{batch_name}.sh"
@@ -789,29 +1024,18 @@ def scan_module(
         ref_flag = ""
         if module == "preprocessing":
             try:
-                ref_flag = _resolve_preprocessing_ref_flag(record, token, verbose=verbose)
+                ref_flag = _resolve_preprocessing_ref_flag(
+                    batch.reference_record(), token, verbose=verbose
+                )
             except BatchLaunchError as exc:
                 print(f"  [{module}] {batch_name}: ERROR — {exc}", file=sys.stderr)
-                _mark_batch_error(
-                    client, batch_table, batch_status_field, error_status,
-                    record, module, batch_name, dry_run=dry_run, core=core,
-                )
+                _set_status(module, batch, error_status, sources, dry_run=dry_run)
                 continue
             ref_desc = ref_flag if ref_flag else "(no reference)"
             print(f"  [{module}] {batch_name}: reference flag → {ref_desc}", file=sys.stderr)
 
-        def _read_boost(cfg_dict: dict) -> int | None:
-            field_id = str(cfg.get(cfg_dict[module]) or "").strip()
-            if not field_id:
-                return None
-            raw = record.get("fields", {}).get(field_id)
-            try:
-                return int(raw) if raw is not None else None
-            except (TypeError, ValueError):
-                return None
-
-        boost_time   = _read_boost(_BOOST_TIME_CFG)
-        boost_memory = _read_boost(_BOOST_MEMORY_CFG)
+        boost_time   = batch.number(_BOOST_TIME_CFG[module])
+        boost_memory = batch.number(_BOOST_MEMORY_CFG[module])
         if boost_time or boost_memory:
             print(
                 f"  [{module}] {batch_name}: boost time={boost_time} memory={boost_memory}",
@@ -820,34 +1044,20 @@ def scan_module(
 
         multicoverage = False
         if module == "binning":
-            type_field = str(cfg.get("EHI_ASB_BATCH_TYPE") or "").strip()
-            if type_field:
-                assembly_type = normalise_assembly_type(record.get("fields", {}).get(type_field))
-                multicoverage = assembly_type == "multicoverage"
-                print(
-                    f"  [{module}] {batch_name}: assembly type → {assembly_type or '(unset)'}",
-                    file=sys.stderr,
-                )
+            assembly_type = normalise_assembly_type(batch.value("EHI_ASB_BATCH_TYPE"))
+            multicoverage = assembly_type == "multicoverage"
+            print(
+                f"  [{module}] {batch_name}: assembly type → {assembly_type or '(unset)'}",
+                file=sys.stderr,
+            )
 
         ani_threshold   = ""
         profiling_type  = ""
         annotation_type = "all"
         if module == "quantifying":
-            ani_field      = str(cfg.get("MAG_DMB_BATCH_ANI")             or "").strip()
-            type_field     = str(cfg.get("MAG_DMB_BATCH_TYPE")            or "").strip()
-            ann_type_field = str(cfg.get("MAG_DMB_BATCH_ANNOTATION_TYPE") or "").strip()
-            if ani_field:
-                raw = record.get("fields", {}).get(ani_field)
-                if raw is not None:
-                    ani_threshold = str(raw).strip()
-            if type_field:
-                raw = record.get("fields", {}).get(type_field)
-                if raw:
-                    profiling_type = str(raw).strip().lower()
-            if ann_type_field:
-                raw = record.get("fields", {}).get(ann_type_field)
-                if raw:
-                    annotation_type = str(raw).strip().lower()
+            ani_threshold   = batch.text("MAG_DMB_BATCH_ANI")
+            profiling_type  = batch.text("MAG_DMB_BATCH_TYPE").lower()
+            annotation_type = batch.text("MAG_DMB_BATCH_ANNOTATION_TYPE").lower() or "all"
 
         script_content = build_script_content(
             module, batch_name, run_dir, output_dir, profile, error_status, ref_flag,
@@ -874,7 +1084,7 @@ def scan_module(
 
         if dry_run:
             # Write the script and generate the input TSV, but do not launch
-            # the screen session and do not update the Airtable status.
+            # the screen session and do not update any status.
             Path(run_dir).mkdir(parents=True, exist_ok=True)
             script_path.write_text(script_content, encoding="utf-8")
             script_path.chmod(0o755)
@@ -893,10 +1103,10 @@ def scan_module(
                 except subprocess.CalledProcessError as exc:
                     print(
                         f"  [{module}] {batch_name}: WARNING — input generation failed "
-                        f"(exit {exc.returncode}); check Airtable fields and token.",
+                        f"(exit {exc.returncode}); check the batch's entries and token.",
                         file=sys.stderr,
                     )
-            print(f"  [{module}] {batch_name}: dry-run — screen session not launched, Airtable status unchanged")
+            print(f"  [{module}] {batch_name}: dry-run — screen session not launched, status unchanged")
             launched += 1
             continue
 
@@ -905,18 +1115,7 @@ def scan_module(
         script_path.chmod(0o755)
 
         launch_screen(batch_name, str(script_path), token=token, core_token=core_token)
-        try:
-            client.update_records(
-                batch_table,
-                [{"id": record["id"], "fields": {batch_status_field: launched_status}}],
-            )
-        except AirtableError as exc:
-            raise AirtableError(
-                f"{exc}\n  The screen session for {batch_name} was launched, but its "
-                f"status in {batch_table} could not be set to '{launched_status}'. "
-                f"Fix the token permissions and set the status manually."
-            ) from exc
-        _mirror_status(core, module, batch_name, record, launched_status)
+        _set_status(module, batch, launched_status, sources, strict=True)
         print(f"  [{module}] {batch_name}: launched — script at {script_path}")
         launched += 1
 

@@ -9,6 +9,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.9.1] - 2026-09-20
+
+### Added
+
+- **`ehio scanning` scans ehi-core as well as Airtable.** The scan that reads Airtable's batch statuses and launches what it finds waiting now reads ehi-core's too, so a batch can be created in either database while the EHI moves off Airtable. The core is read through a new pipeline route, `GET /api/pipeline/{table}/pending`, which takes one `status` parameter per status to look for (`SCANNING_TRIGGER_STATUS`, `SCANNING_RESUME_STATUS`, `SCANNING_RERUN_STATUS`, and `SCANNING_REANNOTATE_STATUS` for a DMB batch) and matches each however it is capitalised.
+  - A batch both databases hold is launched **once**. It keeps the code Airtable gave it, because the run directory and the screen session are named after that, and is otherwise described by the core: the boosts, the assembly or profiling type, the ANI threshold, the annotation type and the reference genome. When the two disagree about what the batch is waiting for, that is printed and the core's answer is taken.
+  - A batch only the core holds is launched too, read entirely from the core, and every status the scan sets — launched, or the error status a launch failure leaves — is written to the core alone.
+  - A batch only Airtable holds is launched as before, and the status write creates its row in the core, as every other Airtable fact already reaches it.
+  - The genome tables stay in Airtable, so a core batch names its reference genome by code; the resolver already accepted a code as well as an Airtable record id.
+  - A core that can't be reached, or one too old to know the route, is reported and the scan carries on with Airtable, unless `EHI_CORE_REQUIRED`. With `EHI_CORE_URL` empty the scan is Airtable's alone, as before.
+  - An Airtable batch table that isn't configured no longer ends the scan for that module: the core is still scanned.
+- **A batch can be run from ehi-core alone.** Every command takes its batch from whichever database holds it: Airtable is looked in first, because it holds today's batches, and a batch it does not hold is read from the core — its input files, its results and its status all handled there. Emptying a module's Airtable keys (`EHI_BASE`/`MAG_BASE`, its batch table and its batch code field) leaves the core as the only database looked at, which is how Airtable is switched off once a module has moved.
+  - New pipeline routes: `GET /api/pipeline/{table}/{code}/entries` gives what a batch works on — the raw read URLs of a preprocessing batch's libraries, one row per sample of each assembly of a binning batch, the assemblies of an AMR batch, the samples a dereplication batch maps — together with the batch's own row, since that is what the run is launched with. `POST /api/pipeline/assembly_batches/{code}/assemblies` sets which preprocessed samples each assembly was built from.
+  - The writers already read a record as `rec.get("fields", rec)`, so the core's rows go through them unchanged; `ehio.batches` says which key holds what for each database.
+  - Two things stay in Airtable and are read from there whichever database holds the batch: the reference genome table (a core batch names its genome by code, which the resolver already accepted) and the laboratory tables. A failure report needs an Airtable record to attach to, so a core batch keeps its result files on ERDA and the core keeps their URLs.
+
+### Changed
+
+- **An assembly names every preprocessing it was built from** (ehi-core migration `0009`). `assemblies.preprocessing_id` held one sample, which says everything about an individual assembly and nothing about a coassembly; Airtable keeps it the other way round, one row per sample carrying the assembly code it belongs to, which is how a binning run's sample sheet is written. The link is now a table of its own, `assembly_preprocessings`: one row for an individual assembly, one per sample for a coassembly. Existing links are carried over before the column goes, and the editor shows a sample count in its place. `ehio binning --input` tells the core the grouping it read from Airtable.
+
+- **`ehio set-status` and `ehio stop` work on a batch only ehi-core holds.** Both used to stop at "batch not found" when Airtable had no record, which would have left a core-only batch stuck at `Running` when its run failed — the exit trap of the launch script has nothing but `set-status` to report an error through. They now set the status in the core alone, and say so. A batch neither database holds is created in the core with the status, as every ehio write to the core is, and that is reported. A failure report still needs an Airtable record to attach to, so it is skipped with a message.
+
 ## [0.9.0] - 2026-09-18
 
 ### Added

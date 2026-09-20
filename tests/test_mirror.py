@@ -111,12 +111,14 @@ class TestPreprocessing:
 
 
 class TestAssemblies:
-    def test_an_assembly_links_its_batch_and_preprocessing(self):
+    def test_an_assembly_links_its_batch(self):
+        """The samples it is built from are a link of its own, set for the
+        whole batch at once, because a coassembly has several."""
         entry = {"id": "recA", "fields": {"fldEHA": "EHA00405", "fldPR": ["recPR1"]}}
         [unit] = mirror.assemblies("ABB0001", [entry], {"EHA00405": {"assembly_n50": 2100, "bins_number": 3}})
         _, row = only_row(unit)
         assert row["values"] == {"n50": 2100, "num_bins": 3}
-        assert row["defaults"] == {"batch_id": "ABB0001", "preprocessing_id": "recPR1"}
+        assert row["defaults"] == {"batch_id": "ABB0001"}
 
     def test_the_fasta_url_keeps_the_erda_name(self):
         [unit] = mirror.assembly_files("ABB0001", {"EHA00405": "EHA00405_contigs.fasta.gz"})

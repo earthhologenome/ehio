@@ -288,6 +288,19 @@ def preprocessings(
     return units
 
 
+def preprocessing_metrics(metrics: dict[str, dict]) -> list[Unit]:
+    """The QC metrics of each preprocessing, by its code.
+
+    What ``preprocessings`` writes for a batch read from Airtable, minus the
+    Airtable facts: a batch read from the core is already there, with its
+    libraries, so only what drakkar produced is left to write.
+    """
+    return [
+        [("preprocessings", [row(code, values=columns(found, PREPROCESSING_COLUMNS))])]
+        for code, found in metrics.items() if code
+    ]
+
+
 def preprocessing_files(batch_code: str, code_to_ehi: dict[str, str], uploaded: set[str]) -> list[Unit]:
     """The ERDA URLs of each preprocessing's reads and host BAM, for the files
     that reached PPR/{batch}."""
@@ -327,13 +340,20 @@ def assemblies(
         units.append([("assemblies", [row(
             code,
             values=columns((metrics or {}).get(code), ASSEMBLY_COLUMNS),
-            defaults={
-                "batch_id": batch_code,
-                "preprocessing_id": cell(fields, "EHI_ASB_ENTRY_PREPROCESSING"),
-            },
+            # Which samples an assembly is built from is a link of its own in
+            # the core, set for the whole batch at once (ehio.cli).
+            defaults={"batch_id": batch_code},
             airtable_id=entry.get("id"),
         )])])
     return units
+
+
+def assembly_metrics(metrics: dict[str, dict]) -> list[Unit]:
+    """The metrics of each assembly, by its code — the core's own batches."""
+    return [
+        [("assemblies", [row(code, values=columns(found, ASSEMBLY_COLUMNS))])]
+        for code, found in metrics.items() if code
+    ]
 
 
 def assembly_files(batch_code: str, files: dict[str, str]) -> list[Unit]:
@@ -376,14 +396,29 @@ def new_mags(batch_code: str, bins: Iterable[dict], uploaded: set[str]) -> list[
 # AMR
 # ---------------------------------------------------------------------------
 
+def _amr_values(
+    amr_code: str,
+    code: str,
+    stats: dict[str, dict] | None,
+    gene_calls: set[str] | None,
+) -> dict[str, Any]:
+    """One assembly's AMR metrics and the ERDA URLs of its gene calls
+    (file names under AMR/{batch}/genes)."""
+    values = {"amr_batch_id": amr_code, **columns((stats or {}).get(code), AMR_COLUMNS)}
+    for column, name in (("faa_url", f"{code}.faa.gz"), ("ffn_url", f"{code}.ffn.gz")):
+        if name in (gene_calls or set()):
+            values[column] = erda_url("AMR", amr_code, "genes", name)
+    return values
+
+
 def amr_assemblies(
     amr_code: str,
     records: Iterable[dict],
     stats: dict[str, dict] | None = None,
     gene_calls: set[str] | None = None,
 ) -> list[Unit]:
-    """The assemblies of an AMR batch: linked to it, with their AMR metrics
-    and the ERDA URLs of their gene calls (file names under AMR/{batch}/genes)."""
+    """The assemblies of an AMR batch as Airtable holds them: linked to the
+    batch, with their AMR metrics and gene calls."""
     code_key = "EHI_ASB_ENTRY_ASSEMBLY_CODE" if cfg.get("EHI_ASB_ENTRY_ASSEMBLY_CODE") else "EHI_ASB_ENTRY_CODE"
     units: list[Unit] = []
     for record in records:
@@ -391,17 +426,27 @@ def amr_assemblies(
         code = cell(fields, code_key)
         if not code:
             continue
-        values = {"amr_batch_id": amr_code, **columns((stats or {}).get(code), AMR_COLUMNS)}
-        for column, name in (("faa_url", f"{code}.faa.gz"), ("ffn_url", f"{code}.ffn.gz")):
-            if name in (gene_calls or set()):
-                values[column] = erda_url("AMR", amr_code, "genes", name)
         units.append([("assemblies", [row(
             code,
-            values=values,
+            values=_amr_values(amr_code, code, stats, gene_calls),
             defaults={"batch_id": cell(fields, "EHI_ASB_ENTRY_BATCH")},
             airtable_id=record.get("id"),
         )])])
     return units
+
+
+def amr_metrics(
+    amr_code: str,
+    codes: Iterable[str],
+    stats: dict[str, dict] | None = None,
+    gene_calls: set[str] | None = None,
+) -> list[Unit]:
+    """The same, by assembly code — the core's own batches, which already hold
+    the assemblies and which batch produced them."""
+    return [
+        [("assemblies", [row(code, values=_amr_values(amr_code, code, stats, gene_calls))])]
+        for code in codes if code
+    ]
 
 
 # ---------------------------------------------------------------------------
