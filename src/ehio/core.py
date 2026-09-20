@@ -170,7 +170,7 @@ class CoreClient:
         path = f"/{quote(table, safe='')}/{quote(batch, safe='')}/entries"
         return self._call("GET", path, f"read the entries of {batch}")
 
-    def link_assembly_preprocessings(
+    def link_assembly_samples(
         self, batch: str, assemblies: dict[str, list[str]]
     ) -> dict[str, Any]:
         """Set which preprocessed samples each assembly of a batch was built

@@ -157,7 +157,7 @@ files, its results and its status are all handled there:
 |---|---|
 | `preprocessing --input` | each library's raw read URLs, through the preprocessings of the batch |
 | `binning --input` | one row per sample of each assembly, with the reads preprocessing produced |
-| `quantifying --input` | the batch's MAGs, and the preprocessed samples it maps against them |
+| `quantifying --input` | the batch's MAGs, and the preprocessed samples queued in it |
 | `amr --input` | the assemblies the batch runs over, with their ERDA URLs |
 | `annotating` | the batch's MAGs and the annotation depth it asks for |
 | every `--output` | the same entries, to write the metrics and the file URLs back to |

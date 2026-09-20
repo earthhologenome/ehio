@@ -759,7 +759,7 @@ def _mirror_assembly_grouping(core, batch_code: str, batch) -> None:
         return
     core.mirror_call(
         f"The samples each assembly of '{batch_code}' is built from",
-        lambda client: client.link_assembly_preprocessings(batch_code, grouping),
+        lambda client: client.link_assembly_samples(batch_code, grouping),
     )
 
 
@@ -1256,10 +1256,11 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
     }
 
     if batch.from_core:
-        # The core numbers its own mappings and already links them to the
-        # batch, so only the rate each run measured is left to write.
+        # A core batch brings the samples queued in it, not mappings: the core
+        # numbers those itself, so no DM code is sent and only the rate each
+        # run measured is left to write.
         mappings = [
-            (entry.get("preprocessing_code"), entry.get("code"),
+            (entry.get("preprocessing_code"), None,
              all_metrics.get(str(entry.get(ppr_ehi_field) or ""), {}).get("mapping_rate"))
             for entry in ppr_records
         ]

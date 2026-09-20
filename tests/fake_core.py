@@ -44,7 +44,7 @@ class FakeCoreClient:
                 "row": found.get("row") or {"code": batch},
                 "entries": list(found.get("entries") or [])}
 
-    def link_assembly_preprocessings(self, batch: str, assemblies):
+    def link_assembly_samples(self, batch: str, assemblies):
         self.groupings.append((batch, {k: list(v) for k, v in assemblies.items()}))
         return {"batch": batch, "assemblies": len(assemblies),
                 "samples": sum(len(v) for v in assemblies.values())}
