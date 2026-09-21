@@ -9,6 +9,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.9.3] - 2026-09-21
+
+### Added
+
+- **ehio jobs take turns writing to ehi-core.** Several jobs can finish together on the cluster, and one of them may be bringing thousands of MAGs. Every write to the core now happens in a run: ehio asks the core for its turn (`POST /api/pipeline/runs`), names its run on each request (`X-Pipeline-Run`), reports how far it has got after each one, and lets go at the end, so jobs write one after another and staff see in the core's editor what is being written. A write of many records is one run, so no other job writes between its requests.
+  - A job that finds the core busy says what is being written, waits and asks again, and says so when its turn comes. `EHI_CORE_WAIT_MINUTES` (120 by default) is how long it waits at the most; after that the write fails like any other, under `EHI_CORE_REQUIRED`'s rules.
+  - A run that lost the core by going quiet waits for a new turn at its next write. A progress report or a let-go that fails does not fail the batch: the core lets go of a silent run within 10 minutes.
+  - A core too old to take turns is written to as before.
+
 ## [0.9.2] - 2026-09-21
 
 ### Fixed
