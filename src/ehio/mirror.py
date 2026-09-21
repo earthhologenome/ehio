@@ -95,8 +95,13 @@ ASSEMBLY_COLUMNS = {
     "assembly_l50":             "l50",
     "assembly_contigs_number":  "num_contigs",
     "assembly_contigs_largest": "largest_contig",
-    "assembly_mapping_rate":    "assembly_mapping_percent",
     "bins_number":              "num_bins",
+}
+
+# What drakkar measures of each sample of an assembly, which the core keeps on
+# that sample rather than on the assembly, since a coassembly has several.
+ASSEMBLY_SAMPLE_COLUMNS = {
+    "assembly_mapping_rate": "mapping_percent",
 }
 
 AMR_COLUMNS = {
@@ -354,6 +359,25 @@ def assembly_metrics(metrics: dict[str, dict]) -> list[Unit]:
         [("assemblies", [row(code, values=columns(found, ASSEMBLY_COLUMNS))])]
         for code, found in metrics.items() if code
     ]
+
+
+def assembly_samples(samples: Iterable[tuple[str | None, str | None, dict]]) -> list[Unit]:
+    """What drakkar measured of each sample of an assembly, on the sample's row:
+    (assembly code, preprocessing code or Airtable record id, metrics).
+
+    The core only updates these rows, because which samples an assembly holds is
+    set for the whole batch at once (CoreClient.link_assembly_samples); a sample
+    whose preprocessing is not known is left out.
+    """
+    units: list[Unit] = []
+    for assembly, preprocessing, metrics in samples:
+        values = columns(metrics, ASSEMBLY_SAMPLE_COLUMNS)
+        if assembly and preprocessing and values:
+            units.append([("assembly_samples", [row(
+                key={"assembly_id": assembly, "preprocessing_id": preprocessing},
+                values=values,
+            )])])
+    return units
 
 
 def assembly_files(batch_code: str, files: dict[str, str]) -> list[Unit]:

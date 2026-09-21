@@ -872,6 +872,9 @@ def _run_binning_output(args: argparse.Namespace) -> int:
 
     all_metrics: dict[str, dict] = {}
     metrics_by_entry: dict[str, dict] = {}
+    # (assembly, preprocessing, metrics) of each sample: its mapping rate is
+    # kept on the sample in the core, not on the assembly.
+    sample_metrics: list[tuple[str, str | None, dict]] = []
     updates: list[dict] = []
     for entry in entries:
         fields = entry.get("fields", entry)
@@ -894,6 +897,9 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         }
         all_metrics[ehi_number] = metrics
         metrics_by_entry[entry_code] = metrics
+        preprocessing = (fields.get("preprocessing_code") if batch.from_core
+                         else mirror.cell(fields, "EHI_ASB_ENTRY_PREPROCESSING"))
+        sample_metrics.append((assembly_code, preprocessing, metrics))
         if field_map:
             payload = build_entry_update(entry["id"], metrics, field_map)
             if payload["fields"]:
@@ -918,6 +924,12 @@ def _run_binning_output(args: argparse.Namespace) -> int:
             *mirror.assemblies(args.batch, entries, metrics_by_entry),
         ]
     ))
+    if not batch.from_core:
+        # A batch launched before the core was told its grouping gets it now,
+        # so that each sample has a row for its mapping rate to land on.
+        _mirror_assembly_grouping(core, args.batch, batch)
+    core.mirror(f"Sample mapping rates of batch '{args.batch}'",
+                mirror.assembly_samples(sample_metrics))
 
     host     = _conf(args, "host",     "SFTP_HOST",     required=True)
     user     = _conf(args, "user",     "SFTP_USER",     required=True)

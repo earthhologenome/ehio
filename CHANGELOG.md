@@ -5,9 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
+### Fixed
 
-- No unreleased changes yet.
+- **`ehio binning --output` writes an assembly's metrics to ehi-core again.** Each sample's mapping rate was sent as a column of the assembly, `assembly_mapping_percent`, which the core no longer has: it keeps the rate on the assembly's sample (`assembly_samples.mapping_percent`), since a coassembly has one per sample. The core refused the whole row, so the assembly's length, N50, contigs and bins did not reach it either (`Assemblies has no writable column assembly_mapping_percent`). The assembly now gets its metrics without the rate, and each sample's rate goes to its own row, found by assembly and preprocessing, in a write of its own. A batch the core holds names each sample's preprocessing itself. An Airtable batch names it through `EHI_ASB_ENTRY_PREPROCESSING`, which also re-sends the batch's grouping first, so a batch launched before the core knew its samples has a row for each rate. With that key empty, the rates stay in Airtable only. This needs the ehi-core release that lets the pipeline update `assembly_samples` and accepts an Airtable record id in a grouping.
 
 ## [0.9.1] - 2026-09-20
 

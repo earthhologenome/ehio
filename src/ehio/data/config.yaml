@@ -260,8 +260,9 @@ EHI_CORE_REQUIRED: "false"
 # formulas; the core stores them, so ehio writes them from this.
 ERDA_SHARE_BASE: "https://sid.erda.dk/share_redirect/BaMZodj9sA"
 # Link field in EHI_ASB_ENTRY pointing at the preprocessed sample
-# (PreprocessedSample). Lets ehio link an assembly the core does not hold yet to
-# its preprocessing; leave empty to skip that link.
+# (PreprocessedSample). Lets ehio tell the core which preprocessed samples each
+# assembly is built from, and put each sample's mapping rate on it; leave empty
+# to skip both (the rates then stay in Airtable only).
 EHI_ASB_ENTRY_PREPROCESSING: ""
 
 # ---- SFTP settings --------------------------------------------------------

@@ -146,12 +146,67 @@ class TestBinningOutput:
             for row in rows
         )
 
+    def test_each_samples_mapping_rate_goes_to_its_sample_not_its_assembly(self, cataloging, binning_airtable):
+        """The core keeps the rate on the assembly's sample, found by assembly and
+        preprocessing, since a coassembly has one per sample."""
+        (cataloging / "cataloging.tsv").write_text(
+            "assembly\tassembly_length\tmapping_rate_percent\tsample_mapping_rates\n"
+            "EHA00405\t123456\t80.0\tEHI00001:87.5\n"
+        )
+        entry = binning_airtable.fetch_batch_and_entries.return_value[1][0]
+        entry["fields"].update({"fldEHI": "EHI00001", "fldPR": ["recPR1"]})
+        config = {**BINNING_CFG, "EHI_ASB_ENTRY_EHI_NUMBER": "fldEHI", "EHI_ASB_ENTRY_PREPROCESSING": "fldPR",
+                  "EHI_ASB_ENTRY_ASSEMBLY_CODE": "fldEHA"}
+        fake = FakeCoreClient()
+        patches = [*_patched(config, binning_airtable), _sftp(), using(fake)]
+        assert _run(patches, lambda: cli._run_binning_output(_binning_args(cataloging))) == 0
+
+        assert fake.rows("assemblies")[0]["values"] == {"assembly_length": 123456}
+        assert fake.rows("assembly_samples") == [{
+            "key": {"assembly_id": "EHA00405", "preprocessing_id": "recPR1"},
+            "values": {"mapping_percent": 87.5}, "defaults": {},
+        }]
+        # Sent again, so a batch launched before the core knew it has its sample rows.
+        assert fake.groupings == [("ABB0700", {"EHA00405": ["recPR1"]})]
+
+    def test_a_sample_whose_preprocessing_is_not_known_gets_no_rate(self, cataloging, binning_airtable):
+        (cataloging / "cataloging.tsv").write_text(
+            "assembly\tassembly_length\tsample_mapping_rates\nEHA00405\t123456\tEHA00405:87.5\n"
+        )
+        fake = FakeCoreClient()
+        assert self._run(cataloging, binning_airtable, fake) == 0
+        assert fake.rows("assembly_samples") == []
+        assert fake.groupings == []
+
     def test_the_batch_is_done_in_the_core_too(self, cataloging, binning_airtable):
         fake = FakeCoreClient()
         self._run(cataloging, binning_airtable, fake)
         done = fake.rows("assembly_batches")[-1]
         assert done["values"] == {"status": "Done", "ehio_version": cli.__version__, "drakkar_version": "2.5.0"}
         assert done["airtable_record_id"] == "recABB"
+
+    def test_a_core_batch_writes_each_samples_rate_by_its_preprocessing(self, cataloging):
+        (cataloging / "cataloging.tsv").write_text(
+            "assembly\tassembly_length\tsample_mapping_rates\n"
+            "EHA00405\t123456\tEHI00011:61.0;EHI00012:34.5\n"
+        )
+        airtable = MagicMock()
+        airtable.fetch_batch_and_entries.return_value = (None, [])
+        fake = FakeCoreClient(batches={"ABB0700": {"row": {"code": "ABB0700"}, "entries": [
+            {"assembly_code": "EHA00405", "preprocessing_code": "PR00021", "hologenome_code": "EHI00011"},
+            {"assembly_code": "EHA00405", "preprocessing_code": "PR00022", "hologenome_code": "EHI00012"},
+        ]}})
+        assert self._run(cataloging, airtable, fake) == 0
+
+        [assembly] = [row for row in fake.rows("assemblies") if "assembly_length" in row["values"]]
+        assert assembly["key"] == {"code": "EHA00405"}
+        assert assembly["values"] == {"assembly_length": 123456}
+        assert [(row["key"]["preprocessing_id"], row["values"]) for row in fake.rows("assembly_samples")] == [
+            ("PR00021", {"mapping_percent": 61.0}),
+            ("PR00022", {"mapping_percent": 34.5}),
+        ]
+        # The core set its own grouping: nothing is regrouped from here.
+        assert fake.groupings == []
 
     def test_a_core_failure_on_the_mags_fails_the_batch(self, cataloging, binning_airtable):
         from ehio.core import CoreError
