@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -745,6 +747,13 @@ class FakeCore:
     url = "https://core.test/api"
 
     def ping(self):
+        pass
+
+    @contextmanager
+    def run(self, label, total=None):
+        yield
+
+    def progress(self, done):
         pass
 
     def pending_batches(self, table, statuses):

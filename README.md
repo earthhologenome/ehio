@@ -196,6 +196,21 @@ What happens when the core can't be reached:
   Airtable doesn't.
 - `EHI_CORE_URL: ""` switches the core off, and ehio behaves as it did before.
 
+ehio jobs write to the core one at a time. Each write takes the core first,
+reports its progress as it goes (the core's editor shows staff what is being
+written), and lets go at the end. A job that finishes while another is writing
+says so, waits for its turn, and then writes:
+
+```
+ehi-core is busy: ehio is already writing MAGs of batch 'DMB0042' to the core (1,250 of 3,214 records, since 12:03 UTC); wait for it to finish. Waiting for it before writing status of batch 'PRB0003' (up to 120 min)...
+ehi-core is free: writing status of batch 'PRB0003'.
+```
+
+`EHI_CORE_WAIT_MINUTES` (120 by default) is how long a job waits at the most.
+After that the write counts as a failed one, under the rules above. A job that
+dies mid-write holds the core for 10 minutes at most. A core too old to take
+turns is written to as before.
+
 ---
 
 ## Airtable database structure

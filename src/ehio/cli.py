@@ -113,7 +113,7 @@ def _core(args: argparse.Namespace, *, holds: bool = False):
     core holds (the MAGs): then it stops the command instead of letting it run
     on part of its data.
     """
-    from ehio.core import TOKEN_HINT, CoreClient, CoreError, CoreSession, verify
+    from ehio.core import TOKEN_HINT, WAIT_MINUTES, CoreClient, CoreError, CoreSession, verify
 
     url = str(cfg.get("EHI_CORE_URL") or "").strip()
     if not url:
@@ -126,7 +126,12 @@ def _core(args: argparse.Namespace, *, holds: bool = False):
             _die(message)
         _warn(f"{message} Running on Airtable alone.")
         return CoreSession()
-    client = CoreClient(url, token)
+    try:
+        wait_minutes = float(cfg.get("EHI_CORE_WAIT_MINUTES") or WAIT_MINUTES)
+    except (TypeError, ValueError):
+        _warn(f"EHI_CORE_WAIT_MINUTES is not a number; waiting up to {WAIT_MINUTES:.0f} min for ehi-core.")
+        wait_minutes = WAIT_MINUTES
+    client = CoreClient(url, token, wait_minutes=wait_minutes)
     try:
         verify(client, token)
     except CoreError as exc:
@@ -296,7 +301,8 @@ def _dmb_mags(client, core, batch_record: dict | None, batch: str) -> list[dict]
             _die(f"Could not fetch any MAG records for batch '{batch}'.")
         return [mirror.mag_from_airtable(rec) for rec in records]
 
-    core.write([mirror.batch("quantifying", batch, batch_record), *mirror.airtable_mags(records)])
+    core.write([mirror.batch("quantifying", batch, batch_record), *mirror.airtable_mags(records)],
+               f"MAGs of batch '{batch}'")
     if records:
         core.client.link_batch_mags(batch, [rec["id"] for rec in records])
     mags = core.client.batch_mags(batch)
@@ -1056,7 +1062,8 @@ def _run_binning_output(args: argparse.Namespace) -> int:
         # is there.  The core is their only home, so failing here fails the batch.
         if core:
             _info(f"Recording {len(bins_data)} MAG(s) in ehi-core...")
-            results = core.write(mirror.new_mags(args.batch, bins_data, uploaded_mags))
+            results = core.write(mirror.new_mags(args.batch, bins_data, uploaded_mags),
+                                 f"new MAGs of batch '{args.batch}'")
             created = sum(1 for r in results if r["action"] == "created")
             _info(f"{created} new MAG(s) recorded in ehi-core, "
                   f"{len(results) - created} already there.")
@@ -1834,7 +1841,7 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         _info("No annotation metrics found to update.")
     if core_units:
         _info(f"Updating {len(core_units)} MAG(s) in ehi-core...")
-        core.write(core_units)
+        core.write(core_units, f"MAG annotations of batch '{args.batch}'")
 
     host        = _conf(args, "host",       "SFTP_HOST",        required=True)
     user        = _conf(args, "user",       "SFTP_USER",        required=True)
@@ -2961,7 +2968,7 @@ def cmd_set_status(args: argparse.Namespace) -> int:
     # Mirrored only while Airtable holds the batch too: for one the core alone
     # holds, a status that did not reach the core was not set at all.
     results = (core.mirror(f"Status of batch '{args.batch}'", units) if batch_record
-               else core.write(units))
+               else core.write(units, f"Status of batch '{args.batch}'"))
     if not batch_record and any(r.get("action") == "created" for r in results):
         _warn(f"ehi-core held no batch '{args.batch}' either; it was created with this status.")
     _info(f"Batch '{args.batch}' status → '{args.status}'.")

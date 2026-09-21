@@ -256,6 +256,10 @@ EHI_CORE_URL: "https://ehi-core-backend-874005116816.europe-west1.run.app"
 # the batch carries on. Set to "true" to fail the batch instead (and to require
 # the token). Commands working on MAGs always stop when the core fails.
 EHI_CORE_REQUIRED: "false"
+# ehio jobs write to the core one at a time, so a job finishing while another
+# is writing (a batch of thousands of MAGs takes minutes) waits for its turn.
+# This is how long it waits at the most before giving up on the write.
+EHI_CORE_WAIT_MINUTES: "120"
 # Public address of SFTP_REMOTE_BASE on ERDA. Airtable builds file URLs with
 # formulas; the core stores them, so ehio writes them from this.
 ERDA_SHARE_BASE: "https://sid.erda.dk/share_redirect/BaMZodj9sA"

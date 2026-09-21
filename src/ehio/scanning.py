@@ -841,7 +841,8 @@ class CoreBatches:
         # the core is not one the next scan sees, whoever else holds the batch.
         from ehio import mirror
 
-        self.core.write([mirror.batch(self.module, batch.code, batch.record, status=status)])
+        self.core.write([mirror.batch(self.module, batch.code, batch.record, status=status)],
+                        f"Status of batch '{batch.code}'")
 
 
 def _sources(module: str, token: str, core=None, verbose: bool = False) -> list:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import patch
 
@@ -23,9 +24,20 @@ class FakeCoreClient:
         # {batch code: {"row": {...}, "entries": [...]}}, as the core answers.
         self.batches = dict(batches or {})
         self.groupings: list[tuple] = []
+        # (label, total) of every run written in, and each progress report.
+        self.runs: list[tuple] = []
+        self.reports: list[int] = []
 
     def ping(self) -> None:
         pass
+
+    @contextmanager
+    def run(self, label: str, total: int | None = None):
+        self.runs.append((label, total))
+        yield
+
+    def progress(self, done: int) -> None:
+        self.reports.append(done)
 
     def upsert(self, changes):
         self.upserts.append(changes)
