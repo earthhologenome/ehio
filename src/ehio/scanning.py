@@ -13,6 +13,7 @@ from typing import Any
 
 from ehio import config as cfg
 from ehio.airtable import AirtableClient, AirtableError
+from ehio.core import CoreError
 from ehio.drakkar import LOGGING_DIRNAME, normalise_assembly_type
 
 # Marker file written by 'ehio stop' in the run directory of a batch.
@@ -835,12 +836,12 @@ class CoreBatches:
         return found
 
     def set_status(self, batch: PendingBatch, status: str) -> None:
+        # Written outright rather than mirrored: the scan reads the core's
+        # status and takes it over Airtable's, so a status that did not reach
+        # the core is not one the next scan sees, whoever else holds the batch.
         from ehio import mirror
 
-        self.core.mirror(
-            f"Status of batch '{batch.code}'",
-            [mirror.batch(self.module, batch.code, batch.record, status=status)],
-        )
+        self.core.write([mirror.batch(self.module, batch.code, batch.record, status=status)])
 
 
 def _sources(module: str, token: str, core=None, verbose: bool = False) -> list:
@@ -904,7 +905,8 @@ def _set_status(
 
     A failure is reported and the scan carries on, except under `strict`: a
     batch whose screen session is already running must not be left looking
-    unlaunched, or the next pass would launch it again.
+    unlaunched, or the next pass would launch it again.  That holds in the
+    core as much as in Airtable, since the scan reads both.
     """
     if dry_run:
         print(f"  [{module}] {batch.code}: dry-run — status not set to '{status}'", file=sys.stderr)
@@ -916,12 +918,12 @@ def _set_status(
         try:
             source.set_status(batch, status)
             written = True
-        except AirtableError as exc:
+        except (AirtableError, CoreError) as exc:
             if strict:
-                raise AirtableError(
+                raise type(exc)(
                     f"{exc}\n  The screen session for {batch.code} was launched, but its "
-                    f"status in {source.table} could not be set to '{status}'. "
-                    f"Fix the token permissions and set the status manually."
+                    f"status in {source.name} ({source.table}) could not be set to "
+                    f"'{status}'. Fix the cause above and set the status manually."
                 ) from exc
             print(
                 f"  [{module}] {batch.code}: WARNING — could not set the status to "

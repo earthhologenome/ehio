@@ -5,8 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- No unreleased changes yet.
+
+## [0.9.2] - 2026-09-21
+
 ### Fixed
 
+- **A status that did not reach ehi-core is no longer reported as set.** The scan wrote the status of a launched batch to the core the way it mirrors Airtable's facts, so a refused or failed write was only a warning saying "Airtable has it" — even for a batch only the core holds — and the scan still printed `status → 'Running'`. The batch ran while its record kept saying `Resume`. The scan now writes the status to the core outright, as it does to Airtable: a batch it has just launched whose status the core will not take stops the scan with the core's reason and a request to set the status by hand, and any other status the core refuses is reported as not set. `ehio set-status` does the same for a batch only the core holds, which is where a failed run's exit trap reports its error.
 - **`ehio binning --output` writes an assembly's metrics to ehi-core again.** Each sample's mapping rate was sent as a column of the assembly, `assembly_mapping_percent`, which the core no longer has: it keeps the rate on the assembly's sample (`assembly_samples.mapping_percent`), since a coassembly has one per sample. The core refused the whole row, so the assembly's length, N50, contigs and bins did not reach it either (`Assemblies has no writable column assembly_mapping_percent`). The assembly now gets its metrics without the rate, and each sample's rate goes to its own row, found by assembly and preprocessing, in a write of its own. A batch the core holds names each sample's preprocessing itself. An Airtable batch names it through `EHI_ASB_ENTRY_PREPROCESSING`, which also re-sends the batch's grouping first, so a batch launched before the core knew its samples has a row for each rate. With that key empty, the rates stay in Airtable only. This needs the ehi-core release that lets the pipeline update `assembly_samples` and accepts an Airtable record id in a grouping.
 
 ## [0.9.1] - 2026-09-20

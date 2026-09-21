@@ -336,6 +336,23 @@ class TestStatus:
         [row] = fake.rows("preprocessing_batches")
         assert (row["key"], row["values"]) == ({"code": "PRB0500"}, {"status": "Error"})
 
+    def test_a_batch_only_the_core_holds_is_not_reported_set_when_the_core_refuses(self, capsys):
+        from ehio.core import CoreError
+
+        airtable = MagicMock()
+        airtable.fetch_batch_record.return_value = None
+        fake = FakeCoreClient()
+        fake.upsert = MagicMock(side_effect=CoreError("ehi-core is down"))
+        args = argparse.Namespace(
+            module="binning", batch="ABB0729", status="Error",
+            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
+        )
+        patches = [*_patched({}, airtable), using(fake)]
+        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
+        with pytest.raises(CoreError):
+            _run(patches, lambda: cli.cmd_set_status(args))
+        assert "status →" not in capsys.readouterr().err
+
     def test_a_batch_neither_database_holds_is_reported(self, capsys):
         airtable = MagicMock()
         airtable.fetch_batch_record.return_value = None

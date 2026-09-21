@@ -736,9 +736,10 @@ class FakeAirtable:
 class FakeCore:
     """ehio.core.CoreClient as the scan uses it."""
 
-    def __init__(self, rows=(), error=None):
+    def __init__(self, rows=(), error=None, fail_upsert=None):
         self.rows = list(rows)
         self.error = error
+        self.fail_upsert = fail_upsert
         self.upserts = []
 
     url = "https://core.test/api"
@@ -753,6 +754,8 @@ class FakeCore:
         return [r for r in self.rows if str(r.get("status", "")).lower() in wanted]
 
     def upsert(self, changes):
+        if self.fail_upsert:
+            raise self.fail_upsert
         self.upserts.append(changes)
         return [{"table": t, "code": row["key"].get("code"), "action": "updated"}
                 for t, rows in changes for row in rows]
@@ -952,6 +955,26 @@ class TestSetStatus:
         batch = PendingBatch("PPR001", "", "Ready", record=airtable_batch())
         _set_status("preprocessing", batch, "Error", sources)
         assert "could not set the status to 'Error' in Airtable" in capsys.readouterr().err
+
+    def test_a_launched_batch_the_core_will_not_take_the_status_of_stops_the_scan(self, monkeypatch, capsys):
+        core = FakeCore(fail_upsert=CoreError("ehi-core request failed with HTTP 500"))
+        sources, _ = self._sources(monkeypatch, core=core)
+        batch = PendingBatch("ABB0729", "resume", "Resume", row={"code": "ABB0729"})
+        with pytest.raises(CoreError) as exc:
+            _set_status("binning", batch, "Running", sources, strict=True)
+        assert "HTTP 500" in str(exc.value)
+        assert "was launched, but its status in ehi-core" in str(exc.value)
+        assert "status →" not in capsys.readouterr().err
+
+    def test_a_status_the_core_will_not_take_is_not_reported_as_set(self, monkeypatch, capsys):
+        core = FakeCore(fail_upsert=CoreError("ehi-core request failed with HTTP 500"))
+        sources, _ = self._sources(monkeypatch, core=core)
+        batch = PendingBatch("PPR001", "", "Ready", row={"code": "PPR001"})
+        _set_status("preprocessing", batch, "Error", sources)
+        err = capsys.readouterr().err
+        assert "could not set the status to 'Error' in ehi-core" in err
+        assert "Airtable has it" not in err
+        assert "status →" not in err
 
 
 # --- the scan end to end ----------------------------------------------------------

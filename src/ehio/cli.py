@@ -2957,9 +2957,11 @@ def cmd_set_status(args: argparse.Namespace) -> int:
             batch_table,
             [{"id": batch_record["id"], "fields": {status_field: args.status}}],
         )
-    results = core.mirror(f"Status of batch '{args.batch}'", [
-        mirror.batch(args.module, args.batch, batch_record, status=args.status),
-    ])
+    units = [mirror.batch(args.module, args.batch, batch_record, status=args.status)]
+    # Mirrored only while Airtable holds the batch too: for one the core alone
+    # holds, a status that did not reach the core was not set at all.
+    results = (core.mirror(f"Status of batch '{args.batch}'", units) if batch_record
+               else core.write(units))
     if not batch_record and any(r.get("action") == "created" for r in results):
         _warn(f"ehi-core held no batch '{args.batch}' either; it was created with this status.")
     _info(f"Batch '{args.batch}' status → '{args.status}'.")
