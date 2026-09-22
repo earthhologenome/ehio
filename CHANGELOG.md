@@ -9,6 +9,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.10.0] - 2026-09-22
+
+### Added
+
+- **`ehio ena` deposits the hologenomes of an ENA submission in the European Nucleotide Archive.** It takes over from the Snakemake ENA upload of EHI_bioinformatics (`5_ena_upload.snakefile`), reading everything from ehi-core instead of Airtable. An ENA submission (`EHS…`) lives in ehi-core alone: staff name its ENA study and paste its hologenomes into it, and for each hologenome still without a run accession ehio downloads the raw reads, registers a sample, an experiment and a run with ena-upload-cli, and writes the four accessions onto the hologenome (and a new ENA sample's onto its sample) in the core as soon as ENA holds them. The submission ends Done, or Error with a Log naming each hologenome ENA did not take and why. Needs the ehi-core release that adds ENA submissions and the copy of the laboratory's samples.
+  - **One ENA sample per lab sample.** A later library of a sample ENA already knows is added to that sample instead of registering it again, and the sample's alias is looked up at ENA from its accession, since ena-upload-cli refers to existing objects by alias and the earlier pipelines used different ones. The earlier pipeline registered one ENA sample per EHI number.
+  - What ENA is told about each sample is read from the sample the hologenome links to in ehi-core, the core's copy of the laboratory's Samples table (`ENA_SAMPLE_FIELDS` maps checklist columns to its columns), and checked against checklist ERC000013's mandatory fields before anything is downloaded. `project name` is the submission's study, as before. The host's life stage now reaches ENA as `host life stage`; the earlier pipeline sent it as `host lifestage`, which the checklist template dropped. The laboratory's table puts the host's species where ENA wants the sample's scientific name, so none is sent and ENA's taxonomy names it from the taxon id (feces metagenome).
+  - A submission can be launched again at any time: deposited hologenomes are skipped, and an experiment or run ENA says it already holds (from a run that stopped before writing back) is taken with the accession ENA names. The ENA accessions are read by alias from ENA's receipt, not by column position.
+  - `--dry-run` writes the tables without sending anything, and `--test` submits to ENA's test server and keeps no accession. The Webin account comes from `ENA_USERNAME`/`ENA_PASSWORD` or `ENA_SECRET_FILE`, never the config.
+  - `ehio scanning` launches ENA submissions set Ready in ehi-core, and `ehio set-status`, `stop`, `jobs` and `remove` take `-m ena`.
+- `ena-upload-cli` (0.10.2 or later) is a dependency of ehio. It pins pytest 7.4 among its own requirements, so the `dev` extra now takes pytest 7.4 or later.
 ## [0.9.3] - 2026-09-21
 
 ### Added
