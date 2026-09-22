@@ -2484,6 +2484,169 @@ def _run_amr_output(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# ena
+# ---------------------------------------------------------------------------
+
+def _ena_settings(args: argparse.Namespace, batch: str):
+    """How the submission is run: the config, with the command line over it."""
+    from ehio import ena
+
+    def text(key: str, default: str) -> str:
+        return str(cfg.get(key) or "").strip() or default
+
+    try:
+        parallel = int(args.parallel or text("ENA_PARALLEL_UPLOADS", "1"))
+    except ValueError:
+        _die("ENA_PARALLEL_UPLOADS is not a whole number (ehio config --edit).")
+    fields = cfg.get("ENA_SAMPLE_FIELDS") or ena.DEFAULT_SAMPLE_FIELDS
+    if not isinstance(fields, dict):
+        _die("ENA_SAMPLE_FIELDS must map each checklist column to a column of the samples in ehi-core.")
+    work_dir = args.work_dir or str(Path(_require_cfg("ENA_OUTPUT_BASE")) / batch)
+    return ena.Settings(
+        work_dir=Path(work_dir).expanduser().resolve(),
+        center=text("ENA_CENTER", ena.DEFAULT_CENTER),
+        checklist=text("ENA_CHECKLIST", ena.DEFAULT_CHECKLIST),
+        test=args.test,
+        keep_reads=args.keep_reads or _flag_cfg("ENA_KEEP_READS"),
+        parallel=max(1, parallel),
+        timeout=args.download_timeout,
+        library={
+            "library_strategy":  text("ENA_LIBRARY_STRATEGY", ena.DEFAULT_LIBRARY["library_strategy"]),
+            "library_selection": text("ENA_LIBRARY_SELECTION", ena.DEFAULT_LIBRARY["library_selection"]),
+            "library_layout":    text("ENA_LIBRARY_LAYOUT", ena.DEFAULT_LIBRARY["library_layout"]),
+            "insert_size":       text("ENA_INSERT_SIZE", ena.DEFAULT_LIBRARY["insert_size"]),
+        },
+        sample_fields={str(column): str(field) for column, field in fields.items()},
+    )
+
+
+def _ena_log(batch: str, study: str, plan, outcome, unrecorded: list[str], test: bool) -> str:
+    """What a submission did, for the Log of its row in ehi-core."""
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [f"{stamp}, ehio {__version__}: {batch} under {study}"
+             + (" — TEST on ENA's test server; nothing was deposited or kept." if test else ".")]
+    lines.append(f"Deposited {len(outcome.deposited)} hologenome(s)"
+                 + (": " + ", ".join(f"{d.code} ({d.run})" for d in outcome.deposited) if outcome.deposited else "."))
+    if plan.skipped:
+        lines.append(f"Already deposited: {len(plan.skipped)}.")
+    failed = plan.problems + outcome.failed + unrecorded
+    if failed:
+        lines.append(f"Not deposited: {len(failed)}.")
+        lines += [f"  {line}" for line in failed]
+    return "\n".join(lines)
+
+
+def cmd_ena(args: argparse.Namespace) -> int:
+    """Deposit the hologenomes of an ENA submission in ENA.
+
+    The submission lives in ehi-core alone. Each hologenome still without a
+    run accession gets an ENA sample (or joins the one its lab sample has), an
+    experiment and a run, and its accessions are written onto it in the core
+    as soon as ENA holds them.
+    """
+    from datetime import date
+
+    from ehio import ena
+    from ehio.core import CoreError
+
+    core = _core_only(args)
+    _info(f"Looking up ENA submission '{args.batch}' in ehi-core...")
+    try:
+        found = core.client.batch_entries("ena_submissions", args.batch)
+    except CoreError as exc:
+        if exc.status == 404:
+            _die(f"ehi-core holds no ENA submission '{args.batch}' ({exc.detail}).")
+        raise
+    batch   = found.get("batch") or args.batch
+    row     = found.get("row") or {}
+    entries = found.get("entries") or []
+    study   = str(row.get("study_accession") or "").strip()
+    if not entries:
+        _die(f"ENA submission '{batch}' holds no hologenomes: add them to it in ehi-core.")
+    if not study:
+        _die(f"ENA submission '{batch}' names no ENA study: fill in its ENA study (PRJEB…) in ehi-core.")
+
+    settings = _ena_settings(args, batch)
+    try:
+        creds = ena.credentials(str(cfg.get("ENA_SECRET_FILE") or "").strip())
+    except ena.EnaError as exc:
+        _die(str(exc))
+    if creds is None and not args.dry_run:
+        _die("No Webin account to submit with: export ENA_USERNAME and ENA_PASSWORD, "
+             "or point ENA_SECRET_FILE at a file holding them (ehio config --edit).")
+    if settings.test:
+        _info("Submitting to ENA's TEST server: nothing is deposited, and no accession is kept.")
+
+    aliases = ena.Aliases(creds, settings.server)
+    try:
+        study_alias = aliases.of(study, "studies")
+    except ena.EnaError as exc:
+        _die(f"ENA study {study}: {exc}")
+
+    plan = ena.plan(entries, study=study, study_alias=study_alias, settings=settings, aliases=aliases)
+    new_samples = sum(1 for sample in plan.samples if sample.accession is None)
+    _info(f"{plan.hologenomes} hologenome(s) to deposit under {study}, of {len(plan.samples)} lab "
+          f"sample(s), {new_samples} of them new to ENA; {len(plan.skipped)} already deposited.")
+    if args.verbose:
+        for line in plan.skipped:
+            _info(f"  {line}")
+    for line in plan.problems:
+        _warn(line)
+
+    if args.dry_run:
+        written = ena.write_draft(plan, settings)
+        _info(f"Dry run: {len(written)} table(s) written to {settings.work_dir}. "
+              f"Nothing was downloaded, sent to ENA or written to ehi-core.")
+        return 1 if plan.problems else 0
+
+    unrecorded: list[str] = []
+
+    def keep(done) -> None:
+        # Called one hologenome at a time. A write the core refuses must not
+        # stop the others: ENA holds the hologenome, the local record below
+        # keeps its accessions, and a later run takes them from ENA again.
+        if settings.test:
+            return
+        try:
+            core.write([[
+                # The lab sample's ENA sample, which its later libraries join.
+                ("samples", [mirror.row(done.sample_code, values={"ena_sample_accession": done.sample})]),
+                ("hologenomes", [mirror.row(done.code, values={
+                    "ena_study_accession":      study,
+                    "ena_sample_accession":     done.sample,
+                    "ena_experiment_accession": done.experiment,
+                    "ena_run_accession":        done.run,
+                })]),
+            ]], f"ENA accessions of hologenome '{done.code}'")
+        except CoreError as exc:
+            _warn(f"{done.code} is deposited at ENA, but its accessions did not reach ehi-core: {exc}")
+            unrecorded.append(f"{done.code}: deposited as {done.run}, but not written to ehi-core ({exc})")
+
+    outcome = ena.deposit_all(plan, settings, creds, on_deposit=keep, note=_info)
+    if outcome.deposited:
+        record = ena.write_accessions(settings.work_dir / f"{batch}_accessions.tsv", outcome.deposited)
+        _info(f"Accessions of the {len(outcome.deposited)} hologenome(s) deposited also kept in {record}.")
+
+    failed  = len(plan.problems) + len(outcome.failed) + len(unrecorded)
+    log     = _ena_log(batch, study, plan, outcome, unrecorded, settings.test)
+    status  = str(cfg.get("PROCESSING_ERROR_STATUS" if failed else "PROCESSING_DONE_STATUS")
+                  or ("Error" if failed else "Done")).strip()
+    values: dict = {"log": log}
+    if not settings.test:
+        values.update(status=status, ehio_version=__version__)
+    core.write([[("ena_submissions", [mirror.row(batch, values=values,
+                                                  defaults={"run_on": date.today().isoformat()})])]],
+               f"Batch '{batch}'")
+    if failed:
+        _warn(f"{failed} hologenome(s) of '{batch}' were not deposited; see its Log in ehi-core.")
+    if not settings.test:
+        _info(f"Batch '{batch}' status → '{status}'.")
+    return 1 if failed else 0
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -2696,6 +2859,47 @@ def _build_parser() -> argparse.ArgumentParser:
     p_amr.set_defaults(func=cmd_amr)
 
     # ------------------------------------------------------------------
+    # ena
+    # ------------------------------------------------------------------
+    p_ena = sub.add_parser(
+        "ena",
+        help="Deposit the hologenomes of an ENA submission in the European Nucleotide Archive.",
+        description=(
+            "Reads an ENA submission (EHS…) from ehi-core and, for each of its\n"
+            "hologenomes without a run accession yet, downloads the raw reads\n"
+            "from ERDA and registers a sample (or joins the one its lab sample\n"
+            "already has), an experiment and a run at ENA with ena-upload-cli,\n"
+            "under the ENA study named on the submission. The accessions are\n"
+            "written onto the hologenomes in ehi-core as ENA takes each one.\n\n"
+            "What ENA is told about each lab sample is read from the sample the\n"
+            "hologenome links to in ehi-core (ENA_SAMPLE_FIELDS), the core's copy\n"
+            "of the laboratory's table. The Webin account comes from\n"
+            "ENA_USERNAME/ENA_PASSWORD or ENA_SECRET_FILE."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    _add_batch(p_ena)
+    _add_core_token(p_ena)
+    _add_verbose(p_ena)
+    p_ena.add_argument("--work-dir", "-d", metavar="DIR",
+        help="Where the reads are downloaded and the tables and ENA receipts kept,\n"
+             "one folder per hologenome. Default: {ENA_OUTPUT_BASE}/{batch}.")
+    p_ena.add_argument("--test", action="store_true",
+        help="Submit to ENA's test server (wwwdev.ebi.ac.uk), which discards\n"
+             "everything within a day. No accession is written to ehi-core.")
+    p_ena.add_argument("--dry-run", action="store_true",
+        help="Check the submission and write the tables it would send, without\n"
+             "downloading anything, contacting ENA's submission service or\n"
+             "writing to ehi-core.")
+    p_ena.add_argument("--keep-reads", action="store_true",
+        help="Keep each hologenome's downloaded reads once ENA holds them.")
+    p_ena.add_argument("--parallel", type=int, metavar="N",
+        help="Lab samples to deposit side by side (overrides ENA_PARALLEL_UPLOADS).")
+    p_ena.add_argument("--download-timeout", metavar="SECONDS", type=float, default=600.0,
+        help="Timeout of a read download without progress, in seconds (default: 600).")
+    p_ena.set_defaults(func=cmd_ena)
+
+    # ------------------------------------------------------------------
     # reference
     # ------------------------------------------------------------------
     p_ref = sub.add_parser(
@@ -2736,9 +2940,9 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_scan.add_argument("--module", "-m",
-        choices=["preprocessing", "binning", "quantifying", "amr"],
+        choices=["preprocessing", "binning", "quantifying", "amr", "ena"],
         metavar="MODULE",
-        help="Scan only this module. Default: scan all four.")
+        help="Scan only this module. Default: scan all of them.")
     p_scan.add_argument("--airtable-token", metavar="TOKEN",
         help="Airtable personal access token. Overrides $AIRTABLE_TOKEN.")
     _add_core_token(p_scan)
@@ -2767,7 +2971,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_ss.add_argument("--module", "-m", required=True,
-        choices=["preprocessing", "binning", "quantifying", "amr"],
+        choices=["preprocessing", "binning", "quantifying", "amr", "ena"],
         help="Module whose batch table to update.")
     p_ss.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code to look up.")
@@ -2829,7 +3033,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_stop.add_argument("--module", "-m", required=True,
-        choices=["preprocessing", "binning", "quantifying", "amr"],
+        choices=["preprocessing", "binning", "quantifying", "amr", "ena"],
         help="Module whose batch table to update.")
     p_stop.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code (screen session name) to stop.")
@@ -2856,7 +3060,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_jobs.add_argument("--module", "-m", required=True,
-        choices=["preprocessing", "binning", "quantifying", "amr"],
+        choices=["preprocessing", "binning", "quantifying", "amr", "ena"],
         help="Module whose output base the batch runs in.")
     p_jobs.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code to list the jobs of.")
@@ -2875,7 +3079,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     p_rm.add_argument("--module", "-m", required=True,
-        choices=["preprocessing", "binning", "quantifying", "amr"],
+        choices=["preprocessing", "binning", "quantifying", "amr", "ena"],
         help="Module whose output base to use.")
     p_rm.add_argument("--batch", "-b", required=True, metavar="BATCH",
         help="Batch code — the subdirectory to delete.")
@@ -2939,8 +3143,30 @@ def _upload_failure_report(
     _info(f"Attached failure report '{report.name}'.")
 
 
+def _core_only(args: argparse.Namespace):
+    """ehi-core, for a module whose batches only the core holds (ENA
+    submissions): without it there is nowhere to find or report the batch."""
+    core = _core(args, holds=True)
+    if not core:
+        _die(f"{args.module} batches live in ehi-core alone: set EHI_CORE_URL and export EHI_CORE_TOKEN.")
+    return core
+
+
+def _set_core_status(args: argparse.Namespace, core, status: str) -> None:
+    results = core.write([mirror.batch(args.module, args.batch, None, status=status)],
+                         f"Status of batch '{args.batch}'")
+    if any(r.get("action") == "created" for r in results):
+        _warn(f"ehi-core held no batch '{args.batch}'; it was created with this status.")
+    _info(f"Batch '{args.batch}' status → '{status}'.")
+
+
 def cmd_set_status(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
+
+    if args.module not in _SET_STATUS_CFG:
+        # No drakkar failure report to attach either: nothing but the status.
+        _set_core_status(args, _core_only(args), args.status)
+        return 0
 
     base_cfg, table_cfg, code_cfg, status_cfg, error_files_cfg = _SET_STATUS_CFG[args.module]
 
@@ -3089,6 +3315,7 @@ _OUTPUT_BASE_CFG = {
     "binning":       "EHI_ASB_OUTPUT_BASE",
     "quantifying":   "MAG_DMB_OUTPUT_BASE",
     "amr":           "EHI_AMR_OUTPUT_BASE",
+    "ena":           "ENA_OUTPUT_BASE",
 }
 
 
@@ -3143,23 +3370,28 @@ def cmd_stop(args: argparse.Namespace) -> int:
     # the batch was stopped on purpose, so it does not flag it as an error.
     from ehio.scanning import STOP_SENTINEL
 
-    base_cfg, table_cfg, code_cfg, status_cfg, _ = _SET_STATUS_CFG[args.module]
-    token            = _resolve_token(args)
-    base_id          = _require_cfg(base_cfg)
-    batch_table      = _require_cfg(table_cfg)
-    batch_code_field = _require_cfg(code_cfg)
-    status_field     = _require_cfg(status_cfg)
-    stopped_status   = str(cfg.get("SCANNING_STOPPED_STATUS") or "Stopped").strip()
+    stopped_status = str(cfg.get("SCANNING_STOPPED_STATUS") or "Stopped").strip()
+    core_only      = args.module not in _SET_STATUS_CFG
+    batch_record   = None
+    if core_only:
+        core = _core_only(args)
+    else:
+        base_cfg, table_cfg, code_cfg, status_cfg, _ = _SET_STATUS_CFG[args.module]
+        token            = _resolve_token(args)
+        base_id          = _require_cfg(base_cfg)
+        batch_table      = _require_cfg(table_cfg)
+        batch_code_field = _require_cfg(code_cfg)
+        status_field     = _require_cfg(status_cfg)
 
-    client = AirtableClient(api_key=token, base_id=base_id)
-    batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
-    core = _core(args)
-    # A batch created in ehi-core has no Airtable record, and stopping it still
-    # has to kill its session and jobs and say so somewhere.
-    if not batch_record:
-        if not core:
-            _die(f"Batch '{args.batch}' not found in {batch_table}.")
-        _info(f"Batch '{args.batch}' is not in {batch_table} — ehi-core alone holds it.")
+        client = AirtableClient(api_key=token, base_id=base_id)
+        batch_record = client.fetch_batch_record(batch_table, batch_code_field, args.batch)
+        core = _core(args)
+        # A batch created in ehi-core has no Airtable record, and stopping it
+        # still has to kill its session and jobs and say so somewhere.
+        if not batch_record:
+            if not core:
+                _die(f"Batch '{args.batch}' not found in {batch_table}.")
+            _info(f"Batch '{args.batch}' is not in {batch_table} — ehi-core alone holds it.")
 
     output_dir, run_dir, out_file = _batch_dirs(args.module, args.batch)
 
@@ -3189,6 +3421,9 @@ def cmd_stop(args: argparse.Namespace) -> int:
     else:
         _cancel_batch_jobs(args.batch, output_dir, run_dir, out_file)
 
+    if core_only:
+        _set_core_status(args, core, stopped_status)
+        return 0
     if batch_record:
         client.update_records(
             batch_table,

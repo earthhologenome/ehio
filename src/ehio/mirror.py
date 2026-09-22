@@ -34,6 +34,7 @@ BATCH_TABLES = {
     "binning":       "assembly_batches",
     "quantifying":   "dereplication_batches",
     "amr":           "amr_batches",
+    "ena":           "ena_submissions",
 }
 
 # Facts of a batch record ehio copies into the core when the core lacks them:
@@ -66,6 +67,9 @@ BATCH_FACTS: dict[str, dict[str, str]] = {
         "EHI_AMR_BATCH_BOOST_TIME":   "boost_time",
         "EHI_AMR_BATCH_BOOST_MEMORY": "boost_memory",
     },
+    # ENA submissions live in the core alone: there is no Airtable record to
+    # copy facts from.
+    "ena": {},
 }
 
 # Metric keys of ehio's parsers → core columns, beside the config keys the same

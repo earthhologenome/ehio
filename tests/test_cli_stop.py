@@ -56,6 +56,19 @@ class TestCmdStop:
              patch.object(cli, "_cancel_batch_jobs"):
             assert cli.cmd_stop(_args(module)) == 0
 
+    def test_an_ena_submission_is_stopped_in_ehi_core_alone(self, batch_dirs):
+        from tests.fake_core import FakeCoreClient, using
+
+        fake = FakeCoreClient()
+        with patch("subprocess.run", return_value=MagicMock(returncode=0)) as run, \
+             patch.object(cli, "_cancel_batch_jobs"), \
+             patch.object(cli, "_resolve_token", side_effect=AssertionError("no Airtable")), \
+             using(fake):
+            assert cli.cmd_stop(_args("ena")) == 0
+        assert run.call_args[0][0] == ["screen", "-S", "ABB0659", "-X", "quit"]
+        [row] = fake.rows("ena_submissions")
+        assert row["values"] == {"status": "Stopped"}
+
     def test_kills_the_screen_session(self, airtable, batch_dirs):
         with patch("subprocess.run", return_value=MagicMock(returncode=0)) as run, \
              patch.object(cli, "_cancel_batch_jobs"):

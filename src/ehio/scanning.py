@@ -48,6 +48,7 @@ _OUTPUT_BASE_CFG = {
     "binning":       "EHI_ASB_OUTPUT_BASE",
     "quantifying":   "MAG_DMB_OUTPUT_BASE",
     "amr":           "EHI_AMR_OUTPUT_BASE",
+    "ena":           "ENA_OUTPUT_BASE",
 }
 _BOOST_TIME_CFG = {
     "preprocessing": "EHI_PPR_BATCH_BOOST_TIME",
@@ -75,7 +76,9 @@ DRAKKAR_CMD = {
     "amr":           "amr",
 }
 
-MODULES = list(DRAKKAR_CMD)
+# ENA submissions run no drakkar workflow: 'ehio ena' deposits the reads
+# itself. They live in ehi-core alone, so they have no Airtable table either.
+MODULES = [*DRAKKAR_CMD, "ena"]
 
 
 # ---------------------------------------------------------------------------
@@ -214,10 +217,10 @@ def build_script_content(
     output_dir — /projects/ehi/data/{PPR|ASB|DMB|AMR}/{batch_code}  (drakkar -o target)
     ref_flag   — pre-resolved '-x url' or '-r url' for preprocessing; '' otherwise
     """
-    if module not in DRAKKAR_CMD:
+    if module not in MODULES:
         raise ValueError(f"Unknown module: {module}")
 
-    drakkar_sub = DRAKKAR_CMD[module]
+    drakkar_sub = DRAKKAR_CMD.get(module, "")
     q = shlex.quote
 
     tsv_file = f"{run_dir}/{batch_name}.tsv"
@@ -429,6 +432,16 @@ def build_script_content(
             + "_EHIO_SUCCESS=1\n"
         )
 
+    if module == "ena":
+        # No drakkar: ehio downloads each hologenome's reads into the output
+        # directory, deposits them and sets the submission's status itself.
+        # Hologenomes ENA already holds are skipped, so a resume or a rerun
+        # carries on where the submission stopped.
+        return header + (
+            f"ehio ena -b {q(batch_name)} -d {q(output_dir)}\n"
+            + "_EHIO_SUCCESS=1\n"
+        )
+
     if module == "amr":
         manifest_file  = f"{run_dir}/{batch_name}_assemblies.tsv"
         # The assemblies are downloaded next to the manifest drakkar writes for
@@ -626,6 +639,12 @@ def _generate_input_files(
         cmd = [sys.executable, "-m", "ehio", "amr", "--input",
                "-b", batch_name, "-f", manifest_path,
                "-d", str(Path(output_base) / batch_name / "data" / "assemblies")]
+    elif module == "ena":
+        # What a dry run of the scan can check of a submission: its tables,
+        # written without downloading or submitting anything.
+        output_base = str(cfg.get(_OUTPUT_BASE_CFG["ena"]) or "").strip()
+        cmd = [sys.executable, "-m", "ehio", "ena", "--dry-run",
+               "-b", batch_name, "-d", str(Path(output_base) / batch_name)]
     elif module == "quantifying":
         mags_path    = str(Path(run_dir) / f"{batch_name}_mags.tsv")
         reads_path   = str(Path(run_dir) / f"{batch_name}_reads.tsv")
@@ -660,6 +679,7 @@ _CORE_BATCH_TABLE = {
     "binning":       "assembly_batches",
     "quantifying":   "dereplication_batches",
     "amr":           "amr_batches",
+    "ena":           "ena_submissions",
 }
 
 # The core column holding what the Airtable field of this config key holds.
@@ -852,13 +872,14 @@ def _sources(module: str, token: str, core=None, verbose: bool = False) -> list:
     hold the module's batches on its own, which is where this is going.
     """
     sources: list = []
-    airtable = AirtableBatches(module, token)
-    missing  = airtable.missing()
-    if token and not missing:
-        sources.append(airtable)
-    elif verbose:
-        why = f"missing config: {', '.join(missing)}" if missing else "no Airtable token"
-        print(f"  [{module}] not scanning Airtable — {why}", file=sys.stderr)
+    if module in _BATCH_TABLE_KEY:
+        airtable = AirtableBatches(module, token)
+        missing  = airtable.missing()
+        if token and not missing:
+            sources.append(airtable)
+        elif verbose:
+            why = f"missing config: {', '.join(missing)}" if missing else "no Airtable token"
+            print(f"  [{module}] not scanning Airtable — {why}", file=sys.stderr)
     if core:
         sources.append(CoreBatches(module, core))
     return sources
@@ -1037,8 +1058,8 @@ def scan_module(
             ref_desc = ref_flag if ref_flag else "(no reference)"
             print(f"  [{module}] {batch_name}: reference flag → {ref_desc}", file=sys.stderr)
 
-        boost_time   = batch.number(_BOOST_TIME_CFG[module])
-        boost_memory = batch.number(_BOOST_MEMORY_CFG[module])
+        boost_time   = batch.number(_BOOST_TIME_CFG[module])   if module in _BOOST_TIME_CFG   else None
+        boost_memory = batch.number(_BOOST_MEMORY_CFG[module]) if module in _BOOST_MEMORY_CFG else None
         if boost_time or boost_memory:
             print(
                 f"  [{module}] {batch_name}: boost time={boost_time} memory={boost_memory}",
@@ -1101,8 +1122,8 @@ def scan_module(
             else:
                 try:
                     _generate_input_files(module, batch_name, run_dir, token, core_token)
-                    tsv_path = Path(run_dir) / f"{batch_name}.tsv"
-                    print(f"  [{module}] {batch_name}: input file written → {tsv_path}")
+                    written = output_dir if module == "ena" else Path(run_dir) / f"{batch_name}.tsv"
+                    print(f"  [{module}] {batch_name}: input file written → {written}")
                 except subprocess.CalledProcessError as exc:
                     print(
                         f"  [{module}] {batch_name}: WARNING — input generation failed "

@@ -1,10 +1,11 @@
 # ehio
 
-**ehio** is a bridge between the EHI's metadata databases and [Drakkar](https://github.com/alberdilab/drakkar) bioinformatics workflows. It handles three concerns:
+**ehio** is a bridge between the EHI's metadata databases and [Drakkar](https://github.com/alberdilab/drakkar) bioinformatics workflows. It handles four concerns:
 
 1. **Input** — fetches sample metadata and file URLs and generates the input files that Drakkar expects.
 2. **Output** — transfers Drakkar result files to remote storage via SFTP and writes back the processing status and metrics.
 3. **Scanning** — monitors the batch tables for pending work and automatically launches Drakkar runs in named `screen` sessions.
+4. **Archiving** — deposits the raw reads of the hologenomes in the European Nucleotide Archive (see [`ehio ena`](#ehio-ena)).
 
 Airtable is running out of room, so the EHI's own database, **ehi-core**, is
 taking over from it. A batch can live in either: Airtable is looked in first,
@@ -140,6 +141,7 @@ written to the core too:
 | `amr --output` | AMR metrics, the ERDA URLs of the gene calls and the hits and loci tables, versions |
 | `quantifying --output` | the mappings under Airtable's DM codes, which MAGs dereplication kept, versions |
 | `annotating --output` | taxonomy, GTDB and gene metrics, and how far each MAG was annotated |
+| `ena` | each hologenome's ENA study, sample, experiment and run accessions, a new ENA sample's accession on its sample, and the submission's status and log (ENA submissions live in the core alone) |
 
 Each record is matched by the code Airtable gave it. A batch, entry or
 hologenome the core doesn't hold yet (created in Airtable after the core was
@@ -440,9 +442,94 @@ still finishes.
 
 ---
 
+### `ehio ena`
+
+Deposits the raw reads of the hologenomes of an **ENA submission** (`EHS…`) in
+the [European Nucleotide Archive](https://www.ebi.ac.uk/ena). ENA submissions
+live in ehi-core alone — they replace Airtable's Submissions table, which ehio
+does not read — and everything ENA is told comes from the core, so this command
+needs the core and neither reads from nor writes to Airtable.
+Staff create a submission in the core's editor, name the ENA study it goes
+under (`PRJEB…`), paste the hologenomes into it and set it Ready.
+
+For each hologenome of the submission that holds no run accession yet, ehio:
+
+1. downloads its raw reads from the URLs the hologenome holds in the core,
+   taking their MD5 as they arrive;
+2. registers at ENA, with [ena-upload-cli](https://github.com/usegalaxy-eu/ena-upload-cli)
+   (installed with ehio), its **sample** if ENA does not hold it yet, its
+   **experiment** and its **run**, uploading the reads;
+3. writes the four accessions (study, sample, experiment, run) onto the
+   hologenome in ehi-core, and the ENA sample's onto its sample, as soon as ENA
+   holds them, and deletes the reads.
+
+When every hologenome is deposited the submission is set to Done; otherwise to
+Error. Either way its **Log** in the core says what was deposited and, for each
+hologenome that was not, why — so a sample Airtable has not fully described is
+fixed in the laboratory's Airtable table, the core's copy synced, and the
+submission set Ready again. Hologenomes already holding a
+run accession are skipped, so a submission can be launched as often as needed.
+
+```bash
+# Check a submission and write the tables it would send, without sending anything
+ehio ena -b EHS0001 --dry-run
+
+# Try it against ENA's test server, which discards everything within a day
+ehio ena -b EHS0001 --test
+
+# Deposit it
+ehio ena -b EHS0001
+```
+
+**Where ENA's metadata comes from.**
+
+| ENA object | Read from |
+|---|---|
+| Study | the submission's `study_accession` in ehi-core |
+| Sample | the sample the hologenome links to in ehi-core — the core's copy of the laboratory's Samples table, which stays in Airtable and is refreshed with ehi-core's `python -m airtable_import sync`. Columns are mapped in `ENA_SAMPLE_FIELDS` (checklist column → sample column) and sent under checklist `ENA_CHECKLIST` (ERC000013, host associated). `project name` is the submission's study, and no scientific name is sent: ena-upload-cli looks it up from the taxon id (a metagenome, such as feces metagenome), since the laboratory's table names the host there. |
+| Experiment | the hologenome in ehi-core (library name, library source or data type, platform, instrument model), plus `ENA_LIBRARY_STRATEGY`, `ENA_LIBRARY_SELECTION`, `ENA_LIBRARY_LAYOUT` and `ENA_INSERT_SIZE` (WGS, RANDOM, PAIRED, 400: every EHI library so far) |
+| Run | the hologenome's raw reads, as `{EHI}_raw_1.fq.gz` and `{EHI}_raw_2.fq.gz` |
+
+Everything is checked before any read is downloaded: a hologenome without a
+sample, raw reads, a platform or an instrument model, or whose sample lacks one
+of the checklist's mandatory fields, is reported and left out, and the others
+go ahead.
+
+**One ENA sample per lab sample.** A lab sample is registered once, under its
+sample code as alias. A later library of the same sample — in the same
+submission or a later one — is added to the ENA sample it already has: the core
+answers each hologenome with its sample's own ENA accession (copied from the
+laboratory's table, where the pipeline before ehio wrote it) and those any
+hologenome of the sample holds. ena-upload-cli refers to an existing
+sample or study by the alias it was registered under, and the earlier
+pipelines used different aliases, so ehio looks the alias up at ENA from the
+accession (Webin's report service, or ENA's public browser).
+
+**Resuming safely.** Experiments and runs are registered as `ena_{EHI}`, the
+aliases the earlier pipeline used. If ENA answers that an object ehio is adding
+already exists — a run that stopped after ENA took the hologenome but before
+the core was written — ehio takes the accession ENA names and submits only the
+rest. The accessions of every hologenome deposited are also kept in
+`{ENA_OUTPUT_BASE}/{batch}/{batch}_accessions.tsv`.
+
+**Webin account.** Never stored in the config: export `ENA_USERNAME` and
+`ENA_PASSWORD`, or point `ENA_SECRET_FILE` at a YAML file holding `username:`
+and `password:` (the cluster's `/projects/ehi/data/.secret.yml`).
+
+**Files.** Each hologenome gets a folder in `{ENA_OUTPUT_BASE}/{batch}` holding
+its tables, ENA's receipt and ena-upload-cli's output (`ena-upload-cli.log`).
+Its reads are deleted once ENA holds them, unless `--keep-reads` or
+`ENA_KEEP_READS`. `ENA_PARALLEL_UPLOADS` lab samples are deposited side by side;
+the hologenomes of one lab sample go in turn, so the first registers the sample.
+
+`--test` sends everything to ENA's test server and writes no accession to the
+core: only the submission's Log, marked as a test.
+
+---
+
 ### `ehio scanning`
 
-Polls all four batch tables, in Airtable **and in ehi-core**, for batches whose status matches `SCANNING_TRIGGER_STATUS` (default: `ready`). For each pending batch it finds:
+Polls all four batch tables, in Airtable **and in ehi-core**, and the ENA submissions of ehi-core, for batches whose status matches `SCANNING_TRIGGER_STATUS` (default: `ready`). For each pending batch it finds:
 
 1. Checks whether a `screen` session named after the batch already exists — skips if so.
 2. For preprocessing batches, resolves the reference genome (`-x` indexed tarball, else `-r` raw fasta) and verifies it can be downloaded; if not, the batch is marked `PROCESSING_ERROR_STATUS` and skipped instead of being launched.
@@ -461,7 +548,7 @@ Polls all four batch tables, in Airtable **and in ehi-core**, for batches whose 
 The core is read through `GET /api/pipeline/{table}/pending`, which takes one `status` parameter per status to look for and matches it however it is capitalised.
 
 ```bash
-# Scan all four modules in both databases
+# Scan every module in both databases
 ehio scanning
 
 # Scan one module only
@@ -493,6 +580,10 @@ drakkar profiling -B OUTPUT_DIR/bins.txt -R OUTPUT_DIR/samples.tsv -o OUTPUT_DIR
 mkdir -p OUTPUT_DIR &&
 ehio amr --input -b BATCH -f RUN_DIR/BATCH_assemblies.tsv -d OUTPUT_DIR/data/assemblies &&
 drakkar amr -f RUN_DIR/BATCH_assemblies.tsv -o OUTPUT_DIR -p slurm
+
+# ena (no drakkar: ehio deposits the reads itself)
+mkdir -p OUTPUT_DIR &&
+ehio ena -b BATCH -d OUTPUT_DIR
 ```
 
 `OUTPUT_DIR` is constructed as `{MODULE_OUTPUT_BASE}/{BATCH_NAME}`.
@@ -573,9 +664,11 @@ ehio annotating     --output -b BATCH [-l LOCAL_DIR]   [overrides...]
 ehio amr            --input  -b BATCH [-f assemblies.tsv] [-d ASSEMBLIES_DIR] [--redownload] [overrides...]
 ehio amr            --output -b BATCH [-l LOCAL_DIR]   [overrides...]
 
+ehio ena            -b BATCH [-d WORK_DIR] [--test] [--dry-run] [--keep-reads] [--parallel N]
+
 ehio reference      -b BATCH [-l LOCAL_DIR] [--force] [overrides...]
 
-ehio scanning       [--module preprocessing|binning|quantifying|amr] [--dry-run] [-v]
+ehio scanning       [--module preprocessing|binning|quantifying|amr|ena] [--dry-run] [-v]
 
 ehio set-status     -m MODULE -b BATCH -s STATUS [--failures-dir DIR] [--failures-since EPOCH]
 

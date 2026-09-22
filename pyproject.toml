@@ -12,10 +12,13 @@ dependencies = [
   "pyairtable>=2.3",
   "paramiko>=3.4",
   "pyyaml>=6",
+  # Deposits the reads of an ENA submission ('ehio ena'). It pins pytest 7.4
+  # among its own requirements, hence the dev extra below.
+  "ena-upload-cli>=0.10.2",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=7.4"]
 release = [
   "build>=1.2",
   "twine>=5",

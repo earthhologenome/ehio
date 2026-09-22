@@ -233,6 +233,52 @@ EHI_ASB_ENTRY_AMR_MULTI_TOOL_LOCI: "fldg26JVzTd21SCnJ"  # multi_tool_loci
 EHI_ASB_ENTRY_AMR_MOBILITY_LINKS: "fld9aNIZXTAyc5dMW"  # mobility_links
 EHI_ASB_ENTRY_AMR_MOBILE_LOCI: "fld5jq9mMekfLevpc"  # mobile_loci
 
+# ---- ENA module -----------------------------------------------------------
+# Deposits the raw reads of the hologenomes of an ENA submission (EHS…) in the
+# European Nucleotide Archive, through ena-upload-cli: a sample, an experiment
+# and a run each, under the ENA study named on the submission. Submissions
+# live in ehi-core alone, and the accessions are written to the hologenomes
+# and their samples there; nothing is read from or written to Airtable. A lab
+# sample is registered once; its later hologenomes are added to the ENA sample
+# it already has.
+#
+# The Webin account is never stored here: export ENA_USERNAME and ENA_PASSWORD,
+# or point ENA_SECRET_FILE at a YAML file holding 'username:' and 'password:'.
+ENA_SECRET_FILE: "/projects/ehi/data/.secret.yml"
+ENA_CENTER: "Earth Hologenome Initiative"  # Center name ENA records the objects under
+ENA_CHECKLIST: "ERC000013"                 # ENA sample checklist (GSC MIxS host associated)
+ENA_PARALLEL_UPLOADS: "2"                  # Lab samples deposited side by side (each one's hologenomes go in turn)
+ENA_KEEP_READS: "false"                    # Keep each hologenome's downloaded reads once ENA holds them
+
+# What ENA is told about each library that ehi-core does not hold: the same
+# for every EHI hologenome so far.
+ENA_LIBRARY_STRATEGY: "WGS"
+ENA_LIBRARY_SELECTION: "RANDOM"
+ENA_LIBRARY_LAYOUT: "PAIRED"
+ENA_INSERT_SIZE: "400"
+
+# What ENA is told about each lab sample comes from the sample the hologenome
+# links to in ehi-core, the core's copy of the laboratory's Samples table
+# (refreshed from Airtable by ehi-core's 'python -m airtable_import sync'):
+# checklist column (as ena-upload-cli's ERC000013 template names it) → column of
+# the sample in ehi-core. Add a line to send another attribute. 'project name'
+# is always the submission's ENA study, and no scientific name is sent: ENA's
+# taxonomy gives it from taxon_id.
+ENA_SAMPLE_FIELDS:
+  sample_description: "description"
+  host subject id: "specimen_code"
+  host common name: "host_common_name"
+  host taxid: "host_taxid"
+  host life stage: "host_life_stage"
+  taxon_id: "taxon_id"
+  collection date: "collection_date"
+  geographic location (country and/or sea): "country"
+  geographic location (latitude): "latitude"
+  geographic location (longitude): "longitude"
+  broad-scale environmental context: "broad_scale_environment"
+  local environmental context: "local_environment"
+  environmental medium: "environmental_medium"
+
 # ---- ehi-core -------------------------------------------------------------
 # ehi-core is the EHI's own database for the bioinformatic pipeline, taking over
 # from the Airtable tables as they run out of room. Batches are still created in
@@ -290,10 +336,12 @@ SFTP_REMOTE_BASE: "/EarthHologenomeInitiative/Data"
 #   binning        →  {EHI_ASB_OUTPUT_BASE}/{EHI_ASB_BATCH_CODE}
 #   quantifying    →  {MAG_DMB_OUTPUT_BASE}/{MAG_DMB_BATCH_CODE}
 #   amr            →  {EHI_AMR_OUTPUT_BASE}/{EHI_AMR_BATCH_CODE}
+#   ena            →  {ENA_OUTPUT_BASE}/{submission code}  (reads while they upload, tables, ENA receipts)
 EHI_PPR_OUTPUT_BASE: "/projects/ehi/data/PPR"
 EHI_ASB_OUTPUT_BASE: "/projects/ehi/data/ASB"
 MAG_DMB_OUTPUT_BASE: "/projects/ehi/data/DMB"
 EHI_AMR_OUTPUT_BASE: "/projects/ehi/data/AMR"
+ENA_OUTPUT_BASE: "/projects/ehi/data/ENA"
 
 # Run dir — where each screen session is launched from:
 #   {RUN_BASE}/{batch_code}  (contains samples.tsv, .snakemake, logs)
