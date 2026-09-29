@@ -367,16 +367,34 @@ class TestResumeMagInfoTable:
             "quantifying", "DMB001", "/run/DMB001", "/out/DMB001", "slurm", **kwargs,
         )
 
+    _COUNTS_TSV = "/out/DMB001/profiling_genomes/final/counts.tsv"
+
     def test_resume_calls_drakkar_when_only_the_mag_table_is_missing(self):
         script = self._script(resume=True)
-        assert f"|| [ ! -s {self._MAGS_TSV} ]; then" in script
+        assert f"|| [ ! -s {self._MAGS_TSV} ]" in script
+
+    def test_resume_calls_drakkar_when_the_counts_table_is_missing(self):
+        """The genomes and mags.tsv are written before the catalogue is indexed,
+        so a run that stopped at the index or the mapping has both but no counts."""
+        script = self._script(resume=True)
+        assert f"|| [ ! -s {self._COUNTS_TSV} ]; then" in script
 
     def test_resume_reuploads_when_the_mag_table_is_newer_than_the_last_upload(self):
         script = self._script(resume=True)
         assert (
-            f"if [ ! -f {self._SENTINEL} ] || [ {self._MAGS_TSV} -nt {self._SENTINEL} ]; then"
+            f"if [ ! -f {self._SENTINEL} ] || [ {self._MAGS_TSV} -nt {self._SENTINEL} ]"
             in script
         )
+
+    def test_resume_reuploads_when_the_counts_table_is_newer_than_the_last_upload(self):
+        script = self._script(resume=True)
+        assert f"|| [ {self._COUNTS_TSV} -nt {self._SENTINEL} ]; then" in script
+
+    @pytest.mark.parametrize("resume", [False, True])
+    def test_profiling_requires_the_counts_table(self, resume: bool):
+        script = self._script(resume=resume)
+        assert f"_ehio_require {self._COUNTS_TSV} profiling" in script
+        assert "_ehio_require /out/DMB001/profiling_genomes/drep/dereplicated_genomes profiling" not in script
 
     def test_the_upload_step_comes_after_the_drakkar_call(self):
         script = self._script(resume=True)
@@ -399,7 +417,7 @@ class TestDrakkarNoOpGuards:
     _PRODUCT = {
         "preprocessing": "/out/B001/preprocessing/final",
         "binning":       "/out/B001/cataloging/final",
-        "quantifying":   "/out/B001/profiling_genomes/drep/dereplicated_genomes",
+        "quantifying":   "/out/B001/profiling_genomes/final/counts.tsv",
     }
 
     def _script(self, module: str, **kwargs) -> str:
@@ -469,7 +487,8 @@ class TestDrakkarNoOpGuards:
         script = self._script("quantifying", resume=True)
         block = script.split(
             "if [ ! -d /out/B001/profiling_genomes/drep/dereplicated_genomes ]"
-            " || [ ! -s /out/B001/profiling_genomes/final/mags.tsv ]; then\n"
+            " || [ ! -s /out/B001/profiling_genomes/final/mags.tsv ]"
+            " || [ ! -s /out/B001/profiling_genomes/final/counts.tsv ]; then\n"
         )[1]
         block = block.split("fi\n")[0]
         assert "_ehio_drakkar_start" in block

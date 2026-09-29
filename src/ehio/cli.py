@@ -211,6 +211,24 @@ def _create_airtable_mappings(client, batch_code, batch_record, ppr_records, all
     dm_records = existing
     if existing:
         _info(f"{len(existing)} MAG_DMB_ENTRY record(s) already exist for this batch — skipping creation.")
+        # A batch whose output step ran before its reads were mapped left
+        # these records without a rate; the rates measured now fill them in.
+        if entry_rate_field:
+            rate_by_ppr = {
+                ppr_rec["id"]: all_metrics.get(
+                    _first_value(ppr_rec.get("fields", {}).get(ppr_ehi_field)), {}
+                ).get("mapping_rate")
+                for ppr_rec in ppr_records
+            }
+            rate_updates = []
+            for rec in existing:
+                fields = rec.get("fields", {})
+                rate = rate_by_ppr.get(_first_value(fields.get(entry_ppr_field)))
+                if rate is not None and fields.get(entry_rate_field) != rate:
+                    rate_updates.append({"id": rec["id"], "fields": {entry_rate_field: rate}})
+            if rate_updates:
+                client.update_records(entry_table, rate_updates)
+                _info(f"Updated the mapping rate of {len(rate_updates)} MAG_DMB_ENTRY record(s).")
     elif records_to_create:
         _info(f"Creating {len(records_to_create)} MAG_DMB_ENTRY records...")
         dm_records = client.create_records(entry_table, records_to_create)

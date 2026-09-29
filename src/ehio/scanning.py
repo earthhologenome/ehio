@@ -482,6 +482,7 @@ def build_script_content(
         )
         derep_genomes_dir         = f"{output_dir}/profiling_genomes/drep/dereplicated_genomes"
         mags_info_tsv             = f"{output_dir}/profiling_genomes/final/mags.tsv"
+        counts_tsv                = f"{output_dir}/profiling_genomes/final/counts.tsv"
         annotation_file           = f"{run_dir}/{batch_name}_annotation.tsv"
         annotation_clusters_file  = f"{run_dir}/{batch_name}_annotation_clusters.tsv"
         taxonomy_tsv              = f"{output_dir}/annotating/genome_taxonomy.tsv"
@@ -558,14 +559,24 @@ def build_script_content(
             # batches were finished, so a resumed batch that has its dereplicated
             # genomes but no mags.tsv still calls drakkar: snakemake then builds
             # that one missing target and leaves everything else alone.
+            #
+            # The dereplicated genomes and mags.tsv are both written before
+            # the catalogue is indexed and the reads are mapped, so neither
+            # says the profiling finished: a batch whose run stopped at the
+            # index or the mapping has them but no counts table, and still
+            # needs drakkar.
             profiling_step = optional_drakkar_step(
-                f"[ ! -d {q(derep_genomes_dir)} ] || [ ! -s {q(mags_info_tsv)} ]",
+                f"[ ! -d {q(derep_genomes_dir)} ] || [ ! -s {q(mags_info_tsv)} ]"
+                f" || [ ! -s {q(counts_tsv)} ]",
                 profiling_cmd, "profiling",
             )
-            # Re-run the upload when mags.tsv is newer than the last upload, so
-            # a file drakkar has just produced still reaches the DMB folder.
+            # Re-run the upload when mags.tsv or the counts table is newer than
+            # the last upload, so a file drakkar has just produced still
+            # reaches the DMB folder and the mapping rates reach the records.
             qfy_output_step = (
-                f"if [ ! -f {q(qfy_output_sentinel)} ] || [ {q(mags_info_tsv)} -nt {q(qfy_output_sentinel)} ]; then\n"
+                f"if [ ! -f {q(qfy_output_sentinel)} ]"
+                f" || [ {q(mags_info_tsv)} -nt {q(qfy_output_sentinel)} ]"
+                f" || [ {q(counts_tsv)} -nt {q(qfy_output_sentinel)} ]; then\n"
                 f"  ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
                 f"  touch {q(qfy_output_sentinel)}\n"
                 f"fi\n"
@@ -592,7 +603,9 @@ def build_script_content(
             + input_step
             + unlock_step
             + profiling_step
-            + f"_ehio_require {q(derep_genomes_dir)} {q('profiling')}\n"
+            # The counts table is the last thing profiling writes, so it is
+            # the one that says the reads were mapped and counted.
+            + f"_ehio_require {q(counts_tsv)} {q('profiling')}\n"
             + qfy_output_step
             + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_tax_status)}\n"
             + taxonomy_step
