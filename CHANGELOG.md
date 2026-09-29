@@ -9,6 +9,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.10.1] - 2026-09-29
+
+### Fixed
+
+- **A resumed DMB batch no longer skips profiling that did not finish.** The resume called drakkar profiling only when the dereplicated genomes or `profiling_genomes/final/mags.tsv` were missing, but both are written before the genome catalogue is indexed and the reads are mapped. DMB0187 stopped at the index (drakkar 2.6.1 waited for `.bt2` files while bowtie2 wrote a large `.bt2l` index), and its resume went straight on to annotation: no reads were mapped, `ehio quantifying --output` uploaded no counts and recorded all 266 mappings without a rate, and the batch was annotated as if profiled.
+  - The resume now calls drakkar until `profiling_genomes/final/counts.tsv` exists, and runs `ehio quantifying --output` again when the counts table is newer than its last run.
+  - The script requires the counts table, not the dereplicated genomes, before the output step, so a profiling run that ends without counting the reads stops the batch with an error.
+  - An Airtable batch whose `MAG_DMB_ENTRY` records already exist has the mapping rates measured now written into them, instead of keeping the rates they were created with. A rate is never replaced by an empty one.
+
 ## [0.10.0] - 2026-09-22
 
 ### Added
