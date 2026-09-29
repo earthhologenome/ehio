@@ -14,7 +14,7 @@ from typing import Any
 from ehio import config as cfg
 from ehio.airtable import AirtableClient, AirtableError
 from ehio.core import CoreError
-from ehio.drakkar import LOGGING_DIRNAME, normalise_assembly_type
+from ehio.drakkar import LOGGING_DIRNAME, normalise_assembly_type, normalise_profiling_type
 
 # Marker file written by 'ehio stop' in the run directory of a batch.
 STOP_SENTINEL = ".ehio_stopped"
@@ -1093,7 +1093,11 @@ def scan_module(
         annotation_type = "all"
         if module == "quantifying":
             ani_threshold   = batch.text("MAG_DMB_BATCH_ANI")
-            profiling_type  = batch.text("MAG_DMB_BATCH_TYPE").lower()
+            profiling_type  = normalise_profiling_type(batch.value("MAG_DMB_BATCH_TYPE"))
+            print(
+                f"  [{module}] {batch_name}: profiling type → {profiling_type or '(drakkar default)'}",
+                file=sys.stderr,
+            )
             annotation_type = batch.text("MAG_DMB_BATCH_ANNOTATION_TYPE").lower() or "all"
 
         script_content = build_script_content(

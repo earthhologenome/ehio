@@ -16,6 +16,7 @@ from ehio.drakkar import (
     group_samples_by_assembly,
     read_drakkar_version,
     normalise_assembly_type,
+    normalise_profiling_type,
     verify_input_files,
     write_bins_file,
     write_sample_file,
@@ -225,6 +226,28 @@ class TestNormaliseAssemblyType:
     @pytest.mark.parametrize("value", ["", None, [], "Something else"])
     def test_unset_or_unknown_returns_empty(self, value):
         assert normalise_assembly_type(value) == ""
+
+
+class TestNormaliseProfilingType:
+    """ehi-core's batch types are 'genome' and 'pangenome'; drakkar's workflow
+    only knows 'genomes' and 'pangenomes', and runs nothing given 'genome'."""
+
+    @pytest.mark.parametrize("value,expected", [
+        ("genome",              "genomes"),
+        ("Genome",              "genomes"),
+        ("genomes",             "genomes"),
+        ("pangenome",           "pangenomes"),
+        ("Pangenomes",          "pangenomes"),
+        ("genome, pangenome",   "genomes,pangenomes"),
+        (["genome"],            "genomes"),
+        ("genome,genomes",      "genomes"),
+    ])
+    def test_recognised_values(self, value, expected):
+        assert normalise_profiling_type(value) == expected
+
+    @pytest.mark.parametrize("value", ["", None, [], "Something else"])
+    def test_unset_or_unknown_leaves_the_drakkar_default(self, value):
+        assert normalise_profiling_type(value) == ""
 
 
 class TestGroupSamplesByAssembly:

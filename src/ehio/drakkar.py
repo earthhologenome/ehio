@@ -13,6 +13,18 @@ from typing import Any
 # --multicoverage and lets the codes be checked before the run starts.
 ASSEMBLY_TYPES = ("individual", "coassembly", "multicoverage")
 
+# drakkar's profiling types (--type, comma-separated), keyed by the words a
+# DMB batch type may use for them.  ehi-core offers 'genome' and 'pangenome',
+# which drakkar does not know: its workflow looks for 'genomes' and
+# 'pangenomes' and, given anything else, runs nothing and reports success.
+PROFILING_TYPES = {
+    "genome":         "genomes",
+    "genomes":        "genomes",
+    "pangenome":      "pangenomes",
+    "pangenomes":     "pangenomes",
+    "microdiversity": "microdiversity",
+}
+
 
 def normalise_assembly_type(value: object) -> str:
     """Return the canonical assembly type of an Airtable batch-type value.
@@ -25,6 +37,24 @@ def normalise_assembly_type(value: object) -> str:
         value = value[0] if value else ""
     text = re.sub(r"[^a-z]", "", str(value or "").lower())
     return text if text in ASSEMBLY_TYPES else ""
+
+
+def normalise_profiling_type(value: object) -> str:
+    """Return the drakkar --type of a DMB batch-type value.
+
+    Case and punctuation are ignored and each comma-separated type is read on
+    its own, so 'Genome', 'genomes' and 'genome, pangenome' all reach drakkar
+    in its own words.  Unrecognised types are left out; an empty result leaves
+    drakkar on its default, genomes.
+    """
+    if isinstance(value, list):
+        value = ",".join(str(v) for v in value)
+    types: list[str] = []
+    for part in str(value or "").split(","):
+        known = PROFILING_TYPES.get(re.sub(r"[^a-z]", "", part.lower()))
+        if known and known not in types:
+            types.append(known)
+    return ",".join(types)
 
 
 def group_samples_by_assembly(
