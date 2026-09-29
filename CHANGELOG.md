@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.10.2] - 2026-09-29
+
+### Fixed
+
+- **DMB batches described by ehi-core are profiled again.** ehi-core's batch types are `genome` and `pangenome`, and the scan passed them to drakkar unchanged (`drakkar profiling -t genome`). drakkar only knows `genomes` and `pangenomes`; given anything else, its workflow builds nothing but its `all` rule and reports success. DMB0187's resume mapped no reads this way, and was stopped by 0.10.1's check for the counts table. The scan now translates the batch type into drakkar's `--type`, ignoring case and punctuation and reading each comma-separated type on its own, leaves an unrecognised type to drakkar's default (`genomes`), and prints the type each DMB batch is launched with.
+
 ## [0.10.1] - 2026-09-29
 
 ### Fixed
