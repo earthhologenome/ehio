@@ -672,7 +672,7 @@ class TestReannotateFlag:
         output_line = next(
             line for line in script.splitlines() if "ehio annotating --output" in line
         )
-        assert "--reannotate" in output_line
+        assert "--tasks function" in output_line
         assert "--rerun" in output_line
 
     def test_clears_a_stale_lock(self):
@@ -700,6 +700,92 @@ class TestReannotateFlag:
         assert "drakkar profiling" in script
         assert "annotating --stage" not in script
         assert "--reannotate" not in script
+
+
+# ---------------------------------------------------------------------------
+# Tasks — what a DMB batch does: profile, taxonomy, function
+# ---------------------------------------------------------------------------
+
+class TestDmbTasks:
+    RUN = "/projects/ehi/data/RUN/DMB0200"
+    OUT = "/projects/ehi/data/DMB/DMB0200"
+
+    def _script(self, tasks, **kwargs):
+        return build_script_content(
+            "quantifying", "DMB0200", self.RUN, self.OUT, "slurm", tasks=tasks, **kwargs,
+        )
+
+    @staticmethod
+    def _line(script, text):
+        return next(line for line in script.splitlines() if text in line)
+
+    def test_no_tasks_is_the_whole_batch(self):
+        script = self._script(None)
+        assert "drakkar profiling" in script
+        assert "--annotation-type taxonomy" in script
+        assert "--annotation-type function" in script
+        assert "annotating --stage" not in script
+        assert "--tasks profile,taxonomy,function" in self._line(script, "ehio annotating --output")
+
+    def test_profile_alone_ends_the_batch_after_its_counts(self):
+        script = self._script(("profile",))
+        assert "drakkar profiling" in script
+        assert "ehio quantifying --output" in script
+        assert "drakkar annotating" not in script
+        assert "ehio annotating" not in script
+        last_status = [line for line in script.splitlines() if "ehio set-status" in line and "--failures-dir" not in line][-1]
+        assert "--status Done" in last_status
+        assert script.index("ehio quantifying --output") < script.index(last_status)
+
+    def test_taxonomy_alone_stages_the_genomes_and_classifies_them(self):
+        script = self._script(("taxonomy",))
+        assert "drakkar profiling" not in script
+        assert "ehio quantifying" not in script
+        assert script.index("--status 'Annotating taxonomy'") < script.index("annotating --stage")
+        assert script.index("annotating --stage") < script.index("--annotation-type taxonomy")
+        assert "--annotation-type function" not in script
+        assert "ehio annotating --input" not in script
+        output = self._line(script, "ehio annotating --output")
+        assert "--tasks taxonomy" in output
+        assert "--rerun" in output
+
+    def test_taxonomy_and_function_without_profiling_stage_once(self):
+        script = self._script(("taxonomy", "function"))
+        assert script.count("ehio annotating --stage") == 1
+        assert script.index("--annotation-type taxonomy") < script.index("ehio annotating --input")
+        assert "Annotating function" in script
+        assert "--rerun" in self._line(script, "ehio annotating --input")
+        assert f"_ehio_require {self.OUT}/annotating/final" in script
+
+    def test_a_batch_that_profiles_annotates_only_what_is_not_annotated_yet(self):
+        script = self._script(("profile", "function"))
+        assert "--annotation-type taxonomy" not in script
+        assert "genome_taxonomy.tsv" not in script
+        assert "--rerun" not in self._line(script, "ehio annotating --input")
+        assert "--tasks profile,function" in self._line(script, "ehio annotating --output")
+
+    def test_the_reannotate_status_is_the_function_alone(self):
+        script = self._script(("profile", "taxonomy"), reannotate=True)
+        assert "drakkar profiling" not in script
+        assert "--annotation-type taxonomy" not in script
+        assert "--tasks function" in self._line(script, "ehio annotating --output")
+
+    def test_a_batch_without_profiling_clears_a_stale_lock(self):
+        assert "drakkar unlock" in self._script(("function",))
+        assert "drakkar unlock" not in self._script(("profile", "function"))
+
+    def test_the_tasks_of_a_core_batch_reach_its_script(self, monkeypatch, tmp_path):
+        real_get = cfg.get
+        monkeypatch.setattr(cfg, "get", lambda key, default=None:
+                            str(tmp_path / key) if key in ("MAG_DMB_OUTPUT_BASE", "RUN_BASE")
+                            else "" if key == "MAG_DMB_BATCH" else real_get(key, default))
+        monkeypatch.setattr("ehio.scanning.session_exists", lambda name: False)
+        core = FakeCore([{"code": "DMB0200", "status": "Ready", "tasks": ["Taxonomy"]}])
+        found, count = scan_module("quantifying", "tok", dry_run=True, core=CoreSession(core))
+        assert (found, count) == (1, 1)
+        script = (tmp_path / "RUN_BASE" / "DMB0200" / "DMB0200.sh").read_text()
+        assert "drakkar profiling" not in script
+        assert "--tasks taxonomy" in script
 
 
 # ---------------------------------------------------------------------------

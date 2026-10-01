@@ -26,6 +26,36 @@ PROFILING_TYPES = {
 }
 
 
+# What a DMB batch is asked to do (ehi-core's Tasks), in the order the steps
+# run: profile the samples against the dereplicated catalogue, classify the
+# genomes with GTDB-Tk, annotate their genes.  A batch that names none of them
+# does all three, as every DMB batch did before Tasks existed.
+DMB_TASKS = ("profile", "taxonomy", "function")
+_DMB_TASK_WORDS = {
+    "profile":    "profile",
+    "profiling":  "profile",
+    "taxonomy":   "taxonomy",
+    "function":   "function",
+    "functional": "function",
+}
+
+
+def normalise_dmb_tasks(value: object) -> tuple[str, ...]:
+    """Return the tasks of a DMB batch, in the order they run.
+
+    Takes the list ehi-core holds, or the same names comma-separated, ignoring
+    case and punctuation.  Unrecognised names are left out, and a batch left
+    with none does all of them.
+    """
+    if isinstance(value, (list, tuple)):
+        value = ",".join(str(v) for v in value)
+    named = {
+        _DMB_TASK_WORDS.get(re.sub(r"[^a-z]", "", part.lower()))
+        for part in str(value or "").split(",")
+    }
+    return tuple(task for task in DMB_TASKS if task in named) or DMB_TASKS
+
+
 def normalise_assembly_type(value: object) -> str:
     """Return the canonical assembly type of an Airtable batch-type value.
 

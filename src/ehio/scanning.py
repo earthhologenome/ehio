@@ -14,7 +14,13 @@ from typing import Any
 from ehio import config as cfg
 from ehio.airtable import AirtableClient, AirtableError
 from ehio.core import CoreError
-from ehio.drakkar import LOGGING_DIRNAME, normalise_assembly_type, normalise_profiling_type
+from ehio.drakkar import (
+    DMB_TASKS,
+    LOGGING_DIRNAME,
+    normalise_assembly_type,
+    normalise_dmb_tasks,
+    normalise_profiling_type,
+)
 
 # Marker file written by 'ehio stop' in the run directory of a batch.
 STOP_SENTINEL = ".ehio_stopped"
@@ -206,6 +212,7 @@ def build_script_content(
     ani_threshold: str = "",
     profiling_type: str = "",
     annotation_type: str = "all",
+    tasks: tuple[str, ...] | None = None,
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -216,11 +223,14 @@ def build_script_content(
     run_dir    — /projects/ehi/data/RUN/{batch_code}  (samples.tsv, logs, .snakemake)
     output_dir — /projects/ehi/data/{PPR|ASB|DMB|AMR}/{batch_code}  (drakkar -o target)
     ref_flag   — pre-resolved '-x url' or '-r url' for preprocessing; '' otherwise
+    tasks      — what a DMB batch does, of DMB_TASKS; None does all of it, and
+                 `reannotate` (the Reannotate status) is the function alone
     """
     if module not in MODULES:
         raise ValueError(f"Unknown module: {module}")
 
     drakkar_sub = DRAKKAR_CMD.get(module, "")
+    tasks = ("function",) if reannotate else normalise_dmb_tasks(tasks)
     q = shlex.quote
 
     tsv_file = f"{run_dir}/{batch_name}.tsv"
@@ -380,13 +390,13 @@ def build_script_content(
     # the Snakemake lock behind in the output directory, and drakkar refuses to
     # start over a locked directory.  Clearing it is what makes a resume able to
     # continue from the checkpoint at all.
-    # A re-annotation is re-runnable in the same way — it is set back to the
-    # reannotate status and picks up where it stopped — so it clears the lock
-    # too.  On a first run the output directory has just been created and there
-    # is nothing to unlock, which is why the call is allowed to fail.
+    # A DMB batch that does not profile is re-runnable in the same way — it is
+    # set back to its status and picks up where it stopped — so it clears the
+    # lock too.  On a first run the output directory has just been created and
+    # there is nothing to unlock, which is why the call is allowed to fail.
     unlock_step = (
         f"{drakkar_prefix}drakkar unlock -o {q(output_dir)} -p {q(profile)} || true\n"
-        if resume or reannotate else ""
+        if resume or (module == "quantifying" and "profile" not in tasks) else ""
     )
 
     time_part   = f" --time-multiplier {boost_time}"     if boost_time   and boost_time   > 1 else ""
@@ -503,122 +513,132 @@ def build_script_content(
             f"{drakkar_prefix}drakkar annotating -B {q(annotation_file)} -p {q(profile)}{boost_parts} --annotation-type {q(drakkar_ann_flag)}\n"
         )
 
-        if reannotate:
-            # A batch whose genomes were dereplicated and profiled long ago,
-            # sent through the current drakkar's functional annotation again.
-            # Everything before the annotation is skipped: no profiling, so no
-            # reads and no MAG_DMB_BATCH_LIST_PPR are needed, and no 'ehio
-            # quantifying --output', so the counts, the mapping rates and the
-            # dereplicated MAG count already on the records are left exactly as
-            # they are.
-            #
-            # Taxonomy is skipped as well, and deliberately: a genome's
-            # classification is a property of the genome, fixed when it was
-            # binned, and dereplication neither changes it nor produces a
-            # better one.  Re-running GTDB-Tk here would rewrite the taxonomy
-            # of every MAG in the catalogue against whichever GTDB release
-            # happens to be installed, which is a different operation from
-            # annotating them again and not one a DMB batch should be doing.
-            #
-            # What the batch does need is its genomes back on disk, which is
-            # the staging step: the catalogue comes from the counts table the
-            # batch left on ERDA and each genome from its own MAG record.
-            #
-            # 'annotating --input' runs with --rerun so every genome is
-            # annotated again rather than skipped for already carrying the
-            # batch's annotation level — which, after a finished batch, all of
-            # them do.  That also leaves the cluster-upgrade file empty, so the
-            # clusters step below stays skipped and the single 'function' run
-            # covers the whole catalogue.
-            return header + (
-                f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_func_status)}\n"
+        # What the batch is asked to do.  A batch that does not profile works
+        # on a catalogue dereplicated and profiled long ago: its genomes are no
+        # longer on the cluster, so they are staged again first, and every
+        # genome is classified and annotated again rather than skipped for
+        # already carrying the batch's annotation level — which, after a
+        # finished batch, all of them do.  Its counts, mapping rates and
+        # dereplicated MAG count are left exactly as they are, and neither the
+        # reads nor the batch's samples are needed.
+        does_profile  = "profile"  in tasks
+        does_taxonomy = "taxonomy" in tasks
+        does_function = "function" in tasks
+        recompute     = rerun or not does_profile
+        recompute_flag = " --rerun" if recompute else ""
+        done_status   = str(cfg.get("PROCESSING_DONE_STATUS") or "Done").strip()
+
+        def status_line(status: str) -> str:
+            return f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(status)}\n"
+
+        steps = ""
+        if does_profile:
+            if resume:
+                # mags.tsv (the MAG info table) was added to drakkar after the first
+                # batches were finished, so a resumed batch that has its dereplicated
+                # genomes but no mags.tsv still calls drakkar: snakemake then builds
+                # that one missing target and leaves everything else alone.
+                #
+                # The dereplicated genomes and mags.tsv are both written before
+                # the catalogue is indexed and the reads are mapped, so neither
+                # says the profiling finished: a batch whose run stopped at the
+                # index or the mapping has them but no counts table, and still
+                # needs drakkar.
+                profiling_step = optional_drakkar_step(
+                    f"[ ! -d {q(derep_genomes_dir)} ] || [ ! -s {q(mags_info_tsv)} ]"
+                    f" || [ ! -s {q(counts_tsv)} ]",
+                    profiling_cmd, "profiling",
+                )
+                # Re-run the upload when mags.tsv or the counts table is newer than
+                # the last upload, so a file drakkar has just produced still
+                # reaches the DMB folder and the mapping rates reach the records.
+                qfy_output_step = (
+                    f"if [ ! -f {q(qfy_output_sentinel)} ]"
+                    f" || [ {q(mags_info_tsv)} -nt {q(qfy_output_sentinel)} ]"
+                    f" || [ {q(counts_tsv)} -nt {q(qfy_output_sentinel)} ]; then\n"
+                    f"  ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
+                    f"  touch {q(qfy_output_sentinel)}\n"
+                    f"fi\n"
+                )
+            else:
+                profiling_step = drakkar_step(profiling_cmd, "profiling")
+                qfy_output_step = f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
+            steps += (
+                status_line(qfy_status)
+                + input_step
+                + unlock_step
+                + profiling_step
+                # The counts table is the last thing profiling writes, so it is
+                # the one that says the reads were mapped and counted.
+                + f"_ehio_require {q(counts_tsv)} {q('profiling')}\n"
+                + qfy_output_step
+            )
+        else:
+            # The status of the first step the batch takes, set before the
+            # genomes are fetched, which is most of the time a batch like
+            # this spends before drakkar starts.
+            steps += (
+                status_line(ann_tax_status if does_taxonomy else ann_func_status)
                 + f"ehio annotating --stage -b {q(batch_name)} -d {q(derep_genomes_dir)}\n"
                 + f"_ehio_require {q(derep_genomes_dir)} {q('annotating --stage')}\n"
                 + unlock_step
-                + f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)}"
-                  f" -d {q(derep_genomes_dir)} --rerun\n"
+            )
+
+        if does_taxonomy:
+            taxonomy_step = (
+                optional_drakkar_step(f"[ ! -f {q(taxonomy_tsv)} ]", taxonomy_cmd, "annotating taxonomy")
+                if resume else drakkar_step(taxonomy_cmd, "annotating taxonomy")
+            )
+            steps += (
+                (status_line(ann_tax_status) if does_profile else "")
+                + taxonomy_step
+                + f"_ehio_require {q(taxonomy_tsv)} {q('annotating taxonomy')}\n"
+            )
+
+        if does_function:
+            ann_input_step = (
+                f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)}"
+                f" -d {q(derep_genomes_dir)}{recompute_flag}\n"
+            )
+            if resume and does_profile:
+                ann_input_step = f"[ -s {q(annotation_file)} ] || " + ann_input_step
+            # Forcing every genome also leaves the cluster-upgrade file empty,
+            # so the clusters step stays skipped and the single 'function' run
+            # covers the whole catalogue.
+            clusters_step = optional_drakkar_step(
+                f"[ -s {q(annotation_clusters_file)} ]",
+                f"{drakkar_prefix}drakkar annotating -B {q(annotation_clusters_file)} -p {q(profile)}{boost_parts} --annotation-type clusters\n",
+                "annotating clusters",
+            ) if annotation_type.lower() == "all" else ""
+            steps += (
+                (status_line(ann_func_status) if does_profile or does_taxonomy else "")
+                + ann_input_step
                 + optional_drakkar_step(
                     f"[ -s {q(annotation_file)} ]", function_cmd, "annotating function",
                 )
-                + f"_ehio_require {q(output_dir + '/annotating/final')} {q('annotating function')}\n"
-                + optional_drakkar_step(
-                    f"[ -s {q(annotation_clusters_file)} ]",
-                    f"{drakkar_prefix}drakkar annotating -B {q(annotation_clusters_file)} -p {q(profile)}{boost_parts} --annotation-type clusters\n",
-                    "annotating clusters",
-                )
-                # --rerun replaces ANN/{batch} on ERDA, whose per-genome tables
-                # are the ones just superseded; --reannotate keeps the drakkar
-                # version that profiled the batch on the record instead of
-                # overwriting it with the annotation run's.
-                + f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)} --rerun --reannotate\n"
-                + "_EHIO_SUCCESS=1\n"
+                # Without profiling every genome is annotated, so there are
+                # always gene tables to find; a batch that profiles may have
+                # found its MAGs annotated far enough already.
+                + (f"_ehio_require {q(output_dir + '/annotating/final')} {q('annotating function')}\n"
+                   if not does_profile else "")
+                + clusters_step
             )
 
-        if resume:
-            # mags.tsv (the MAG info table) was added to drakkar after the first
-            # batches were finished, so a resumed batch that has its dereplicated
-            # genomes but no mags.tsv still calls drakkar: snakemake then builds
-            # that one missing target and leaves everything else alone.
-            #
-            # The dereplicated genomes and mags.tsv are both written before
-            # the catalogue is indexed and the reads are mapped, so neither
-            # says the profiling finished: a batch whose run stopped at the
-            # index or the mapping has them but no counts table, and still
-            # needs drakkar.
-            profiling_step = optional_drakkar_step(
-                f"[ ! -d {q(derep_genomes_dir)} ] || [ ! -s {q(mags_info_tsv)} ]"
-                f" || [ ! -s {q(counts_tsv)} ]",
-                profiling_cmd, "profiling",
-            )
-            # Re-run the upload when mags.tsv or the counts table is newer than
-            # the last upload, so a file drakkar has just produced still
-            # reaches the DMB folder and the mapping rates reach the records.
-            qfy_output_step = (
-                f"if [ ! -f {q(qfy_output_sentinel)} ]"
-                f" || [ {q(mags_info_tsv)} -nt {q(qfy_output_sentinel)} ]"
-                f" || [ {q(counts_tsv)} -nt {q(qfy_output_sentinel)} ]; then\n"
-                f"  ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
-                f"  touch {q(qfy_output_sentinel)}\n"
-                f"fi\n"
-            )
-            taxonomy_step = optional_drakkar_step(
-                f"[ ! -f {q(taxonomy_tsv)} ]", taxonomy_cmd, "annotating taxonomy",
-            )
-            ann_input_step = (
-                f"[ -s {q(annotation_file)} ] || "
-                f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}{rerun_flag}\n"
+        if does_taxonomy or does_function:
+            # --tasks says which results to write back: a step the batch did
+            # not take leaves what the records hold alone, and a batch that
+            # did not profile keeps the drakkar version that profiled it on the
+            # record.  Recomputed results replace those on ERDA.
+            steps += (
+                f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)}"
+                f" --tasks {q(','.join(tasks))}{recompute_flag}\n"
             )
         else:
-            profiling_step = drakkar_step(profiling_cmd, "profiling")
-            qfy_output_step = f"ehio quantifying --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
-            taxonomy_step = drakkar_step(taxonomy_cmd, "annotating taxonomy")
-            ann_input_step = f"ehio annotating --input -b {q(batch_name)} -f {q(annotation_file)} -d {q(derep_genomes_dir)}{rerun_flag}\n"
-        clusters_step = optional_drakkar_step(
-            f"[ -s {q(annotation_clusters_file)} ]",
-            f"{drakkar_prefix}drakkar annotating -B {q(annotation_clusters_file)} -p {q(profile)}{boost_parts} --annotation-type clusters\n",
-            "annotating clusters",
-        ) if annotation_type.lower() == "all" else ""
-        return header + (
-            f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(qfy_status)}\n"
-            + input_step
-            + unlock_step
-            + profiling_step
-            # The counts table is the last thing profiling writes, so it is
-            # the one that says the reads were mapped and counted.
-            + f"_ehio_require {q(counts_tsv)} {q('profiling')}\n"
-            + qfy_output_step
-            + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_tax_status)}\n"
-            + taxonomy_step
-            + f"_ehio_require {q(taxonomy_tsv)} {q('annotating taxonomy')}\n"
-            + f"ehio set-status --module quantifying -b {q(batch_name)} --status {q(ann_func_status)}\n"
-            + ann_input_step
-            + optional_drakkar_step(
-                f"[ -s {q(annotation_file)} ]", function_cmd, "annotating function",
-            )
-            + clusters_step
-            + f"ehio annotating --output -b {q(batch_name)} -l {q(output_dir)}{rerun_flag}\n"
-            + "_EHIO_SUCCESS=1\n"
-        )
+            # Profiling alone: 'quantifying --output' has written everything,
+            # and there is no annotation step to end the batch.
+            steps += status_line(done_status)
+
+        return header + steps + "_EHIO_SUCCESS=1\n"
 
     raise ValueError(f"Unknown module: {module}")
 
@@ -709,6 +729,7 @@ _CORE_COLUMN = {
     "MAG_DMB_BATCH_TYPE":            "batch_type",
     "MAG_DMB_BATCH_ANI":             "ani_threshold",
     "MAG_DMB_BATCH_ANNOTATION_TYPE": "annotation_type",
+    "MAG_DMB_BATCH_TASKS":           "tasks",
     "EHI_PPR_BATCH_REFERENCE":       "reference_genome_code",
 }
 
@@ -1091,7 +1112,12 @@ def scan_module(
         ani_threshold   = ""
         profiling_type  = ""
         annotation_type = "all"
+        tasks           = DMB_TASKS
         if module == "quantifying":
+            # The Reannotate status predates Tasks and keeps meaning the
+            # functional annotation alone.
+            tasks = ("function",) if do_reannotate else normalise_dmb_tasks(batch.value("MAG_DMB_BATCH_TASKS"))
+            print(f"  [{module}] {batch_name}: tasks → {', '.join(tasks)}", file=sys.stderr)
             ani_threshold   = batch.text("MAG_DMB_BATCH_ANI")
             profiling_type  = normalise_profiling_type(batch.value("MAG_DMB_BATCH_TYPE"))
             print(
@@ -1115,6 +1141,7 @@ def scan_module(
             ani_threshold=ani_threshold,
             profiling_type=profiling_type,
             annotation_type=annotation_type,
+            tasks=tasks,
         )
 
         if do_rerun:
@@ -1132,10 +1159,11 @@ def scan_module(
             print(f"  [{module}] {batch_name}: script written → {script_path}")
             if do_resume:
                 print(f"  [{module}] {batch_name}: resume — skipping input file generation (using existing TSV)")
-            elif do_reannotate:
-                # A re-annotation never calls drakkar profiling, so it needs
-                # neither the bins file nor the reads file that step reads.
-                print(f"  [{module}] {batch_name}: reannotate — no profiling input files needed")
+            elif "profile" not in tasks:
+                # A batch that does not profile never calls drakkar profiling,
+                # so it needs neither the bins file nor the reads file that
+                # step reads.
+                print(f"  [{module}] {batch_name}: no profiling — no profiling input files needed")
             else:
                 try:
                     _generate_input_files(module, batch_name, run_dir, token, core_token)

@@ -709,6 +709,21 @@ class TestAnnotatingOutputReannotate:
         batch_update = output_airtable.update_records.call_args_list[-1][0][1][0]
         assert batch_update["fields"]["fldDRAKKAR"] == "2.5.0"
 
+    def test_a_taxonomy_task_writes_the_taxonomy_and_leaves_the_genes(self, tmp_path, output_airtable):
+        xfer = self._run(tmp_path, {"reannotate": False, "tasks": "taxonomy"})
+        fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
+        assert fields["fldDOMAIN"] == "Bacteria"
+        assert "fldGENES" not in fields
+        assert "fldANNOTATED" not in fields
+        uploaded = [call.args[1] for call in xfer.upload_flat.call_args_list]
+        assert not any(remote.endswith("/ANN/DMB0157") for remote in uploaded)
+
+    def test_without_profiling_the_recorded_version_is_kept(self, tmp_path, output_airtable):
+        with patch.object(cli, "_get_drakkar_version", return_value="2.6.1"):
+            self._run(tmp_path, {"reannotate": False, "tasks": "taxonomy"})
+        batch = output_airtable.update_records.call_args_list[-1][0][1][0]["fields"]
+        assert batch["fldDRAKKAR"] == "2.4.4/2.6.1"
+
     def test_the_batch_is_marked_done(self, tmp_path, output_airtable):
         self._run(tmp_path)
         batch_update = output_airtable.update_records.call_args_list[-1][0][1][0]

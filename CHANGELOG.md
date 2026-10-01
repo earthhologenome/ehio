@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **A DMB batch runs the tasks ehi-core's Tasks name: Profile, Taxonomy and Function, in any combination.** A batch with no Tasks runs all three, as before.
+  - Without Profile, the batch works on a catalogue dereplicated and profiled long ago. Its genomes are staged from ERDA, every genome is classified or annotated again, the new results replace the old ones, and the drakkar version on the record is kept with the new one appended. A batch can now have its taxonomy redone, not only its genes.
+  - With Profile alone, the batch ends Done once `ehio quantifying --output` has written its counts.
+  - `ehio annotating --output --tasks` writes back the results of the tasks it names and nothing else. `--reannotate` is kept as `--tasks function`, and the Reannotate status still runs Function alone.
+  - The scan prints each DMB batch's tasks. Needs the ehi-core release that adds Tasks; against an older core every batch runs all three.
+
 ### Changed
 
 - **DMB batches are read from ehi-core alone.** `MAG_DMB_BATCH` is left empty, which switches Airtable's dereplication batch table off: the scan, every `quantifying` and `annotating` step and `set-status` find DMB batches in the core, the way MAGs already are. The Airtable token no longer reaches the MAG base, so a scan of DMB batches stopped on a 403 before it reached the core.

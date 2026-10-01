@@ -15,7 +15,9 @@ from ehio.drakkar import (
     format_drakkar_versions,
     group_samples_by_assembly,
     read_drakkar_version,
+    DMB_TASKS,
     normalise_assembly_type,
+    normalise_dmb_tasks,
     normalise_profiling_type,
     verify_input_files,
     write_bins_file,
@@ -605,3 +607,22 @@ class TestReadOnlyRunsAreNotCounted:
         path = tmp_path / "drakkar_20260901-101500.yaml"
         path.write_text("drakkar_version: 2.4.0\nstatus: success\n")
         assert drakkar_versions_used(tmp_path) == ["2.4.0"]
+
+
+class TestNormaliseDmbTasks:
+    """ehi-core's Tasks: what a DMB batch does, in the order the steps run."""
+
+    @pytest.mark.parametrize("value,expected", [
+        (["Profile"],                         ("profile",)),
+        (["Function", "Taxonomy"],            ("taxonomy", "function")),
+        ("Taxonomy, function",                ("taxonomy", "function")),
+        (["Profiling", "Functional"],         ("profile", "function")),
+        (["Profile", "Taxonomy", "Function"], DMB_TASKS),
+    ])
+    def test_recognised_values(self, value, expected):
+        assert normalise_dmb_tasks(value) == expected
+
+    @pytest.mark.parametrize("value", [None, "", [], ["Something else"]])
+    def test_a_batch_naming_no_task_does_them_all(self, value):
+        # Every DMB batch did all three before Tasks existed.
+        assert normalise_dmb_tasks(value) == DMB_TASKS

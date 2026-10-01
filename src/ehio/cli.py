@@ -1454,6 +1454,19 @@ def _merge_drakkar_versions(recorded: str, new: str) -> str:
     return format_drakkar_versions(merged)
 
 
+def _annotating_tasks(args: argparse.Namespace) -> tuple[str, ...]:
+    """What the batch 'annotating --output' writes back for did: --tasks, or
+    --reannotate (written into the scripts of earlier versions) for the
+    functional annotation alone, or else all of it."""
+    from ehio.drakkar import normalise_dmb_tasks
+
+    if getattr(args, "tasks", None):
+        return normalise_dmb_tasks(args.tasks)
+    if getattr(args, "reannotate", False):
+        return ("function",)
+    return normalise_dmb_tasks(None)
+
+
 def cmd_annotating(args: argparse.Namespace) -> int:
     if getattr(args, "stage", False):
         return _run_annotating_stage(args)
@@ -1792,19 +1805,20 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         if fld_id:
             field_map[metric_key] = fld_id
 
-    # A re-annotation is the functional half of the batch only: a genome's
-    # classification is fixed when it is binned, and dereplicating it neither
-    # changes it nor produces a better one.  The taxonomy already on the MAG
-    # records is therefore left alone — including when the output directory
-    # happens to hold a genome_taxonomy.tsv from some earlier run, which would
-    # otherwise be parsed and written back over it.
-    reannotate = getattr(args, "reannotate", False)
+    # What the batch did, and so which of its results are written back: a
+    # task it did not take leaves what the records and ERDA hold alone —
+    # including whatever an earlier run left in the output directory, such as
+    # a genome_taxonomy.tsv that would otherwise be parsed over the taxonomy
+    # already on the MAG records.
+    tasks = _annotating_tasks(args)
+    wrote_taxonomy = "taxonomy" in tasks
+    wrote_function = "function" in tasks
 
     # Parse genome_taxonomy.tsv
     taxonomy_tsv = ann_dir / "genome_taxonomy.tsv"
-    if reannotate:
+    if not wrote_taxonomy:
         taxonomy_data: dict = {}
-        _info("Re-annotation: taxonomy is left as it is on the MAG records.")
+        _info("No taxonomy task: taxonomy is left as it is on the MAG records.")
     else:
         taxonomy_data = parse_genome_taxonomy_tsv(taxonomy_tsv)
         if not taxonomy_data:
@@ -1819,8 +1833,10 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     annotation_data = {
         mag_id: parse_annotation_tsv(path)
         for mag_id, path in find_gene_tables(final_dir).items()
-    }
-    if final_dir.is_dir() and not annotation_data:
+    } if wrote_function else {}
+    if not wrote_function:
+        _info("No function task: gene metrics are left as they are on the MAG records.")
+    elif final_dir.is_dir() and not annotation_data:
         _info(f"No per-genome gene table (*_genes.tsv) found in {final_dir}.")
 
     # Build the update payloads: Airtable for the MAGs it holds, the core for all
@@ -1875,8 +1891,8 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     dmb_tmp: list[Path] = []
 
     # genome_taxonomy.tsv is compressed and renamed to {batch}_genome_taxonomy.tsv.gz
-    if reannotate:
-        _info("  Re-annotation: the taxonomy table and trees on ERDA are left as they are.")
+    if not wrote_taxonomy:
+        _info("  No taxonomy task: the taxonomy table and trees on ERDA are left as they are.")
     elif taxonomy_tsv.exists():
         tax_gz = ann_dir / f"{args.batch}_genome_taxonomy.tsv.gz"
         with taxonomy_tsv.open("rb") as _fin, _gzip.open(tax_gz, "wb") as _fout:
@@ -1891,7 +1907,7 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     # under batch-prefixed names.  cluster_annotations.tsv.xz holds the dbCAN
     # gene clusters, antiSMASH regions, geNomad mobile elements and defense
     # systems, and only exists for a batch whose annotation type covers them.
-    for ann_name in ("gene_annotations.tsv.xz", "cluster_annotations.tsv.xz"):
+    for ann_name in ("gene_annotations.tsv.xz", "cluster_annotations.tsv.xz") if wrote_function else ():
         ann_file = ann_dir / ann_name
         if not ann_file.exists():
             _info(f"  {ann_name} not found in {ann_dir} — skipping.")
@@ -1906,9 +1922,8 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         dmb_tmp.append(ann_alias)
         _info(f"  Renamed {ann_file.name} → {ann_alias.name}")
 
-    # The trees are GTDB-Tk products, so they belong to the taxonomy run that a
-    # re-annotation does not repeat.
-    for fname in () if reannotate else ("bacteria.tree", "archaea.tree"):
+    # The trees are GTDB-Tk products, so they belong to the taxonomy task.
+    for fname in ("bacteria.tree", "archaea.tree") if wrote_taxonomy else ():
         p = ann_dir / fname
         if p.exists():
             dmb_files.append(p)
@@ -1936,7 +1951,7 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     # Gzip per-genome TSVs and upload to ANN/{batch}/
     ann_remote = f"{remote_base.rstrip('/')}/ANN/{args.batch}"
     gz_files: list[Path] = []
-    if final_dir.is_dir():
+    if wrote_function and final_dir.is_dir():
         for tsv_file in sorted(final_dir.glob("*.tsv")):
             gz = Path(str(tsv_file) + ".gz")
             with tsv_file.open("rb") as _fin, _gzip.open(gz, "wb") as _fout:
@@ -1971,15 +1986,13 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     # what makes an upgrade between profiling and annotating visible.
     if drakkar_version_field:
         version = _get_drakkar_version(local_root)
-        # A re-annotation runs in a fresh output directory that holds the
-        # annotation runs and nothing else, so the version read from it does
-        # not know about the drakkar that dereplicated and profiled the batch
-        # however long ago.  That version only survives in Airtable, so it is
-        # kept and the new one appended to it rather than overwriting it.
-        if getattr(args, "reannotate", False):
-            # The version that dereplicated and profiled the batch, however
-            # long ago, only survives on the batch record, so it is kept and
-            # the new one appended rather than overwriting it.
+        # A batch that did not profile runs in an output directory that holds
+        # its annotation runs and nothing else, so the version read from it
+        # does not know about the drakkar that dereplicated and profiled the
+        # batch however long ago.  That version only survives on the batch
+        # record, so it is kept and the new one appended rather than
+        # overwriting it.
+        if "profile" not in tasks:
             version = _merge_drakkar_versions(
                 _first_value(batch.value("MAG_DMB_BATCH_DRAKKAR_VERSION", "drakkar_version")),
                 version,
@@ -2839,10 +2852,14 @@ def _build_parser() -> argparse.ArgumentParser:
              "instead of from the batch's counts table on ERDA.")
     p_ann.add_argument("--redownload", action="store_true",
         help="Stage mode: fetch every genome again, even one already in --annotation-dir.")
+    p_ann.add_argument("--tasks", metavar="TASKS",
+        help="Output mode: what the batch did, comma-separated from profile, taxonomy and "
+             "function (default: all three). Only the results of these tasks are written "
+             "back, and a batch that did not profile keeps the drakkar version already on "
+             "its record, with the new one appended.")
     p_ann.add_argument("--reannotate", action="store_true",
-        help="Output mode: this is a re-annotation of an already-processed batch. Taxonomy "
-             "is left as it is on the MAG records and on ERDA, and the drakkar version "
-             "already on the batch record is kept with the new one appended.")
+        help="Output mode: the same as --tasks function (kept for scripts written by "
+             "earlier versions).")
     p_ann.add_argument("--download-timeout", metavar="SECONDS", type=float, default=600.0,
         help="Stage mode: per-genome download timeout in seconds (default: 600).")
     _add_sftp_overrides(p_ann)
