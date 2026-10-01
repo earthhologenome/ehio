@@ -7,6 +7,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- No unreleased changes yet.
+
+## [0.10.3] - 2026-10-01
+
+### Added
+
 - **A DMB batch runs the tasks ehi-core's Tasks name: Profile, Taxonomy and Function, in any combination.** A batch with no Tasks runs all three, as before.
   - Without Profile, the batch works on a catalogue dereplicated and profiled long ago. Its genomes are staged from ERDA, every genome is classified or annotated again, the new results replace the old ones, and the drakkar version on the record is kept with the new one appended. A batch can now have its taxonomy redone, not only its genes.
   - With Profile alone, the batch ends Done once `ehio quantifying --output` has written its counts.
