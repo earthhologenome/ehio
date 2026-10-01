@@ -1840,7 +1840,9 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
             n_annotated += 1
         if not metrics:
             continue
-        if mag["airtable_id"]:
+        # A MAG copied in from Airtable keeps its record id in the core, but a
+        # batch the core alone holds writes nothing back to Airtable.
+        if client and mag["airtable_id"]:
             payload = build_entry_update(mag["airtable_id"], metrics, field_map)
             if payload["fields"]:
                 updates.append(payload)
@@ -1995,8 +1997,13 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         core_batch = {"status": done_status}
         if drakkar_version_field:
             core_batch["drakkar_version"] = batch_fields[drakkar_version_field]
-        core.mirror(f"Batch '{args.batch}'",
-                    [mirror.batch("quantifying", args.batch, batch_record, **core_batch)])
+        units = [mirror.batch("quantifying", args.batch, batch_record, **core_batch)]
+        # For a batch the core alone holds, a status that did not reach the
+        # core was not set at all.
+        if batch.from_core:
+            core.write(units, f"Batch '{args.batch}'")
+        else:
+            core.mirror(f"Batch '{args.batch}'", units)
 
     return 0
 
@@ -3180,9 +3187,12 @@ def _set_core_status(args: argparse.Namespace, core, status: str) -> None:
 
 def cmd_set_status(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
+    from ehio.batches import airtable_configured
 
-    if args.module not in _SET_STATUS_CFG:
-        # No drakkar failure report to attach either: nothing but the status.
+    # A module whose Airtable keys are emptied (ENA submissions never had any)
+    # keeps its batches in the core alone, and there is no Airtable record to
+    # attach a failure report to either: nothing but the status.
+    if args.module not in _SET_STATUS_CFG or not airtable_configured(args.module):
         _set_core_status(args, _core_only(args), args.status)
         return 0
 

@@ -819,3 +819,30 @@ class TestWithTheCore:
         with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx):
             with pytest.raises(CoreError):
                 cli.cmd_annotating(_out_args(_output_dir(tmp_path)))
+
+    def test_a_batch_the_core_alone_holds_writes_nothing_to_airtable(self, tmp_path):
+        """With MAG_DMB_BATCH emptied the batch and its MAGs come from the core,
+        and a MAG copied in from Airtable keeps its record id there: the
+        output must still not reach for an Airtable client it never opened."""
+        config = {**OUTPUT_CFG, "MAG_DMB_BATCH": ""}
+        airtable = MagicMock()
+        fake = FakeCoreClient(
+            [{"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": "recM1"}],
+            batches={"DMB0157": {"row": {"code": "DMB0157", "annotation_type": None,
+                                         "drakkar_version": "2.4.4"}}},
+        )
+        ctx, _ = _uploading_sftp()
+        with patch("ehio.airtable.AirtableClient", return_value=airtable), \
+             patch.object(cli, "_resolve_token", return_value="tok"), \
+             patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)), \
+             patch.object(cli, "_require_cfg", side_effect=lambda k: config[k]), \
+             patch.object(cli, "_get_drakkar_version", return_value="2.6.1"), \
+             using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx):
+            assert cli.cmd_annotating(_out_args(_output_dir(tmp_path))) == 0
+
+        airtable.update_records.assert_not_called()
+        [annotated] = [row for row in fake.rows("mags") if row["values"].get("annotated")]
+        assert annotated["values"]["genes"] == 1
+        assert annotated["values"]["annotation_level"] == "all"
+        batch = fake.rows("dereplication_batches")[-1]["values"]
+        assert batch == {"status": "Done", "drakkar_version": "2.4.4/2.6.1"}

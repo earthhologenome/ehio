@@ -286,6 +286,17 @@ class TestQuantifyingOutput:
 # set-status and stop
 # ---------------------------------------------------------------------------
 
+# Airtable still set up for every module: the keys that say a module's
+# batches are looked for there at all.
+AIRTABLE_ON = {
+    "EHI_BASE": "app1", "MAG_BASE": "app2",
+    "EHI_PPR_BATCH": "tblPPR", "EHI_ASB_BATCH": "tblASB",
+    "MAG_DMB_BATCH": "tblDMB", "EHI_AMR_BATCH": "tblAMR",
+    "EHI_PPR_BATCH_CODE": "fldPPR", "EHI_ASB_BATCH_CODE": "fldASB",
+    "MAG_DMB_BATCH_CODE": "fldDMB", "EHI_AMR_BATCH_CODE": "fldAMR",
+}
+
+
 class TestStatus:
     def test_set_status_reaches_the_core(self):
         airtable = MagicMock()
@@ -295,12 +306,28 @@ class TestStatus:
             module="quantifying", batch="DMB0300", status="Annotating taxonomy",
             failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
         )
-        patches = [*_patched({}, airtable), using(fake)]
+        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
         patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
         assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
         [row] = fake.rows("dereplication_batches")
         assert row["key"] == {"code": "DMB0300"}
         assert row["values"] == {"status": "Annotating taxonomy"}
+
+    def test_a_module_switched_off_in_airtable_sets_its_status_in_the_core_alone(self):
+        """Emptying MAG_DMB_BATCH moves DMB batches to the core: the status, and
+        the exit trap of a failed run, must not go looking for the Airtable table."""
+        airtable = MagicMock()
+        fake = FakeCoreClient()
+        args = argparse.Namespace(
+            module="quantifying", batch="DMB0157", status="Annotating function",
+            failures_dir="/runs/DMB0157", failures_since=None, airtable_token=None, core_token=None,
+        )
+        patches = [*_patched({**AIRTABLE_ON, "MAG_DMB_BATCH": ""}, airtable), using(fake)]
+        assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
+        airtable.fetch_batch_record.assert_not_called()
+        airtable.update_records.assert_not_called()
+        [row] = fake.rows("dereplication_batches")
+        assert (row["key"], row["values"]) == ({"code": "DMB0157"}, {"status": "Annotating function"})
 
     def test_a_core_that_is_down_does_not_stop_a_status_change(self, capsys):
         from ehio.core import CoreError
@@ -313,7 +340,7 @@ class TestStatus:
             module="preprocessing", batch="PRB0001", status="Error",
             failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
         )
-        patches = [*_patched({}, airtable), using(fake)]
+        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
         patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
         assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
         airtable.update_records.assert_called_once()
@@ -329,7 +356,7 @@ class TestStatus:
             module="preprocessing", batch="PRB0500", status="Error",
             failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
         )
-        patches = [*_patched({}, airtable), using(fake)]
+        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
         patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
         assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
         airtable.update_records.assert_not_called()
@@ -347,7 +374,7 @@ class TestStatus:
             module="binning", batch="ABB0729", status="Error",
             failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
         )
-        patches = [*_patched({}, airtable), using(fake)]
+        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
         patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
         with pytest.raises(CoreError):
             _run(patches, lambda: cli.cmd_set_status(args))
@@ -361,7 +388,7 @@ class TestStatus:
             module="preprocessing", batch="PRB9999", status="Error",
             failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
         )
-        patches = [*_patched({}, airtable), using(fake)]
+        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
         patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
         assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
         assert "held no batch 'PRB9999' either" in capsys.readouterr().err
@@ -373,7 +400,7 @@ class TestStatus:
             module="preprocessing", batch="PRB0500", status="Error",
             failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
         )
-        patches = [*_patched({}, airtable)]
+        patches = [*_patched(AIRTABLE_ON, airtable)]
         patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
         with pytest.raises(SystemExit):
             _run(patches, lambda: cli.cmd_set_status(args))
@@ -387,7 +414,7 @@ class TestStatus:
             failures_dir="/tmp/logging", failures_since=None,
             airtable_token=None, core_token=None,
         )
-        patches = [*_patched({}, airtable), using(fake)]
+        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
         patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
         with patch.object(cli, "_upload_failure_report") as upload:
             assert _run(patches, lambda: cli.cmd_set_status(args)) == 0

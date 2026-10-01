@@ -177,6 +177,8 @@ keeps its result files on ERDA and the core keeps their URLs.
 **Switching Airtable off.** Emptying a module's Airtable keys — `EHI_BASE` /
 `MAG_BASE`, its batch table and its batch code field — leaves the core as the
 only database looked at for that module. Nothing else has to change.
+DMB batches are switched off this way: `MAG_DMB_BATCH` is empty, so every DMB
+batch, including a re-annotation, is read from and reported to the core alone.
 
 **MAGs live in the core alone.** Airtable's MAG table is full. Two databases
 each numbering new MAGs would also give one EHM code to two genomes. So:

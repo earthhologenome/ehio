@@ -5,9 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-- No unreleased changes yet.
+- **DMB batches are read from ehi-core alone.** `MAG_DMB_BATCH` is left empty, which switches Airtable's dereplication batch table off: the scan, every `quantifying` and `annotating` step and `set-status` find DMB batches in the core, the way MAGs already are. The Airtable token no longer reaches the MAG base, so a scan of DMB batches stopped on a 403 before it reached the core.
+
+### Fixed
+
+- **`ehio set-status` works for a module switched off in Airtable.** It required the module's Airtable batch table even for a batch the core alone holds, so with `MAG_DMB_BATCH` empty every status change of a DMB batch, including the exit trap of a failed run, stopped on the missing key. It now sets the status in the core alone, as it does for ENA submissions.
+- **`ehio annotating --output` no longer crashes on a batch the core alone holds.** A MAG copied into the core from Airtable keeps its Airtable record id, and the output queued an Airtable update for it without an Airtable client to send it with, failing after the annotation had run and before its metrics reached the core. Such a batch now writes its MAGs and its Done status to the core only.
 
 ## [0.10.2] - 2026-09-29
 
