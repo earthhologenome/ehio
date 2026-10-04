@@ -323,7 +323,10 @@ Bridges the dereplication and mapping step. Connects to `MAG_BASE` only.
 | Direction | What it does |
 |-----------|-------------|
 | `--input` | Looks up the batch in `MAG_DMB_BATCH`, follows links to `MAG_DMB_ENTRY`, and writes two files: a bins path file (`bins.txt`) and a reads sample file (`samples.tsv`) for Drakkar profiling. |
-| `--output` | Transfers the `profiling_genomes/final/` tables to SFTP as `{batch}_counts.tsv.gz`, `{batch}_bases.tsv.gz` and `{batch}_mag_info.tsv.gz` (the per-MAG metrics: size, completeness, contamination, contig count), and marks entries as processed in `MAG_DMB_ENTRY`. |
+| `--output` | Transfers the `profiling_genomes/final/` tables to SFTP as `{batch}_counts.tsv.gz`, `{batch}_bases.tsv.gz` and `{batch}_mag_info.tsv.gz` (the per-MAG metrics: size, completeness, contamination, contig count), and marks entries as processed in `MAG_DMB_ENTRY`. With `--skip-derep` (a batch profiled without dereplicating) no MAG is recorded as kept by dereplication. |
+| `--derep-output` | For a batch that dereplicates without profiling: reads which MAGs `drakkar dereplicating` kept from dRep's `Wdb.csv`, marks them in ehi-core and writes their number and the drakkar version on the batch. |
+
+`--input --no-reads` writes the MAG and quality files only, without reading the batch's samples, which is all `drakkar dereplicating` needs.
 
 ```bash
 ehio quantifying --input -b DMB001 -f samples.tsv --bins-file bins.txt
@@ -340,13 +343,13 @@ Bridges the taxonomic and functional annotation step of a DMB batch, which runs 
 
 | Direction | What it does |
 |-----------|-------------|
-| `--stage` | Rebuilds the dereplicated genome directory of a batch whose results are already on ERDA, so an old batch can be annotated again without being profiled again. See [What a DMB batch does: Tasks](#what-a-dmb-batch-does-tasks). |
+| `--stage` | Rebuilds the dereplicated genome directory of a batch whose results are already on ERDA, so an old batch can be annotated again without being profiled again; with `--all-mags`, stages every MAG of the batch instead. See [What a DMB batch does: Tasks](#what-a-dmb-batch-does-tasks). |
 | `--input` | Lists the dereplicated genomes that still need annotating, skipping the MAGs whose `MAG_ENTRY_ANNOTATED` value already covers the batch's annotation type (`kegg` ⊂ `genes` ⊂ `all`). A MAG at `genes` in an `all` batch is written to a second file, so it gets cluster annotation only instead of being annotated from scratch. `--rerun` annotates every genome regardless. |
 | `--output` | Writes taxonomy and gene metrics back to `MAG_ENTRY`, transfers the batch-level tables to `{SFTP_REMOTE_BASE}/DMB/{batch}` and the per-genome tables to `{SFTP_REMOTE_BASE}/ANN/{batch}`, and marks the batch done. |
 
 `--output` reads two things from `annotating/`:
 
-- `genome_taxonomy.tsv` — the GTDB-Tk summary. The classification string is split into its seven ranks, and `closest_genome_ani`, `closest_placement_ani` and `closest_genome_af` are written alongside them.
+- `genome_taxonomy.tsv` — the GTDB-Tk summary. The classification string is split into its seven ranks, and `closest_genome_ani`, `closest_placement_ani` and `closest_genome_af` are written alongside them. Every MAG classified also gets the GTDB-Tk version and GTDB release of the run (`gtdbtk_version`, `gtdb_release`, e.g. `2.7.2` and `R232`), read from `gtdbtk/gtdbtk.json`, or from the first lines of `gtdbtk/gtdbtk.log` when the JSON is missing.
 - `final/{mag}_genes.tsv` — one gene table per genome. Since drakkar 2.0.0 this is a long-form evidence table with one row per accepted hit, so a gene appears once per source and once per ranked hit within a source, always including a `prodigal` row carrying the gene call itself. ehio counts over distinct genes: `genes_number` is every gene predicted, `genes_kegg` the genes with a KEGG hit, `genes_unannotated` the genes with no KEGG, Pfam or CAZy hit, and `coding_density` the fraction of the genome the gene calls cover. The 1.x wide table, one row per gene and one column per database, is still read.
 
 A MAG is named by its FASTA file in Airtable (`EHA00123_bin_1.fa`) and by that name with the suffix stripped in every drakkar output path (`EHA00123_bin_1_genes.tsv`), so the two are matched on the stripped id. `final/{mag}_clusters.tsv` sits beside the gene tables and holds a different table — the dbCAN gene clusters, antiSMASH regions, geNomad mobile elements and defense systems — so it is transferred but not parsed.
@@ -355,29 +358,47 @@ Once a MAG has its metrics, `MAG_ENTRY_ANNOTATED` is set to the batch's annotati
 
 #### What a DMB batch does: Tasks
 
-A DMB batch's **Tasks** in ehi-core say which of its three steps it runs, in this order:
+A DMB batch's **Tasks** in ehi-core say which of its four steps it runs, in this order:
 
-| Task | What runs | What it writes |
+| Task | What it does | What it writes |
 |---|---|---|
-| `Profile` | `drakkar profiling`: dereplication, then the samples mapped against the catalogue; `ehio quantifying --output` | the counts, the mapping rates and the dereplicated MAGs |
-| `Taxonomy` | `drakkar annotating --annotation-type taxonomy` (GTDB-Tk) | the taxonomy ranks of each MAG, `{batch}_genome_taxonomy.tsv.gz` and the trees in `DMB/{batch}` |
+| `Dereplicate` | dRep on the batch's MAGs, keeping one representative per cluster | which MAGs were kept, and how many |
+| `Profile` | the samples mapped against the MAGs; the only task that reads the samples' reads | the counts and the mapping rates |
+| `Taxonomy` | `drakkar annotating --annotation-type taxonomy` (GTDB-Tk, run by drakkar) | the taxonomy ranks, GTDB-Tk version and GTDB release of each MAG, `{batch}_genome_taxonomy.tsv.gz` and the trees in `DMB/{batch}` |
 | `Function` | `drakkar annotating` at the batch's **Annotation** level (`kegg`, `genes` or `all`), and for `all` the clusters | the gene metrics of each MAG and `ANN/{batch}` |
 
-A batch with no Tasks runs all three, as every DMB batch did before the column existed. Any combination works:
+**`Dereplicate` decides which MAGs the other tasks work on**: the representatives dRep keeps when it is ticked, every MAG of the batch when it is not. `drakkar annotating` itself never dereplicates and never reads reads: it classifies or annotates exactly the genomes ehio hands it.
 
-- **With `Profile`**, a MAG another batch has already annotated far enough is skipped (see `--input` above), and a batch with `Profile` alone is marked Done once its counts are written.
-- **Without `Profile`**, the batch works on a catalogue that was dereplicated and profiled long ago. Its counts, mapping rates and dereplicated MAG count are left untouched, and neither the reads nor the batch's samples are needed. Its genomes are no longer on the cluster, so they are staged again first (below). Every genome is then classified or annotated again: after a finished batch, every MAG already has the batch's annotation level and would otherwise be skipped. The new results replace the old ones on the records and on ERDA, and the drakkar version on the batch record is **kept**, with the new one appended (`2.4.4/2.6.1`), so the version that dereplicated and profiled the batch is not lost.
+| Tasks | What ehio runs | Genomes | Reads |
+|---|---|---|---|
+| `Dereplicate` | `drakkar dereplicating`, `ehio quantifying --derep-output` | — | no |
+| `Dereplicate` + `Taxonomy` / `Function` | `drakkar dereplicating`, then `drakkar annotating` on `dereplicating/final` | representatives | no |
+| `Taxonomy` / `Function` | every MAG staged into `{output}/batch_genomes`, then `drakkar annotating` | every MAG | no |
+| `Dereplicate` + `Profile` (+ …) | `drakkar profiling`, which dereplicates and maps in one run | representatives | yes |
+| `Profile` (+ …) | `drakkar profiling --skip-derep` | every MAG | yes |
+| none | all four, as every DMB batch did before the column existed | representatives | yes |
+
+- A batch that dereplicates or profiles skips a MAG another batch has already annotated far enough (see `--input` above). A batch that does neither annotates every genome again, and its new results replace the old ones on the records and on ERDA.
+- A batch that does not profile leaves its counts and mapping rates untouched, and the drakkar version on the batch record is **kept**, with the new one appended (`2.4.4/2.6.1`).
+- A batch with no `Taxonomy` or `Function` is marked Done once its dereplication or profiling output is written.
+- `Profile` without `Dereplicate` needs drakkar's `--skip-derep` (drakkar 2.6.7 or later), and only genomes profiling: drakkar refuses it for pangenomes.
 
 `ehio annotating --output --tasks` writes back the results of the tasks it names and nothing else. A `genome_taxonomy.tsv` left in the output directory by an earlier run, for example, is not written over the taxonomy of a batch without `Taxonomy`.
 
-The `SCANNING_REANNOTATE_STATUS` status (default `Reannotate`) predates Tasks and still works: it runs `Function` alone, whatever the batch's Tasks say. `--reannotate` is the same as `--tasks function`, for scripts written by earlier versions.
+The `SCANNING_REANNOTATE_STATUS` status (default `Reannotate`) predates Tasks and still works: it runs `Function` alone on the dereplicated catalogue of a batch profiled long ago, whatever the batch's Tasks say. `--reannotate` is the same as `--tasks function`, for scripts written by earlier versions.
 
-#### Staging the genomes of a finished batch
+#### Staging the genomes of a batch
 
-The catalogue is read from the batch's own counts table on ERDA — `DMB/{batch}/{batch}_counts.tsv.gz`, one row per dereplicated genome — and each of those genomes is downloaded from the FASTA URL of its MAG and staged as `{mag}.fa`, exactly as a profiling run would have left it. A genome already in the directory is kept, so a batch that stopped halfway downloads nothing twice.
+A batch that neither dereplicates nor profiles has no genomes on the cluster, so they are downloaded first, each from the FASTA URL of its MAG, and staged as `{mag}.fa`. A genome already in the directory is kept, so a batch that stopped halfway downloads nothing twice.
+
+- `--all-mags` stages every MAG of the batch, read from the batch's MAG list alone. This is what `Taxonomy` and `Function` use.
+- Without it, the dereplicated catalogue is staged, which is what Reannotate uses. It is read from the batch's counts table on ERDA (`DMB/{batch}/{batch}_counts.tsv.gz`, one row per dereplicated genome), or, for a batch dereplicated without profiling, from the MAGs ehi-core records as kept.
 
 ```bash
-# Stage on its own, without launching anything
+# Every MAG of the batch
+ehio annotating --stage -b DMB0157 -d /projects/ehi/data/DMB/DMB0157/batch_genomes --all-mags
+
+# The dereplicated catalogue
 ehio annotating --stage -b DMB0157 -d /projects/ehi/data/DMB/DMB0157/profiling_genomes/drep/dereplicated_genomes
 
 # Supply the catalogue by hand when the counts table is missing

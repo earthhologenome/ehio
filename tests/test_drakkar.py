@@ -617,12 +617,14 @@ class TestNormaliseDmbTasks:
         (["Function", "Taxonomy"],            ("taxonomy", "function")),
         ("Taxonomy, function",                ("taxonomy", "function")),
         (["Profiling", "Functional"],         ("profile", "function")),
-        (["Profile", "Taxonomy", "Function"], DMB_TASKS),
+        (["Dereplicate", "Profile", "Taxonomy", "Function"], DMB_TASKS),
+        (["Taxonomy", "Dereplication"],       ("dereplicate", "taxonomy")),
+        ("derep, taxonomy",                   ("dereplicate", "taxonomy")),
     ])
     def test_recognised_values(self, value, expected):
         assert normalise_dmb_tasks(value) == expected
 
     @pytest.mark.parametrize("value", [None, "", [], ["Something else"]])
     def test_a_batch_naming_no_task_does_them_all(self, value):
-        # Every DMB batch did all three before Tasks existed.
+        # Every DMB batch did all four before Tasks existed.
         assert normalise_dmb_tasks(value) == DMB_TASKS

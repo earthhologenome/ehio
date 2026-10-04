@@ -672,6 +672,49 @@ def parse_genome_taxonomy_tsv(tsv_path: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
+_GTDBTK_LOG_VERSION_RE = re.compile(r"\bGTDB-Tk v(\S+)")
+_GTDBTK_LOG_RELEASE_RE = re.compile(r"reference data version (\S+?):?(?:\s|$)")
+
+
+def gtdb_release_name(value: object) -> str:
+    """A GTDB release as the MAG records spell it: 'r232' and '232' give 'R232'."""
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(?:r|release)?\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
+    return f"R{match.group(1)}" if match else text
+
+
+def parse_gtdbtk_versions(gtdbtk_dir: Path) -> dict[str, str]:
+    """The GTDB-Tk version and GTDB release a classification was made with.
+
+    GTDB-Tk records both in gtdbtk.json in its output directory ('version' and
+    'database_version'), and states them in the first lines of gtdbtk.log,
+    which is read when the JSON is missing.  Returns {'gtdbtk_version': '2.7.2',
+    'gtdb_release': 'R232'}, leaving out what neither file says.
+    """
+    version = release = ""
+    try:
+        found = json.loads((gtdbtk_dir / "gtdbtk.json").read_text(encoding="utf-8"))
+        if isinstance(found, dict):
+            version = str(found.get("version") or "").strip()
+            release = str(found.get("database_version") or "").strip()
+    except (OSError, ValueError):
+        pass
+    if not (version and release):
+        try:
+            with (gtdbtk_dir / "gtdbtk.log").open(encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if not version and (m := _GTDBTK_LOG_VERSION_RE.search(line)):
+                        version = m.group(1)
+                    if not release and (m := _GTDBTK_LOG_RELEASE_RE.search(line)):
+                        release = m.group(1)
+                    if version and release:
+                        break
+        except OSError:
+            pass
+    result = {"gtdbtk_version": version.lstrip("vV"), "gtdb_release": gtdb_release_name(release)}
+    return {key: value for key, value in result.items() if value}
+
+
 # drakkar strips the FASTA suffix from a genome file to name everything it
 # writes about that genome, so the MAG called 'EHA00123_bin_1.fa' in Airtable
 # is 'EHA00123_bin_1' in every drakkar output path.
@@ -681,6 +724,24 @@ _FASTA_SUFFIX_RE = re.compile(r"\.(?:fa|fna|fasta)(?:\.gz)?$", re.IGNORECASE)
 def drakkar_mag_id(genome_name: str) -> str:
     """Return the MAG id drakkar derives from a genome file name."""
     return _FASTA_SUFFIX_RE.sub("", str(genome_name or "").strip())
+
+
+def parse_drep_winners(path: Path) -> list[str]:
+    """Return the MAG ids dRep kept, from its Wdb.csv, in file order.
+
+    Wdb.csv holds one row per cluster winner, named by its genome file in the
+    'genome' column; a missing or unreadable table gives an empty list.
+    """
+    kept: list[str] = []
+    try:
+        with Path(path).open(newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                mag_id = drakkar_mag_id(Path(str(row.get("genome") or "")).name)
+                if mag_id and mag_id not in kept:
+                    kept.append(mag_id)
+    except (OSError, csv.Error):
+        return []
+    return kept
 
 
 def parse_counts_genomes(path: Path) -> list[str]:
@@ -852,6 +913,8 @@ ANNOTATING_GTDB_KEYS: dict[str, str] = {
     "gtdb_fastani":     "MAG_ENTRY_GTDB_FASTANI",
     "gtdb_closest_ani": "MAG_ENTRY_GTDB_CLOSEST_ANI",
     "gtdb_closest_af":  "MAG_ENTRY_GTDB_CLOSEST_AF",
+    "gtdbtk_version":   "MAG_ENTRY_GTDBTK_VERSION",
+    "gtdb_release":     "MAG_ENTRY_GTDB_RELEASE",
 }
 
 ANNOTATING_FUNC_KEYS: dict[str, str] = {

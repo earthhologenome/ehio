@@ -139,6 +139,8 @@ ANNOTATION_COLUMNS = {
     "gtdb_fastani":      "fastani_ani",
     "gtdb_closest_ani":  "closest_ani",
     "gtdb_closest_af":   "closest_af",
+    "gtdbtk_version":    "gtdbtk_version",
+    "gtdb_release":      "gtdb_release",
     "coding_density":    "coding_density",
     "genes_number":      "genes",
     "genes_unannotated": "genes_unannotated",
@@ -521,6 +523,8 @@ def mag_from_airtable(record: dict) -> dict[str, Any]:
         # knows what the legacy word means.
         "annotation_level": str(cell(fields, "MAG_ENTRY_ANNOTATED") or "").lower(),
         "airtable_id":      record.get("id"),
+        # Airtable counts the MAGs dereplication kept but never lists them.
+        "is_representative": False,
     }
 
 
@@ -534,6 +538,8 @@ def mag_from_core(mag: dict) -> dict[str, Any]:
         "contamination":    mag.get("contamination"),
         "annotation_level": str(mag.get("annotation_level") or ""),
         "airtable_id":      mag.get("airtable_record_id"),
+        # Whether the batch's dereplication kept it.
+        "is_representative": bool(mag.get("is_representative")),
     }
 
 

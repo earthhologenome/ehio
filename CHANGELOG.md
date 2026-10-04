@@ -7,7 +7,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- No unreleased changes yet.
+- **Dereplicate is a DMB task of its own, beside Profile, Taxonomy and Function.** It decides which MAGs the other tasks work on: the representatives dRep keeps when it is ticked, every MAG of the batch when it is not. A batch with no Tasks runs all four, as before. Needs the ehi-core release that adds the Dereplicate option and the Dereplicating status.
+  - Dereplicate without Profile runs `drakkar dereplicating`, which needs no reads: `ehio quantifying --input --no-reads` writes the MAG and quality files without reading the samples, and `ehio quantifying --derep-output` records which MAGs dRep kept and how many. Taxonomy and Function then run on those representatives.
+  - Dereplicate with Profile is one `drakkar profiling` run, as before.
+  - Profile without Dereplicate maps the samples against every MAG, with `drakkar profiling --skip-derep` (drakkar 2.6.7 or later); no MAG is then recorded as kept by dereplication.
+  - Taxonomy or Function with neither stages every MAG of the batch with `ehio annotating --stage --all-mags`, from the batch's MAG list alone, so no counts table is needed and a batch that was never profiled can be classified. Nothing is mapped, so neither the reads nor the samples are read.
+- `ehio annotating --stage` falls back to the MAGs ehi-core records as kept by dereplication when a batch has no counts table on ERDA.
+
+### Changed
+
+- **Function without Dereplicate or Profile annotates every MAG of the batch**, not the dereplicated catalogue read from its counts table. The Reannotate status keeps doing that.
+- **Taxonomy with Profile but without Dereplicate classifies every MAG**, since the batch is then profiled without dereplicating.
+
+### Fixed
+
+- **The GTDB-Tk version and GTDB release reach the MAG records.** `ehio annotating --output` reads both from the run's `gtdbtk/gtdbtk.json` (or `gtdbtk.log`) and writes them on every MAG it classifies, in ehi-core (`gtdbtk_version`, `gtdb_release`) and in Airtable, spelled as the records already spell them (`2.7.2`, `R232`). Until now a reclassified MAG kept the versions of its first classification.
+- **The taxonomy of a MAG whose name lacks the `.fa` suffix is written back.** Rows of `genome_taxonomy.tsv` are matched to MAGs on the drakkar MAG id, as the gene tables already were.
 
 ## [0.10.3] - 2026-10-01
 

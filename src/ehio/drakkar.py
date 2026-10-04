@@ -27,11 +27,17 @@ PROFILING_TYPES = {
 
 
 # What a DMB batch is asked to do (ehi-core's Tasks), in the order the steps
-# run: profile the samples against the dereplicated catalogue, classify the
-# genomes with GTDB-Tk, annotate their genes.  A batch that names none of them
-# does all three, as every DMB batch did before Tasks existed.
-DMB_TASKS = ("profile", "taxonomy", "function")
+# run: dereplicate the MAGs with dRep, profile the samples against them,
+# classify them with GTDB-Tk, annotate their genes.  Dereplicate decides which
+# MAGs the others work on: the ones dRep keeps, or every MAG of the batch.  A
+# batch that names none of them does all four, as every DMB batch did before
+# Tasks existed.
+DMB_TASKS = ("dereplicate", "profile", "taxonomy", "function")
 _DMB_TASK_WORDS = {
+    "dereplicate":   "dereplicate",
+    "dereplication": "dereplicate",
+    "dereplicating": "dereplicate",
+    "derep":         "dereplicate",
     "profile":    "profile",
     "profiling":  "profile",
     "taxonomy":   "taxonomy",

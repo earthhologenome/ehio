@@ -1182,6 +1182,8 @@ def _create_airtable_mags(token: str, mag_base_id: str, bins_data: list[dict]) -
 def cmd_quantifying(args: argparse.Namespace) -> int:
     if args.input:
         return _run_quantifying_input(args)
+    if getattr(args, "derep_output", False):
+        return _run_dereplicating_output(args)
     return _run_quantifying_output(args)
 
 
@@ -1217,6 +1219,19 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     n_mags = write_bins_file(mags, mags_path, bins_field="fasta_url")
     _info(f"Wrote {n_mags} MAG URLs to {mags_path}")
 
+    missing_mags = verify_input_files(mags, "fasta_url", ["fasta_url"])
+    if missing_mags:
+        for _, path in missing_mags:
+            print(f"  WARNING: MAG FASTA not found: {path}", file=sys.stderr)
+
+    # A batch that dereplicates without profiling maps nothing, so it needs
+    # neither its samples nor their reads.
+    if getattr(args, "no_reads", False):
+        if missing_mags:
+            _die(f"{len(missing_mags)} input file(s) missing — fix the paths in {batch.source} "
+                 f"before launching drakkar.")
+        return 0
+
     ppr_records, fields = _dmb_reads(client, batch, args.batch)
 
     reads_path = Path(args.reads_file)
@@ -1233,11 +1248,6 @@ def _run_quantifying_input(args: argparse.Namespace) -> int:
     if missing_reads:
         for sample, path in missing_reads:
             print(f"  WARNING: [{sample}] reads file not found: {path}", file=sys.stderr)
-
-    missing_mags = verify_input_files(mags, "fasta_url", ["fasta_url"])
-    if missing_mags:
-        for _, path in missing_mags:
-            print(f"  WARNING: MAG FASTA not found: {path}", file=sys.stderr)
 
     total_missing = len(missing_reads) + len(missing_mags)
     if total_missing:
@@ -1306,12 +1316,16 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
             client, args.batch, batch_record, ppr_records, all_metrics, ppr_ehi_field
         )
 
+    # --skip-derep: the reads were mapped against every MAG, none of which
+    # dereplication kept or dropped, so neither the representatives nor their
+    # number is recorded.
+    skip_derep = getattr(args, "skip_derep", False)
     if core:
         core.mirror(f"Mappings of batch '{args.batch}'", [
             *([] if batch.from_core else [mirror.batch("quantifying", args.batch, batch_record)]),
             *mirror.mappings(args.batch, mappings),
         ])
-        if kept_mags:
+        if kept_mags and not skip_derep:
             core.mirror_call(
                 f"The dereplicated MAGs of batch '{args.batch}'",
                 lambda c: _record_representatives(c, args.batch, kept_mags),
@@ -1385,7 +1399,7 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
         batch_fields[ehio_version_field] = __version__
     if drakkar_version_field:
         batch_fields[drakkar_version_field] = drakkar_version
-    if derep_mags_field:
+    if derep_mags_field and not skip_derep:
         derep_tsv   = local_root / "dereplicating.tsv"
         derep_count = parse_dereplicating_tsv(derep_tsv)
         if derep_count is not None:
@@ -1406,6 +1420,64 @@ def _run_quantifying_output(args: argparse.Namespace) -> int:
         status=done_status, ehio_version=__version__, drakkar_version=drakkar_version,
     )])
     _info(f"Batch '{args.batch}' status → '{done_status}'.")
+    return 0
+
+
+def _run_dereplicating_output(args: argparse.Namespace) -> int:
+    """Record what 'drakkar dereplicating' kept of a batch's MAGs.
+
+    A batch that dereplicates without profiling has no counts table; dRep's
+    winners table (Wdb.csv) is its catalogue instead.  Which MAGs it kept goes
+    to the core, and how many to the batch with the drakkar version, appended
+    to the one already recorded as a batch that does not profile does.  The
+    status is left to the script: the annotation may still be to come.
+    """
+    from ehio.airtable import AirtableClient
+    from ehio.metadata import parse_dereplicating_tsv, parse_drep_winners
+
+    token = _resolve_token(args)
+    local_root = Path(args.local_dir).resolve()
+    if not local_root.is_dir():
+        _die(f"Local directory not found: {local_root}")
+    core = _core(args, holds=True)
+
+    kept_mags = parse_drep_winners(local_root / "dereplicating" / "drep" / "data_tables" / "Wdb.csv")
+    if not kept_mags:
+        _die(f"No dereplicated genomes in {local_root / 'dereplicating'}: "
+             f"'drakkar dereplicating' left no Wdb.csv to read them from.")
+    _info(f"Dereplication kept {len(kept_mags)} genome(s).")
+    derep_count = parse_dereplicating_tsv(local_root / "dereplicating.tsv")
+    if derep_count is None:
+        derep_count = len(kept_mags)
+
+    batch = _open_batch("quantifying", args, core)
+    if core:
+        core.mirror_call(
+            f"The dereplicated MAGs of batch '{args.batch}'",
+            lambda c: _record_representatives(c, args.batch, kept_mags),
+        )
+
+    version = _merge_drakkar_versions(
+        _first_value(batch.value("MAG_DMB_BATCH_DRAKKAR_VERSION", "drakkar_version")),
+        _get_drakkar_version(local_root),
+    )
+    if not batch.from_core:
+        batch_fields: dict = {}
+        for key, value in (("MAG_DMB_BATCH_DEREP_MAGS", derep_count),
+                           ("MAG_DMB_BATCH_DRAKKAR_VERSION", version),
+                           ("MAG_DMB_BATCH_EHIO_VERSION", __version__)):
+            field = str(cfg.get(key) or "").strip()
+            if field:
+                batch_fields[field] = value
+        if batch_fields:
+            AirtableClient(api_key=token, base_id=_require_cfg("MAG_BASE")).update_records(
+                _require_cfg("MAG_DMB_BATCH"), [{"id": batch.record["id"], "fields": batch_fields}],
+            )
+    core.mirror(f"Batch '{args.batch}'", [mirror.batch(
+        "quantifying", args.batch, None if batch.from_core else batch.record,
+        ehio_version=__version__, drakkar_version=version,
+    )])
+    _info(f"Dereplicated MAGs: {derep_count}")
     return 0
 
 
@@ -1509,7 +1581,13 @@ def _run_annotating_stage(args: argparse.Namespace) -> int:
     Every genome is staged as '{mag id}.fa', the name drakkar derives from it
     everywhere else, so the directory is indistinguishable from the one a fresh
     profiling run leaves behind.
+
+    With --all-mags every MAG the batch holds is staged instead, dereplicated
+    away or not, and no counts table is needed: a genome's GTDB-Tk
+    classification and genes are its own, so a batch that does not dereplicate
+    covers all of its MAGs, whether or not it was ever profiled.
     """
+    import shutil as _shutil
     import tempfile
 
     from ehio.airtable import AirtableClient
@@ -1544,7 +1622,10 @@ def _run_annotating_stage(args: argparse.Namespace) -> int:
     # The dereplicated catalogue.  A list given on the command line wins, so a
     # batch whose counts table is missing or oddly shaped can still be staged.
     catalogue: list[str] = []
-    if getattr(args, "genomes_file", None):
+    if getattr(args, "all_mags", False):
+        catalogue = list(mag_by_id)
+        _info(f"Staging all {len(catalogue)} MAG(s) of the batch.")
+    elif getattr(args, "genomes_file", None):
         genomes_path = Path(args.genomes_file).expanduser()
         if not genomes_path.is_file():
             _die(f"Genome list not found: {genomes_path}")
@@ -1570,12 +1651,19 @@ def _run_annotating_stage(args: argparse.Namespace) -> int:
                                   key_path=identity or None, timeout=_timeout) as xfer:
                     xfer.download(counts_remote, counts_local, verbose=getattr(args, "verbose", False))
             except FileNotFoundError:
-                _die(
-                    f"No counts table at {counts_remote}. It is what says which of the "
-                    f"batch's MAGs survived dereplication, and Airtable does not keep "
-                    f"that list. Pass the genome names with --genomes-file instead."
-                )
-            catalogue = parse_counts_genomes(counts_local)
+                # A batch dereplicated without profiling has no counts table,
+                # but the core knows which of its MAGs dereplication kept.
+                catalogue = [mag_id for mag_id, mag in mag_by_id.items() if mag.get("is_representative")]
+                if not catalogue:
+                    _die(
+                        f"No counts table at {counts_remote}, and no MAG of '{args.batch}' is "
+                        f"recorded as kept by dereplication. Pass the genome names with "
+                        f"--genomes-file instead."
+                    )
+                _info(f"No counts table at {counts_remote}: staging the {len(catalogue)} "
+                      f"MAG(s) ehi-core records as kept by dereplication.")
+            else:
+                catalogue = parse_counts_genomes(counts_local)
 
         if not catalogue:
             _die(
@@ -1643,7 +1731,6 @@ def _run_annotating_stage(args: argparse.Namespace) -> int:
                 if local.name.lower().endswith(".gz"):
                     _decompress_gz(local, destination)
                 else:
-                    import shutil as _shutil
                     _shutil.copyfile(local, destination)
             except OSError as exc:
                 problems.append(f"{mag_id}: {local} could not be copied ({exc})")
@@ -1755,6 +1842,7 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     from ehio.airtable import AirtableClient
     from ehio.metadata import (
         parse_genome_taxonomy_tsv,
+        parse_gtdbtk_versions,
         parse_annotation_tsv,
         build_entry_update,
         drakkar_mag_id,
@@ -1820,9 +1908,27 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
         taxonomy_data: dict = {}
         _info("No taxonomy task: taxonomy is left as it is on the MAG records.")
     else:
-        taxonomy_data = parse_genome_taxonomy_tsv(taxonomy_tsv)
+        # Keyed by drakkar MAG id, which is what GTDB-Tk calls each genome, so
+        # a MAG whose name lacks the '.fa' suffix still finds its row.
+        taxonomy_data = {
+            drakkar_mag_id(name): found
+            for name, found in parse_genome_taxonomy_tsv(taxonomy_tsv).items()
+        }
         if not taxonomy_data:
             _info(f"genome_taxonomy.tsv not found or empty at {taxonomy_tsv}.")
+        else:
+            # Every genome of the run was classified with the same GTDB-Tk and
+            # GTDB release, which go on each MAG beside its taxonomy.
+            gtdbtk_versions = parse_gtdbtk_versions(ann_dir / "gtdbtk")
+            if gtdbtk_versions:
+                _info("Classified with GTDB-Tk "
+                      f"{gtdbtk_versions.get('gtdbtk_version', '(version unknown)')}, GTDB "
+                      f"{gtdbtk_versions.get('gtdb_release', '(release unknown)')}.")
+            else:
+                _warn(f"No GTDB-Tk version or GTDB release found in {ann_dir / 'gtdbtk'}; "
+                      "they are left as they are on the MAG records.")
+            for found in taxonomy_data.values():
+                found.update(gtdbtk_versions)
 
     # Parse the per-genome gene tables from annotating/final/.  drakkar names
     # them after the genome FASTA with its suffix stripped and '_genes'
@@ -1845,11 +1951,11 @@ def _run_annotating_output(args: argparse.Namespace) -> int:
     n_annotated = 0
     for genome_name, mag in mag_by_name.items():
         metrics: dict = {}
-        if genome_name in taxonomy_data:
-            metrics.update(taxonomy_data[genome_name])
         # The MAG is named by its FASTA file in Airtable and by the stem of
         # that name in the drakkar output, so the two are matched on the id.
         mag_id = drakkar_mag_id(genome_name)
+        if mag_id in taxonomy_data:
+            metrics.update(taxonomy_data[mag_id])
         if mag_id in annotation_data:
             metrics.update(annotation_data[mag_id])
             metrics["annotated"] = annotation_type_value
@@ -2800,11 +2906,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "Input mode:  fetch batch + entries from MAG_BASE/MAG_DMB_* tables,\n"
             "             fetch linked MAG records (MAG_DMB_BATCH_LIST_MAGS → MAG_ENTRY),\n"
             "             and write a bins file (MAG FASTAs) and a reads sample file.\n"
-            "Output mode: parse mapping metrics, update MAG_DMB_ENTRY, transfer files."
+            "Output mode: parse mapping metrics, update MAG_DMB_ENTRY, transfer files.\n"
+            "Dereplication output mode (--derep-output): record which MAGs\n"
+            "             'drakkar dereplicating' kept and how many."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    _add_mode(p_qnt)
+    _qnt_mode = _add_mode(p_qnt)
+    _qnt_mode.add_argument("--derep-output", action="store_true",
+        help="Dereplication output mode: record which MAGs 'drakkar dereplicating' kept, "
+             "for a batch that dereplicates without profiling.")
     _add_batch(p_qnt)
     _add_token(p_qnt)
     _add_verbose(p_qnt)
@@ -2814,6 +2925,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Output reads sample file for drakkar (input mode). Default: reads.tsv.")
     p_qnt.add_argument("--quality-file", default="quality.tsv", metavar="PATH",
         help="Output MAG quality file for drakkar (input mode). Default: quality.tsv.")
+    p_qnt.add_argument("--no-reads", action="store_true",
+        help="Input mode: write the MAG and quality files only, without reading the "
+             "batch's samples (a batch that dereplicates without profiling).")
+    p_qnt.add_argument("--skip-derep", action="store_true",
+        help="Output mode: the batch was profiled with 'drakkar profiling --skip-derep', "
+             "so no MAG is recorded as kept by dereplication.")
     _add_sftp_overrides(p_qnt)
     p_qnt.set_defaults(func=cmd_quantifying)
 
@@ -2828,6 +2945,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "             batch — read the catalogue from its counts table on ERDA\n"
             "             and download each genome from its MAG record — so an old\n"
             "             batch can be annotated again without being profiled again.\n"
+            "             With --all-mags, every MAG of the batch instead.\n"
             "Input mode:  write genome paths for all MAGs linked to the batch\n"
             "             into a file for drakkar functional annotation.\n"
             "Output mode: parse GTDB-Tk taxonomy and per-genome functional annotation\n"
@@ -2850,11 +2968,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ann.add_argument("--genomes-file", metavar="PATH",
         help="Stage mode: read the dereplicated genome names from this file (one per line) "
              "instead of from the batch's counts table on ERDA.")
+    p_ann.add_argument("--all-mags", action="store_true",
+        help="Stage mode: stage every MAG of the batch, not only the dereplicated ones, "
+             "without reading the counts table (a batch without Dereplicate or Profile).")
     p_ann.add_argument("--redownload", action="store_true",
         help="Stage mode: fetch every genome again, even one already in --annotation-dir.")
     p_ann.add_argument("--tasks", metavar="TASKS",
-        help="Output mode: what the batch did, comma-separated from profile, taxonomy and "
-             "function (default: all three). Only the results of these tasks are written "
+        help="Output mode: what the batch did, comma-separated from dereplicate, profile, "
+             "taxonomy and function (default: all four). Only the results of these tasks are written "
              "back, and a batch that did not profile keeps the drakkar version already on "
              "its record, with the new one appended.")
     p_ann.add_argument("--reannotate", action="store_true",

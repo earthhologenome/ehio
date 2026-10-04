@@ -623,6 +623,9 @@ class TestReannotateFlag:
         script = self._script()
         derep = f"{self.OUT}/profiling_genomes/drep/dereplicated_genomes"
         assert f"ehio annotating --stage -b DMB0157 -d {derep}" in script
+        # The catalogue of the batch, not every MAG of it.
+        stage = next(line for line in script.splitlines() if "ehio annotating --stage" in line)
+        assert "--all-mags" not in stage
         # The staging has to be in place before the genomes are listed for
         # drakkar and before drakkar is asked to read them.
         assert script.index("annotating --stage") < script.index("annotating --input")
@@ -703,7 +706,7 @@ class TestReannotateFlag:
 
 
 # ---------------------------------------------------------------------------
-# Tasks — what a DMB batch does: profile, taxonomy, function
+# Tasks — what a DMB batch does: dereplicate, profile, taxonomy, function
 # ---------------------------------------------------------------------------
 
 class TestDmbTasks:
@@ -720,16 +723,34 @@ class TestDmbTasks:
         return next(line for line in script.splitlines() if text in line)
 
     def test_no_tasks_is_the_whole_batch(self):
+        # As before Tasks: profiling dereplicates, then the catalogue it kept
+        # is classified and annotated.
         script = self._script(None)
-        assert "drakkar profiling" in script
+        assert "--skip-derep" not in self._line(script, "drakkar profiling")
+        assert "drakkar dereplicating" not in script
         assert "--annotation-type taxonomy" in script
         assert "--annotation-type function" in script
         assert "annotating --stage" not in script
-        assert "--tasks profile,taxonomy,function" in self._line(script, "ehio annotating --output")
+        assert (f"drakkar annotating -b {self.OUT}/profiling_genomes/drep/dereplicated_genomes"
+                in script)
+        assert ("--tasks dereplicate,profile,taxonomy,function"
+                in self._line(script, "ehio annotating --output"))
+
+    def test_dereplicate_and_profile_is_one_profiling_run(self):
+        script = self._script(("dereplicate", "profile"))
+        assert script.count("drakkar profiling") == 1
+        assert "--skip-derep" not in script
+        assert "drakkar dereplicating" not in script
+
+    def test_profile_alone_maps_against_every_mag(self):
+        script = self._script(("profile",))
+        assert "--skip-derep" in self._line(script, "drakkar profiling")
+        # Nothing was kept or dropped, so no representatives are recorded.
+        assert "--skip-derep" in self._line(script, "ehio quantifying --output")
+        assert "drakkar dereplicating" not in script
 
     def test_profile_alone_ends_the_batch_after_its_counts(self):
         script = self._script(("profile",))
-        assert "drakkar profiling" in script
         assert "ehio quantifying --output" in script
         assert "drakkar annotating" not in script
         assert "ehio annotating" not in script
@@ -737,9 +758,44 @@ class TestDmbTasks:
         assert "--status Done" in last_status
         assert script.index("ehio quantifying --output") < script.index(last_status)
 
+    def test_dereplicate_alone_runs_drakkar_dereplicating_without_reads(self):
+        script = self._script(("dereplicate",), ani_threshold="0.95")
+        assert "drakkar profiling" not in script
+        input_line = self._line(script, "ehio quantifying --input")
+        assert "--no-reads" in input_line
+        assert "--reads-file" not in input_line
+        derep = self._line(script, "drakkar dereplicating")
+        assert f"-B {self.RUN}/DMB0200_mags.tsv" in derep
+        assert f"-q {self.RUN}/DMB0200_quality.tsv" in derep
+        assert "-a 0.95" in derep
+        assert "_reads.tsv" not in script
+        assert script.index("--status Dereplicating") < script.index("ehio quantifying --input")
+        assert f"_ehio_require {self.OUT}/dereplicating.tsv" in script
+        assert f"ehio quantifying --derep-output -b DMB0200 -l {self.OUT}" in script
+        assert "ehio annotating" not in script
+        last_status = [line for line in script.splitlines() if "ehio set-status" in line and "--failures-dir" not in line][-1]
+        assert "--status Done" in last_status
+
+    def test_dereplicate_and_taxonomy_classify_what_drep_kept(self):
+        script = self._script(("dereplicate", "taxonomy"))
+        assert "drakkar profiling" not in script
+        assert "_reads.tsv" not in script
+        assert "annotating --stage" not in script
+        assert script.index("drakkar dereplicating") < script.index("ehio quantifying --derep-output")
+        assert script.index("ehio quantifying --derep-output") < script.index("--status 'Annotating taxonomy'")
+        assert f"drakkar annotating -b {self.OUT}/dereplicating/final" in script
+        output = self._line(script, "ehio annotating --output")
+        assert "--tasks dereplicate,taxonomy" in output
+        assert "--rerun" not in output
+
+    def test_dereplicate_and_function_annotate_what_drep_kept(self):
+        script = self._script(("dereplicate", "function"))
+        assert f"-d {self.OUT}/dereplicating/final" in self._line(script, "ehio annotating --input")
+
     def test_taxonomy_alone_stages_the_genomes_and_classifies_them(self):
         script = self._script(("taxonomy",))
         assert "drakkar profiling" not in script
+        assert "drakkar dereplicating" not in script
         assert "ehio quantifying" not in script
         assert script.index("--status 'Annotating taxonomy'") < script.index("annotating --stage")
         assert script.index("annotating --stage") < script.index("--annotation-type taxonomy")
@@ -749,13 +805,54 @@ class TestDmbTasks:
         assert "--tasks taxonomy" in output
         assert "--rerun" in output
 
-    def test_taxonomy_and_function_without_profiling_stage_once(self):
+    def test_taxonomy_alone_classifies_every_mag_of_the_batch(self):
+        script = self._script(("taxonomy",))
+        batch_genomes = f"{self.OUT}/batch_genomes"
+        stage = self._line(script, "ehio annotating --stage")
+        assert f"-d {batch_genomes}" in stage
+        assert "--all-mags" in stage
+        assert f"_ehio_require {batch_genomes}" in script
+        assert f"drakkar annotating -b {batch_genomes}" in script
+        assert "dereplicated_genomes" not in script
+
+    def test_taxonomy_alone_needs_no_reads(self):
+        # Nothing is mapped, so neither the samples nor their reads are read.
+        script = self._script(("taxonomy",))
+        assert "ehio quantifying" not in script
+        assert "_reads.tsv" not in script
+        assert "_mags.tsv" not in script
+        assert "-R " not in script
+
+    def test_taxonomy_and_function_without_dereplicating_share_every_mag(self):
         script = self._script(("taxonomy", "function"))
+        batch_genomes = f"{self.OUT}/batch_genomes"
         assert script.count("ehio annotating --stage") == 1
+        assert "--all-mags" in self._line(script, "ehio annotating --stage")
+        assert f"drakkar annotating -b {batch_genomes}" in script
+        input_line = self._line(script, "ehio annotating --input")
+        assert f"-d {batch_genomes}" in input_line
+        assert "--rerun" in input_line
         assert script.index("--annotation-type taxonomy") < script.index("ehio annotating --input")
         assert "Annotating function" in script
-        assert "--rerun" in self._line(script, "ehio annotating --input")
         assert f"_ehio_require {self.OUT}/annotating/final" in script
+
+    def test_function_alone_annotates_every_mag(self):
+        stage = self._line(self._script(("function",)), "ehio annotating --stage")
+        assert f"-d {self.OUT}/batch_genomes" in stage
+        assert "--all-mags" in stage
+
+    def test_a_batch_that_profiles_classifies_its_own_catalogue(self):
+        script = self._script(("dereplicate", "profile", "taxonomy"))
+        assert "annotating --stage" not in script
+        assert ("drakkar annotating -b "
+                f"{self.OUT}/profiling_genomes/drep/dereplicated_genomes") in script
+
+    def test_profile_without_dereplicate_classifies_every_mag_it_mapped(self):
+        # --skip-derep leaves every MAG in the profiling catalogue directory.
+        script = self._script(("profile", "taxonomy"))
+        assert "--skip-derep" in self._line(script, "drakkar profiling")
+        assert ("drakkar annotating -b "
+                f"{self.OUT}/profiling_genomes/drep/dereplicated_genomes") in script
 
     def test_a_batch_that_profiles_annotates_only_what_is_not_annotated_yet(self):
         script = self._script(("profile", "function"))

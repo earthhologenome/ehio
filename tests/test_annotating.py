@@ -11,7 +11,10 @@ from ehio.metadata import (
     find_gene_tables,
     parse_annotation_tsv,
     parse_counts_genomes,
+    parse_drep_winners,
+    gtdb_release_name,
     parse_genome_taxonomy_tsv,
+    parse_gtdbtk_versions,
 )
 
 # The long-form gene table drakkar has written since 2.0.0: one row per
@@ -221,6 +224,52 @@ class TestParseGenomeTaxonomy:
         assert entry["gtdb_fastani"] == 95.2
         assert entry["gtdb_closest_af"] == 0.81
         assert entry["gtdb_closest_ani"] == 94.7
+
+
+class TestParseDrepWinners:
+    def test_the_kept_genomes_as_mag_ids(self, tmp_path: Path):
+        path = tmp_path / "Wdb.csv"
+        path.write_text("genome,cluster,score\nEHA00123_bin_1.fa,1_0,2.3\n/x/EHA00124_bin_3.fa,2_0,1.1\n")
+        assert parse_drep_winners(path) == ["EHA00123_bin_1", "EHA00124_bin_3"]
+
+    def test_a_missing_table_is_empty(self, tmp_path: Path):
+        assert parse_drep_winners(tmp_path / "Wdb.csv") == []
+
+
+class TestGtdbtkVersions:
+    LOG = (
+        "[2026-10-01 11:47:36] INFO: GTDB-Tk v2.7.2\n"
+        "[2026-10-01 11:47:36] INFO: gtdbtk classify_wf --batchfile mag_input.tsv\n"
+        "[2026-10-01 11:47:37] INFO: Using GTDB-Tk reference data version r232: "
+        "/maps/datasets/globe_databases/gtdbtk_db/20260426/release232\n"
+    )
+
+    def test_read_from_the_json(self, tmp_path: Path):
+        (tmp_path / "gtdbtk.json").write_text(
+            '{"version": "2.7.2", "database_version": "r232", "database_path": "/db"}')
+        assert parse_gtdbtk_versions(tmp_path) == {"gtdbtk_version": "2.7.2", "gtdb_release": "R232"}
+
+    def test_read_from_the_log_without_a_json(self, tmp_path: Path):
+        (tmp_path / "gtdbtk.log").write_text(self.LOG)
+        assert parse_gtdbtk_versions(tmp_path) == {"gtdbtk_version": "2.7.2", "gtdb_release": "R232"}
+
+    def test_the_log_fills_what_the_json_lacks(self, tmp_path: Path):
+        (tmp_path / "gtdbtk.json").write_text('{"version": "2.7.2"}')
+        (tmp_path / "gtdbtk.log").write_text(self.LOG)
+        assert parse_gtdbtk_versions(tmp_path)["gtdb_release"] == "R232"
+
+    def test_nothing_found_is_empty(self, tmp_path: Path):
+        (tmp_path / "gtdbtk.json").write_text("not json")
+        assert parse_gtdbtk_versions(tmp_path) == {}
+        assert parse_gtdbtk_versions(tmp_path / "absent") == {}
+
+    def test_release_spelled_as_the_records_spell_it(self):
+        assert gtdb_release_name("r232") == "R232"
+        assert gtdb_release_name("232") == "R232"
+        assert gtdb_release_name("R214") == "R214"
+        assert gtdb_release_name("release226") == "R226"
+        assert gtdb_release_name("r214.1") == "R214.1"
+        assert gtdb_release_name("") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +507,17 @@ class TestAnnotatingStage:
         # The third linked MAG is not in the counts table, so it is not staged.
         assert staged == ["EHA00123_bin_1.fa", "EHA00124_bin_3.fa"]
 
+    def test_all_mags_stages_every_mag_without_the_counts_table(self, tmp_path, stage_airtable):
+        sftp = MagicMock()
+        args = _stage_args(tmp_path, all_mags=True)
+        with patch("ehio.transfer.SFTPTransfer", sftp), \
+             patch("ehio.urls.download_url", side_effect=_fake_download):
+            assert cli.cmd_annotating(args) == 0
+        staged = sorted(p.name for p in Path(args.annotation_dir).glob("*"))
+        # The MAG dereplicated away is classified too.
+        assert staged == ["EHA00123_bin_1.fa", "EHA00124_bin_3.fa", "EHA00125_bin_2.fa"]
+        sftp.assert_not_called()
+
     def test_staged_genomes_are_decompressed(self, tmp_path, stage_airtable):
         ctx, _ = _fake_sftp()
         args = _stage_args(tmp_path)
@@ -588,6 +648,8 @@ OUTPUT_CFG = {
     "MAG_DMB_BATCH_DRAKKAR_VERSION": "fldDRAKKAR",
     "MAG_ENTRY_DOMAIN": "fldDOMAIN",
     "MAG_ENTRY_PHYLUM": "fldPHYLUM",
+    "MAG_ENTRY_GTDBTK_VERSION": "fldGTDBTK",
+    "MAG_ENTRY_GTDB_RELEASE": "fldGTDBRELEASE",
     "MAG_ENTRY_GENES_NUMBER": "fldGENES",
     "MAG_ENTRY_ANNOTATED": "fldANNOTATED",
     "PROCESSING_DONE_STATUS": "Done",
@@ -724,6 +786,30 @@ class TestAnnotatingOutputReannotate:
         batch = output_airtable.update_records.call_args_list[-1][0][1][0]["fields"]
         assert batch["fldDRAKKAR"] == "2.4.4/2.6.1"
 
+    def test_the_gtdbtk_version_and_gtdb_release_are_written(self, tmp_path, output_airtable):
+        local = _output_dir(tmp_path)
+        gtdbtk = local / "annotating" / "gtdbtk"
+        gtdbtk.mkdir()
+        (gtdbtk / "gtdbtk.json").write_text('{"version": "2.7.2", "database_version": "r232"}')
+        ctx, _ = _uploading_sftp()
+        with patch("ehio.transfer.SFTPTransfer", return_value=ctx):
+            assert cli.cmd_annotating(_out_args(local, reannotate=False, tasks="taxonomy")) == 0
+        fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
+        assert fields["fldGTDBTK"] == "2.7.2"
+        assert fields["fldGTDBRELEASE"] == "R232"
+
+    def test_a_function_task_leaves_the_gtdbtk_version(self, tmp_path, output_airtable):
+        local = _output_dir(tmp_path)
+        (local / "annotating" / "gtdbtk").mkdir()
+        (local / "annotating" / "gtdbtk" / "gtdbtk.json").write_text(
+            '{"version": "2.7.2", "database_version": "r232"}')
+        ctx, _ = _uploading_sftp()
+        with patch("ehio.transfer.SFTPTransfer", return_value=ctx):
+            assert cli.cmd_annotating(_out_args(local, tasks="function")) == 0
+        fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
+        assert "fldGTDBTK" not in fields
+        assert "fldGTDBRELEASE" not in fields
+
     def test_the_batch_is_marked_done(self, tmp_path, output_airtable):
         self._run(tmp_path)
         batch_update = output_airtable.update_records.call_args_list[-1][0][1][0]
@@ -767,6 +853,55 @@ class TestWithTheCore:
              patch("ehio.urls.download_url", side_effect=_download):
             assert cli.cmd_annotating(_stage_args(tmp_path)) == 0
         assert "https://erda/Data/MAG/ABB0700/EHA00124_bin_3.fa.gz" in fetched
+
+    def test_a_core_batch_with_no_samples_stages_all_its_mags(self, tmp_path):
+        """A batch that only classifies maps nothing, so it may hold no
+        samples at all: staging reads its MAGs and nothing else."""
+        config = {**STAGE_CFG, "MAG_DMB_BATCH": ""}
+        fake = FakeCoreClient(CORE_MAGS, batches={"DMB0157": {"row": {"code": "DMB0157"}, "entries": []}})
+        sftp = MagicMock()
+        args = _stage_args(tmp_path, all_mags=True)
+        with patch.object(cli, "_resolve_token", return_value="tok"), \
+             patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)), \
+             patch.object(cli, "_require_cfg", side_effect=lambda k: config[k]), \
+             using(fake), patch("ehio.transfer.SFTPTransfer", sftp), \
+             patch("ehio.urls.download_url", side_effect=_fake_download):
+            assert cli.cmd_annotating(args) == 0
+        staged = sorted(p.name for p in Path(args.annotation_dir).glob("*"))
+        assert staged == ["EHA00123_bin_1.fa", "EHA00124_bin_3.fa"]
+        sftp.assert_not_called()
+
+    def test_without_a_counts_table_the_kept_mags_are_staged(self, tmp_path, stage_airtable):
+        """A batch that dereplicated without profiling has no counts table;
+        the core's record of what dereplication kept stands in for it."""
+        mags = [{**CORE_MAGS[0], "is_representative": True}, {**CORE_MAGS[1], "is_representative": False}]
+        fake = FakeCoreClient(mags)
+        ctx, _ = _fake_sftp(counts_body=None)
+        args = _stage_args(tmp_path)
+        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
+             patch("ehio.urls.download_url", side_effect=_fake_download):
+            assert cli.cmd_annotating(args) == 0
+        assert sorted(p.name for p in Path(args.annotation_dir).glob("*")) == ["EHA00123_bin_1.fa"]
+
+    def test_the_gtdbtk_version_reaches_the_core(self, tmp_path):
+        config = {**OUTPUT_CFG, "MAG_DMB_BATCH": ""}
+        fake = FakeCoreClient(
+            [{"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": None}],
+            batches={"DMB0157": {"row": {"code": "DMB0157", "drakkar_version": "2.4.4"}}},
+        )
+        local = _output_dir(tmp_path)
+        (local / "annotating" / "gtdbtk").mkdir()
+        (local / "annotating" / "gtdbtk" / "gtdbtk.log").write_text(TestGtdbtkVersions.LOG)
+        ctx, _ = _uploading_sftp()
+        with patch.object(cli, "_resolve_token", return_value="tok"), \
+             patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)), \
+             patch.object(cli, "_require_cfg", side_effect=lambda k: config[k]), \
+             using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx):
+            assert cli.cmd_annotating(_out_args(local, reannotate=False, tasks="taxonomy")) == 0
+        [classified] = [row["values"] for row in fake.rows("mags") if row["values"].get("tax_domain")]
+        assert classified["gtdbtk_version"] == "2.7.2"
+        assert classified["gtdb_release"] == "R232"
+        assert classified["tax_phylum"] == "Firmicutes"
 
     def test_the_mags_linked_in_airtable_are_copied_into_the_core_first(self, tmp_path, stage_airtable):
         fake = FakeCoreClient(CORE_MAGS)
