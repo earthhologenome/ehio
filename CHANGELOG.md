@@ -7,6 +7,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- No unreleased changes yet.
+
+## [0.11.0] - 2026-10-04
+
+### Added
+
 - **Dereplicate is a DMB task of its own, beside Profile, Taxonomy and Function.** It decides which MAGs the other tasks work on: the representatives dRep keeps when it is ticked, every MAG of the batch when it is not. A batch with no Tasks runs all four, as before. Needs the ehi-core release that adds the Dereplicate option and the Dereplicating status.
   - Dereplicate without Profile runs `drakkar dereplicating`, which needs no reads: `ehio quantifying --input --no-reads` writes the MAG and quality files without reading the samples, and `ehio quantifying --derep-output` records which MAGs dRep kept and how many. Taxonomy and Function then run on those representatives.
   - Dereplicate with Profile is one `drakkar profiling` run, as before.
