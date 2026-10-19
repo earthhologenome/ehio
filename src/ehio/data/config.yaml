@@ -35,6 +35,7 @@ DRAKKAR_PPR_FRACTION: 'true'
 DRAKKAR_PPR_NONPAREIL: 'true'
 EHIO_CONDA_ENV: /projects/alberdilab/data/environments/conda/ehio
 DRAKKAR_CONDA_ENV: /projects/alberdilab/data/environments/conda/drakkar
+MODULES_INIT: /etc/profile.d/modules.sh
 ENA_SECRET_FILE: /projects/ehi/data/.secret.yml
 ENA_CENTER: Earth Hologenome Initiative
 ENA_CHECKLIST: ERC000013

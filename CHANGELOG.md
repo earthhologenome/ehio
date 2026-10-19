@@ -9,6 +9,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.13.1] - 2026-10-19
+
+### Fixed
+
+- **Batches launched from a non-login shell no longer fail with `module: command not found`.** Drakkar's rules start with `module purge; module load <tool>`, and `module` is a shell function that only login shells define (through `/etc/profile.d/modules.sh`); the screen session inherits the shell that launched it, so a launch from `bash -ic` sent PRB0276 to Error before any Slurm job existed. The generated `{batch}.sh` (every module) now defines `module` itself, before activating conda or calling drakkar: if `type module` fails it sources `MODULES_INIT`, and if `module` is still undefined it prints a clear error and stops with exit 127, which sets the batch to Error through the usual trap instead of failing later inside Snakemake. This is the single mechanism; the screen command is unchanged.
+- `ehio scanning` checks, before launching and in `--dry-run`, that `module` will be available in the script's environment. If not, it warns with the cause and the fix and launches nothing (a dry run still goes through), so a batch no longer goes to Error over something that could be checked beforehand.
+
+### Added
+
+- `MODULES_INIT` in `config.yaml` (default `/etc/profile.d/modules.sh`): the file that defines `module`. An empty value skips the setup and the checks.
+
 ## [0.13.0] - 2026-10-19
 
 ### Removed

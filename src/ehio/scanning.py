@@ -63,6 +63,81 @@ MODULES = [*DRAKKAR_CMD, "ena"]
 
 
 # ---------------------------------------------------------------------------
+# environment modules
+# ---------------------------------------------------------------------------
+
+# 'module' is a shell function, defined for login shells only, by this file.
+# Drakkar's rules start with 'module purge; module load <tool>', so a batch
+# launched from a non-login shell ('bash -ic', 'bash -c') fails on its first
+# rule with 'module: command not found'.  The generated script therefore
+# defines 'module' itself; this is the one mechanism (the screen command stays
+# a plain 'bash script').  MODULES_INIT in config.yaml overrides the path; an
+# empty value turns the setup and its checks off.
+DEFAULT_MODULES_INIT = "/etc/profile.d/modules.sh"
+
+
+def _modules_init_cfg() -> str:
+    """Return the MODULES_INIT setting: the default when absent, '' when emptied."""
+    if "MODULES_INIT" not in cfg.load_config():
+        return DEFAULT_MODULES_INIT
+    return str(cfg.get("MODULES_INIT") or "").strip()
+
+
+def _module_setup_block(modules_init: str) -> str:
+    """Return the bash lines that make 'module' available, or '' if disabled."""
+    if not modules_init:
+        return ""
+    init = shlex.quote(modules_init)
+    # modules.sh is written for interactive shells: it may read unset
+    # variables or return non-zero, which 'set -eu' would turn into a failure.
+    return (
+        "# Environment modules: 'module' only exists in login shells, but\n"
+        "# drakkar's rules call it.  Define it whatever shell launched this.\n"
+        "set +eu\n"
+        "if ! type module >/dev/null 2>&1 && [ -r " + init + " ]; then\n"
+        "    source " + init + " >/dev/null 2>&1\n"
+        "fi\n"
+        "set -eu\n"
+        "_EHIO_NO_MODULE=0\n"
+        "if ! type module >/dev/null 2>&1; then\n"
+        "    _EHIO_NO_MODULE=1\n"
+        '    echo "ehio: ERROR - the \'module\' command is not available, so drakkar\'s rules cannot load their tools." >&2\n'
+        '    echo "ehio: it is defined by ' + modules_init + ', which did not provide it." >&2\n'
+        '    echo "ehio: check MODULES_INIT in the ehio config, or launch from a login shell (bash -l)." >&2\n'
+        "fi\n"
+        "\n"
+    )
+
+
+def modules_preflight(modules_init: str) -> str:
+    """Check that 'module' will exist in the batch script; '' if so, else a warning.
+
+    Runs the same test the script runs, in the environment a screen session
+    started from this process inherits: a bare 'bash', then the init file.
+    """
+    if not modules_init:
+        return ""
+    probe = (
+        "type module >/dev/null 2>&1 && exit 0; "
+        f"[ -r {shlex.quote(modules_init)} ] && source {shlex.quote(modules_init)} >/dev/null 2>&1; "
+        "type module >/dev/null 2>&1"
+    )
+    try:
+        ok = subprocess.run(["bash", "-c", probe], capture_output=True).returncode == 0
+    except OSError:
+        ok = False
+    if ok:
+        return ""
+    return (
+        f"WARNING: the 'module' command is not available and {modules_init} does not "
+        "define it. Drakkar's rules (module purge; module load ...) would fail with "
+        "'module: command not found' and the batch would go to Error. Fix: set "
+        "MODULES_INIT in the ehio config to the file that defines 'module' "
+        "(ehio config --edit), or launch from a login shell (bash -lic)."
+    )
+
+
+# ---------------------------------------------------------------------------
 # screen helpers
 # ---------------------------------------------------------------------------
 
@@ -164,6 +239,7 @@ def build_script_content(
     profiling_type: str = "",
     annotation_type: str = "all",
     tasks: tuple[str, ...] | None = None,
+    modules_init: str = DEFAULT_MODULES_INIT,
 ) -> str:
     """Return the full content of the .sh script written into run_dir.
 
@@ -175,6 +251,8 @@ def build_script_content(
     ref_flag   — pre-resolved '-x url' or '-r url' for preprocessing; '' otherwise
     tasks      — what a DMB batch does, of DMB_TASKS; None does all of it, and
                  `reannotate` (the Reannotate status) is the function alone
+    modules_init — file that defines the 'module' function (MODULES_INIT);
+                 sourced when 'module' is missing, '' leaves it alone
     """
     if module not in MODULES:
         raise ValueError(f"Unknown module: {module}")
@@ -224,6 +302,7 @@ def build_script_content(
         'echo "=== $(date \'+%Y-%m-%d %H:%M:%S\') ==="\n'
         'echo "=== $(date \'+%Y-%m-%d %H:%M:%S\') ===" >&2\n'
         "\n"
+        + _module_setup_block(modules_init)
         + conda_block +
         # A stop marker left by an earlier 'ehio stop' must not silence the
         # error reporting of this launch.
@@ -261,7 +340,9 @@ def build_script_content(
         "    fi\n"
         "}\n"
         "trap _on_exit EXIT\n"
-        "\n"
+        # Stop here, now that the trap can report the failure to ehi-core.
+        + ('[ "$_EHIO_NO_MODULE" -eq 0 ] || exit 127\n' if modules_init else "")
+        + "\n"
         # drakkar reports several of its own errors — a Snakemake lock left
         # behind by a killed batch, an input file it cannot find — by printing
         # a message and returning, which leaves the exit status at 0.  Without
@@ -863,6 +944,7 @@ def scan_module(
     profile            = cfg.get("DRAKKAR_PROFILE", "slurm").strip()
     ehio_conda_env     = cfg.get("EHIO_CONDA_ENV", "").strip()
     drakkar_conda_env  = cfg.get("DRAKKAR_CONDA_ENV", "").strip()
+    modules_init       = _modules_init_cfg()
 
     def _bool_cfg(key: str) -> bool:
         return str(cfg.get(key) or "false").strip().lower() not in ("false", "0", "no", "")
@@ -977,6 +1059,7 @@ def scan_module(
             profiling_type=profiling_type,
             annotation_type=annotation_type,
             tasks=tasks,
+            modules_init=modules_init,
         )
 
         if do_rerun:
@@ -1043,6 +1126,13 @@ def run_scan(
     if not screen_available():
         print("Error: 'screen' is not available on PATH.", file=sys.stderr)
         return 0
+
+    warning = modules_preflight(_modules_init_cfg())
+    if warning:
+        print(f"  {warning}", file=sys.stderr)
+        if not dry_run:
+            print("  Nothing launched: fix the above first.", file=sys.stderr)
+            return 0
 
     targets        = modules or MODULES
     total_found    = 0

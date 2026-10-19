@@ -532,6 +532,14 @@ ehio jobs -m preprocessing -b PPR001
 
 `ehio jobs` prints one row per job (job id, state, elapsed time, partition, name) and a per-state summary. It needs `squeue` on `PATH`; `ehio stop` also needs `scancel`, and if either is missing it kills the session and updates the status but reports that the jobs were left alone.
 
+### Troubleshooting: `module: command not found`
+
+**Symptom.** A batch goes to `Error` straight after launch, with no Slurm jobs, and `{RUN_BASE}/{batch}/{batch}.out` or `.err` ends with `/bin/bash: module: command not found` (exit 127).
+
+**Cause.** Drakkar's rules start with `module purge; module load <tool>`. `module` is a shell function defined only in login shells (by `/etc/profile.d/modules.sh`), and the screen session inherits the shell that ran `ehio scanning`, so a launch from `bash -c` or `bash -ic` has no `module`.
+
+**Fix.** Nothing to do by default: the generated `{batch}.sh` sources `MODULES_INIT` (default `/etc/profile.d/modules.sh`) when `module` is missing, and stops with a clear error if it is still undefined. If your cluster keeps the file elsewhere, set `MODULES_INIT` with `ehio config --edit`; an empty value turns this off. `ehio scanning` (also with `--dry-run`) warns, and launches nothing, when `module` would be unavailable. Launching from a login shell (`bash -lic`) also works. To recover the failed batch, set its status to `Resume` and launch again.
+
 ---
 
 ## Overall data flow

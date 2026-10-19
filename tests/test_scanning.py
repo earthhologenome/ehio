@@ -53,6 +53,98 @@ class TestBuildScriptContent:
                 error_status="Error"):
         return build_script_content(module, batch, run_dir, out_dir, profile, error_status)
 
+    # --- environment modules ---
+
+    def test_script_defines_module_before_conda_and_drakkar(self):
+        script = build_script_content(
+            "preprocessing", "PPR001", RUN_DIR, OUT_DIR, "slurm", ehio_conda_env="/env/ehio",
+        )
+        assert "source /etc/profile.d/modules.sh" in script
+        assert script.index("modules.sh") < script.index("conda activate")
+        assert script.index("modules.sh") < script.index("drakkar preprocessing")
+
+    def test_module_setup_only_sources_when_module_is_missing(self):
+        assert "if ! type module" in self._script()
+
+    def test_script_stops_with_an_error_when_module_stays_undefined(self):
+        script = self._script()
+        assert "'module' command is not available" in script
+        assert "exit 127" in script
+        # the exit comes after the trap, so the batch is flagged as Error
+        assert script.index("trap _on_exit EXIT") < script.index("exit 127")
+
+    def test_module_setup_uses_configured_path(self):
+        script = build_script_content(
+            "binning", "ASB001", RUN_DIR, OUT_DIR, "slurm", modules_init="/opt/my modules.sh",
+        )
+        assert "source '/opt/my modules.sh'" in script
+
+    def test_module_setup_skipped_when_modules_init_empty(self):
+        script = build_script_content(
+            "preprocessing", "PPR001", RUN_DIR, OUT_DIR, "slurm", modules_init="",
+        )
+        assert "modules.sh" not in script
+        assert "type module" not in script
+        assert "exit 127" not in script
+
+    def test_module_setup_in_every_module(self):
+        for module in MODULES:
+            assert "source /etc/profile.d/modules.sh" in build_script_content(
+                module, "B001", RUN_DIR, OUT_DIR, "slurm")
+
+    def test_generated_script_defines_module_from_a_bare_shell(self, tmp_path):
+        import subprocess
+        init = tmp_path / "modules.sh"
+        init.write_text("module() { echo loaded \"$@\"; }\n")
+        script = build_script_content(
+            "preprocessing", "PPR001", str(tmp_path), str(tmp_path / "o"), "slurm",
+            modules_init=str(init),
+        )
+        # Run only the module block: it must define 'module' in a clean shell.
+        head = script.split("_EHIO_NO_MODULE=0")[0].split("set +eu")[1]
+        result = subprocess.run(
+            ["bash", "-c", "set +eu" + head + "type module"],
+            capture_output=True, env={"PATH": "/usr/bin:/bin"},
+        )
+        assert result.returncode == 0
+
+    def test_scan_warns_and_launches_nothing_when_module_missing(self, capsys):
+        from ehio.scanning import run_scan
+        with patch("ehio.scanning.screen_available", return_value=True), \
+             patch("ehio.scanning.modules_preflight", return_value="WARNING: no module"), \
+             patch("ehio.scanning.scan_module") as scan:
+            assert run_scan() == 0
+        scan.assert_not_called()
+        assert "WARNING: no module" in capsys.readouterr().err
+
+    def test_dry_run_warns_but_still_scans(self, capsys):
+        from ehio.scanning import run_scan
+        with patch("ehio.scanning.screen_available", return_value=True), \
+             patch("ehio.scanning.modules_preflight", return_value="WARNING: no module"), \
+             patch("ehio.scanning.scan_module", return_value=(0, 0)) as scan:
+            run_scan(dry_run=True)
+        assert scan.called
+        assert "WARNING: no module" in capsys.readouterr().err
+
+    def test_preflight_empty_init_is_silent(self):
+        from ehio.scanning import modules_preflight
+        assert modules_preflight("") == ""
+
+    def test_preflight_warns_with_cause_and_fix_when_module_missing(self, tmp_path):
+        from ehio.scanning import modules_preflight
+        with patch("ehio.scanning.subprocess.run") as run:
+            run.return_value.returncode = 1
+            warning = modules_preflight(str(tmp_path / "nope.sh"))
+        assert "'module' command is not available" in warning
+        assert "MODULES_INIT" in warning
+
+    def test_preflight_ok_when_init_defines_module(self, tmp_path):
+        from ehio.scanning import modules_preflight
+        init = tmp_path / "m.sh"
+        init.write_text("module() { :; }\n")
+        with patch.dict("os.environ", {}, clear=False):
+            assert modules_preflight(str(init)) == ""
+
     # --- bash boilerplate ---
 
     def test_starts_with_shebang(self):
@@ -193,7 +285,7 @@ class TestBuildScriptContent:
             ref_flag="-x 'https://example.com/ref.tar.gz'",
         )
         assert "-x 'https://example.com/ref.tar.gz'" in script
-        assert "source" not in script
+        assert "source $DRAKKAR_REF" not in script
         assert "$DRAKKAR_REF_FLAG" not in script
 
     def test_preprocessing_ref_flag_hardwired_raw(self):
