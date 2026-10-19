@@ -11,14 +11,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ehio import cli
-from ehio.airtable import ATTACHMENT_MAX_BYTES, attachment_encoded_size
 from ehio.drakkar import (
     AMR_MANIFEST_COLUMNS,
     normalise_amr_assembly_type,
     write_amr_manifest,
 )
 from ehio.metadata import (
-    AMR_METRIC_KEYS,
     AMR_OUTPUT_FILES,
     parse_amr_qc_tsv,
     write_amr_output_tsv,
@@ -129,24 +127,6 @@ class TestParseAmrQc:
         assert "without_coordinates" not in out.read_text()
 
 
-class TestMetricKeys:
-    def test_every_metric_resolves_to_a_configured_field(self):
-        from ehio import config as cfg
-
-        for metric, config_key in AMR_METRIC_KEYS.items():
-            assert str(cfg.get(config_key) or "").startswith("fld"), metric
-
-    def test_qc_columns_and_metric_keys_agree(self, tmp_path: Path):
-        qc = tmp_path / "amr_qc.tsv"
-        qc.write_text(QC_TSV)
-        columns = set(parse_amr_qc_tsv(qc)["EHA00405"])
-        assert set(AMR_METRIC_KEYS) <= columns
-
-    def test_every_output_file_has_an_attachment_field(self):
-        from ehio import config as cfg
-
-        for file_name, config_key in AMR_OUTPUT_FILES.items():
-            assert str(cfg.get(config_key) or "").startswith("fld"), file_name
 
 
 # ---------------------------------------------------------------------------
@@ -215,16 +195,6 @@ def _fake_response(body: bytes):
 # attachment size guard
 # ---------------------------------------------------------------------------
 
-class TestAttachmentSize:
-    def test_encoded_size_matches_base64(self):
-        import base64
-
-        for n in (0, 1, 2, 3, 4, 1000, 999_983):
-            assert attachment_encoded_size(n) == len(base64.b64encode(b"x" * n))
-
-    def test_the_limit_is_reached_below_four_megabytes_of_payload(self):
-        assert attachment_encoded_size(4 * 1024 * 1024) > ATTACHMENT_MAX_BYTES
-        assert attachment_encoded_size(3 * 1024 * 1024) < ATTACHMENT_MAX_BYTES
 
 
 # ---------------------------------------------------------------------------
@@ -286,65 +256,32 @@ class TestAmrScript:
 # ---------------------------------------------------------------------------
 
 CFG_VALUES = {
-    "EHI_BASE": "appEHI",
-    "EHI_AMR_BATCH": "tblAMR",
-    "EHI_ASB_ENTRY": "tblASB",
-    "EHI_AMR_BATCH_CODE": "fldBATCHCODE",
-    "EHI_AMR_BATCH_STATUS": "fldSTATUS",
-    "EHI_AMR_BATCH_LIST_ASSEMBLIES": "fldLIST",
-    "EHI_ASB_ENTRY_ASSEMBLY_URL": "fldURL",
-    "EHI_ASB_ENTRY_ASSEMBLY_CODE": "fldCODE",
-    "EHI_ASB_ENTRY_CODE": "fldCODE",
-    "EHI_AMR_BATCH_FILE_HITS": "fldHITS",
-    "EHI_AMR_BATCH_FILE_LOCI": "fldLOCI",
-    "EHI_AMR_BATCH_FILE_DRUG_CLASSES": "fldDRUGS",
-    "EHI_AMR_BATCH_FILE_MOBILITY": "fldMOB",
-    "EHI_AMR_BATCH_FILE_MOBILITY_REGIONS": "fldREGIONS",
-    "EHI_AMR_BATCH_FILE_MANIFEST": "fldMANIFEST",
-    "EHI_ASB_ENTRY_AMR_AMRFINDER_HITS": "fldAMRFINDER",
-    "EHI_ASB_ENTRY_AMR_RGI_HITS": "fldRGI",
-    "EHI_ASB_ENTRY_AMR_MOBILITY_REGIONS": "fldMOBREGIONS",
-    "EHI_ASB_ENTRY_AMR_LOCI": "fldAMRLOCI",
-    "EHI_ASB_ENTRY_AMR_MULTI_TOOL_LOCI": "fldMULTI",
-    "EHI_ASB_ENTRY_AMR_MOBILITY_LINKS": "fldLINKS",
-    "EHI_ASB_ENTRY_AMR_MOBILE_LOCI": "fldMOBILE",
-    "SFTP_HOST": "erda",
-    "SFTP_USER": "user",
-    "SFTP_PORT": "22",
-    "SFTP_REMOTE_BASE": "/Data",
-    "PROCESSING_DONE_STATUS": "Done",
+    "SFTP_HOST": "erda", "SFTP_USER": "user", "SFTP_PORT": "22",
+    "SFTP_REMOTE_BASE": "/Data", "PROCESSING_DONE_STATUS": "Done",
 }
 
-
 @pytest.fixture
-def amr_airtable(tmp_path: Path):
-    """Patch config lookups and the Airtable client for the AMR commands."""
-    values = {**CFG_VALUES, "RUN_BASE": str(tmp_path / "RUN")}
-    client = MagicMock()
-    client.fetch_batch_record.return_value = {
-        "id": "recBATCH",
-        "fields": {"fldBATCHCODE": "AMR001", "fldLIST": ["recA1", "recA2"]},
-    }
-    entries = {
-        "recA1": {"id": "recA1", "fields": {
-            "fldCODE": "EHA00405",
-            "fldURL": "https://erda/Data/ASB/ABB0659/EHA00405.fna.gz"}},
-        "recA2": {"id": "recA2", "fields": {
-            "fldCODE": "EHA00406",
-            "fldURL": "https://erda/Data/ASB/ABB0659/EHA00406.fna.gz"}},
-    }
-    client.fetch_record_by_id.side_effect = lambda table, rec_id: entries.get(rec_id)
+def amr_core(tmp_path: Path):
+    """An AMR batch and assemblies held only in ehi-core."""
+    from tests.fake_core import FakeCoreClient, using
 
-    with patch("ehio.airtable.AirtableClient", return_value=client), \
-         patch.object(cli, "_resolve_token", return_value="tok"), \
-         patch.object(cli.cfg, "get", side_effect=lambda k, d=None: values.get(k, d)), \
-         patch.object(cli, "_require_cfg", side_effect=lambda k: values[k]):
-        yield client
+    values = {**CFG_VALUES, "RUN_BASE": str(tmp_path / "RUN")}
+    fake = FakeCoreClient(batches={"AMR001": {
+        "row": {"code": "AMR001"},
+        "entries": [
+            {"code": "EHA00405", "assembly_url": "https://erda/Data/ASB/ABB0659/EHA00405.fna.gz"},
+            {"code": "EHA00406", "assembly_url": "https://erda/Data/ASB/ABB0659/EHA00406.fna.gz"},
+        ],
+    }})
+    with patch.object(cli.cfg, "get", side_effect=lambda k, d=None: values.get(k, d)), \
+         patch.object(cli, "_require_cfg", side_effect=lambda k: values[k]), \
+         patch.object(cli, "_get_drakkar_version", return_value="2.5.0"), using(fake):
+        yield fake
 
 
 def _input_args(tmp_path: Path, **overrides) -> argparse.Namespace:
     defaults = dict(
-        input=True, output=False, batch="AMR001", airtable_token=None, verbose=False,
+        input=True, output=False, batch="AMR001", verbose=False,
         manifest_file=str(tmp_path / "AMR001_assemblies.tsv"),
         assemblies_dir=str(tmp_path / "assemblies"),
         redownload=False, download_timeout=600.0,
@@ -353,7 +290,7 @@ def _input_args(tmp_path: Path, **overrides) -> argparse.Namespace:
 
 
 class TestAmrInput:
-    def test_downloads_every_assembly_and_writes_the_manifest(self, tmp_path, amr_airtable):
+    def test_downloads_every_assembly_and_writes_the_manifest(self, tmp_path, amr_core):
         args = _input_args(tmp_path)
         downloaded = []
 
@@ -374,60 +311,39 @@ class TestAmrInput:
         )
         assert all(r.split("\t")[2] == "metagenome" for r in rows)
 
-    def test_local_paths_are_used_without_downloading(self, tmp_path, amr_airtable):
+    def test_local_paths_are_used_without_downloading(self, tmp_path, amr_core):
         local = tmp_path / "EHA00405.fna.gz"
         local.write_bytes(b"contigs")
-        amr_airtable.fetch_record_by_id.side_effect = lambda t, rid: {
-            "id": rid, "fields": {"fldCODE": "EHA00405", "fldURL": str(local)},
-        } if rid == "recA1" else None
-        amr_airtable.fetch_batch_record.return_value["fields"]["fldLIST"] = ["recA1"]
+        amr_core.batches["AMR001"]["entries"] = [{"code": "EHA00405", "assembly_url": str(local)}]
 
         args = _input_args(tmp_path)
         with patch("ehio.urls.download_url", side_effect=AssertionError("downloaded")):
             assert cli.cmd_amr(args) == 0
         assert str(local) in Path(args.manifest_file).read_text()
 
-    def test_a_link_field_that_is_really_a_text_field_is_reported(self, tmp_path, amr_airtable, capsys):
-        # EHI_AMR_BATCH_LIST_ASSEMBLIES pointed at the batch code: Airtable
-        # returns a string, which would otherwise be walked character by
-        # character and leave the batch looking empty
-        amr_airtable.fetch_batch_record.return_value["fields"]["fldLIST"] = "AMR001"
-        with pytest.raises(SystemExit):
-            cli.cmd_amr(_input_args(tmp_path))
-        assert "EHI_AMR_BATCH_LIST_ASSEMBLIES" in capsys.readouterr().err
 
-    def test_a_link_field_holding_no_record_ids_is_reported(self, tmp_path, amr_airtable, capsys):
-        amr_airtable.fetch_batch_record.return_value["fields"]["fldLIST"] = ["AMR001"]
-        with pytest.raises(SystemExit):
-            cli.cmd_amr(_input_args(tmp_path))
-        assert "EHI_AMR_BATCH_LIST_ASSEMBLIES" in capsys.readouterr().err
 
-    def test_a_batch_with_no_linked_assemblies_is_reported(self, tmp_path, amr_airtable):
-        amr_airtable.fetch_batch_record.return_value["fields"]["fldLIST"] = []
+    def test_a_batch_with_no_linked_assemblies_is_reported(self, tmp_path, amr_core):
+        amr_core.batches["AMR001"]["entries"] = []
         with pytest.raises(SystemExit):
             cli.cmd_amr(_input_args(tmp_path))
 
-    def test_a_failed_download_stops_the_batch(self, tmp_path, amr_airtable):
+    def test_a_failed_download_stops_the_batch(self, tmp_path, amr_core):
         args = _input_args(tmp_path)
         with patch("ehio.urls.download_url", side_effect=DownloadError("HTTP 404 Not Found")):
             with pytest.raises(SystemExit):
                 cli.cmd_amr(args)
         assert not Path(args.manifest_file).exists()
 
-    def test_an_assembly_without_a_file_stops_the_batch(self, tmp_path, amr_airtable):
-        amr_airtable.fetch_record_by_id.side_effect = lambda t, rid: {
-            "id": rid, "fields": {"fldCODE": "EHA00405", "fldURL": ""},
-        }
+    def test_an_assembly_without_a_file_stops_the_batch(self, tmp_path, amr_core):
+        amr_core.batches["AMR001"]["entries"] = [{"code": "EHA00405", "assembly_url": ""}]
         with pytest.raises(SystemExit):
             cli.cmd_amr(_input_args(tmp_path))
 
-    def test_the_download_is_named_after_the_assembly(self, tmp_path, amr_airtable):
+    def test_the_download_is_named_after_the_assembly(self, tmp_path, amr_core):
         # two assemblies whose URLs share a basename must not collide
-        amr_airtable.fetch_record_by_id.side_effect = lambda t, rid: {
-            "id": rid,
-            "fields": {"fldCODE": "EHA00405" if rid == "recA1" else "EHA00406",
-                       "fldURL": "https://erda/Data/ASB/ABB0659/final.contigs.fa.gz"},
-        }
+        for entry in amr_core.batches["AMR001"]["entries"]:
+            entry["assembly_url"] = "https://erda/Data/ASB/ABB0659/final.contigs.fa.gz"
         args = _input_args(tmp_path)
         with patch("ehio.urls.download_url", side_effect=lambda url, dest, **kw: Path(dest)):
             assert cli.cmd_amr(args) == 0
@@ -436,19 +352,17 @@ class TestAmrInput:
             "EHA00405.fa.gz", "EHA00406.fa.gz",
         ]
 
-    def test_a_file_drakkar_cannot_read_is_reported_before_the_run(self, tmp_path, amr_airtable):
-        amr_airtable.fetch_record_by_id.side_effect = lambda t, rid: {
-            "id": rid,
-            "fields": {"fldCODE": "EHA00405", "fldURL": "https://erda/EHA00405.txt"},
-        }
+    def test_a_file_drakkar_cannot_read_is_reported_before_the_run(self, tmp_path, amr_core):
+        amr_core.batches["AMR001"]["entries"] = [
+            {"code": "EHA00405", "assembly_url": "https://erda/EHA00405.txt"},
+        ]
         with patch("ehio.urls.download_url", side_effect=AssertionError("downloaded")):
             with pytest.raises(SystemExit):
                 cli.cmd_amr(_input_args(tmp_path))
 
-    def test_an_assembly_linked_twice_is_kept_once(self, tmp_path, amr_airtable):
-        amr_airtable.fetch_batch_record.return_value["fields"]["fldLIST"] = [
-            "recA1", "recA1", "recA2",
-        ]
+    def test_an_assembly_linked_twice_is_kept_once(self, tmp_path, amr_core):
+        entries = amr_core.batches["AMR001"]["entries"]
+        amr_core.batches["AMR001"]["entries"] = [entries[0], entries[0], entries[1]]
         args = _input_args(tmp_path)
         with patch("ehio.urls.download_url",
                    side_effect=lambda url, dest, **kw: Path(dest)):
@@ -476,7 +390,7 @@ def amr_output_dir(tmp_path: Path) -> Path:
 
 def _output_args(local_dir: Path, **overrides) -> argparse.Namespace:
     defaults = dict(
-        input=False, output=True, batch="AMR001", airtable_token=None, verbose=False,
+        input=False, output=True, batch="AMR001", verbose=False,
         local_dir=str(local_dir), host=None, user=None, port=None, identity=None,
         remote_dir=None, rerun=False, connect_timeout=300.0,
     )
@@ -496,17 +410,17 @@ def sftp():
 
 
 class TestAmrOutput:
-    def test_writes_the_stats_to_the_assembly_records(self, amr_output_dir, amr_airtable, sftp):
+    def test_writes_the_stats_to_the_assembly_records(self, amr_output_dir, amr_core, sftp):
         assert cli.cmd_amr(_output_args(amr_output_dir)) == 0
-        table, updates = amr_airtable.update_records.call_args_list[0][0]
-        assert table == "tblASB"
-        by_id = {u["id"]: u["fields"] for u in updates}
-        assert by_id["recA1"]["fldAMRFINDER"] == 12
-        assert by_id["recA1"]["fldMULTI"] == 6
-        assert by_id["recA1"]["fldMOBILE"] == 2
-        assert by_id["recA2"]["fldRGI"] == 0
+        values = {code: {} for code in ("EHA00405", "EHA00406")}
+        for row in amr_core.rows("assemblies"):
+            values[row["key"]["code"]].update(row["values"])
+        assert values["EHA00405"]["amr_amrfinder_hits"] == 12
+        assert values["EHA00405"]["amr_multi_tool_loci"] == 6
+        assert values["EHA00405"]["amr_mobile_loci"] == 2
+        assert values["EHA00406"]["amr_rgi_hits"] == 0
 
-    def test_uploads_every_table_batch_prefixed(self, amr_output_dir, amr_airtable, sftp):
+    def test_uploads_every_table_batch_prefixed(self, amr_output_dir, amr_core, sftp):
         cli.cmd_amr(_output_args(amr_output_dir))
         files, remote = sftp.upload_flat.call_args[0]
         assert remote == "/Data/AMR/AMR001"
@@ -518,89 +432,34 @@ class TestAmrOutput:
             "AMR001_assembly_summary.tsv.gz", "AMR001_amr_manifest.yaml",
         ])
 
-    def test_attaches_the_tables_and_the_manifest_to_the_batch_record(
-            self, amr_output_dir, amr_airtable, sftp):
-        cli.cmd_amr(_output_args(amr_output_dir))
-        attached = {
-            call[0][2]: call[0][3].name
-            for call in amr_airtable.upload_attachment.call_args_list
-        }
-        assert attached == {
-            "fldDRUGS":  "AMR001_amr_drug_classes.tsv.xz",
-            "fldHITS":   "AMR001_amr_hits.tsv.xz",
-            "fldLOCI":   "AMR001_amr_loci.tsv.xz",
-            "fldMOB":    "AMR001_amr_mobility.tsv.xz",
-            "fldREGIONS": "AMR001_mobility_regions.tsv.xz",
-            "fldMANIFEST": "AMR001_amr_manifest.yaml",
-        }
 
-    def test_the_manifest_is_attached_as_yaml(self, amr_output_dir, amr_airtable, sftp):
-        cli.cmd_amr(_output_args(amr_output_dir))
-        types = {
-            call[0][3].name: call[1]["content_type"]
-            for call in amr_airtable.upload_attachment.call_args_list
-        }
-        assert types["AMR001_amr_manifest.yaml"] == "text/yaml"
 
-    def test_a_run_without_a_manifest_still_finishes(self, amr_output_dir, amr_airtable, sftp):
+    def test_a_run_without_a_manifest_still_finishes(self, amr_output_dir, amr_core, sftp):
         (amr_output_dir / "amr" / "manifest.yaml").unlink()
         assert cli.cmd_amr(_output_args(amr_output_dir)) == 0
-        attached = [c[0][2] for c in amr_airtable.upload_attachment.call_args_list]
-        assert "fldMANIFEST" not in attached
+        uploaded = [p.name for p in sftp.upload_flat.call_args[0][0]]
+        assert "AMR001_amr_manifest.yaml" not in uploaded
 
-    def test_an_oversized_table_is_left_on_erda_only(self, amr_output_dir, amr_airtable, sftp):
-        big = amr_output_dir / "amr" / "amr_hits.tsv.xz"
-        big.write_bytes(b"x" * (4 * 1024 * 1024))
-        cli.cmd_amr(_output_args(amr_output_dir))
-        attached = [c[0][2] for c in amr_airtable.upload_attachment.call_args_list]
-        assert "fldHITS" not in attached
-        assert "fldLOCI" in attached
-        # it still reaches ERDA
-        assert any(p.name == "AMR001_amr_hits.tsv.xz"
-                   for p in sftp.upload_flat.call_args[0][0])
 
-    def test_an_already_attached_table_is_not_attached_twice(self, amr_output_dir, amr_airtable, sftp):
-        amr_airtable.fetch_batch_record.return_value["fields"]["fldHITS"] = [
-            {"filename": "AMR001_amr_hits.tsv.xz"},
-        ]
-        cli.cmd_amr(_output_args(amr_output_dir))
-        attached = [c[0][2] for c in amr_airtable.upload_attachment.call_args_list]
-        assert "fldHITS" not in attached
 
-    def test_rerun_clears_the_attachment_fields_first(self, amr_output_dir, amr_airtable, sftp):
-        cli.cmd_amr(_output_args(amr_output_dir, rerun=True))
-        cleared = [
-            call[0][1][0]["fields"]
-            for call in amr_airtable.update_records.call_args_list
-            if call[0][0] == "tblAMR" and all(v == [] for v in call[0][1][0]["fields"].values())
-        ]
-        assert cleared and set(cleared[0]) == {
-            "fldHITS", "fldLOCI", "fldDRUGS", "fldMOB", "fldREGIONS", "fldMANIFEST",
-        }
-        sftp.remove_remote_dir.assert_called_once_with("/Data/AMR/AMR001")
 
-    def test_temporary_copies_are_removed(self, amr_output_dir, amr_airtable, sftp):
+    def test_temporary_copies_are_removed(self, amr_output_dir, amr_core, sftp):
         cli.cmd_amr(_output_args(amr_output_dir))
         left = sorted(p.name for p in (amr_output_dir / "amr").iterdir())
         assert not any(name.startswith("AMR001_") for name in left)
 
-    def test_sets_the_batch_to_done(self, amr_output_dir, amr_airtable, sftp):
+    def test_sets_the_batch_to_done(self, amr_output_dir, amr_core, sftp):
         cli.cmd_amr(_output_args(amr_output_dir))
-        status_updates = [
-            call[0][1][0]["fields"]
-            for call in amr_airtable.update_records.call_args_list
-            if call[0][0] == "tblAMR"
-        ]
-        assert any(f.get("fldSTATUS") == "Done" for f in status_updates)
+        assert amr_core.rows("amr_batches")[-1]["values"]["status"] == "Done"
 
-    def test_an_unfinished_batch_is_not_marked_done(self, tmp_path, amr_airtable, sftp):
+    def test_an_unfinished_batch_is_not_marked_done(self, tmp_path, amr_core, sftp):
         empty = tmp_path / "empty"
         (empty / "amr").mkdir(parents=True)
         with pytest.raises(SystemExit):
             cli.cmd_amr(_output_args(empty))
-        amr_airtable.update_records.assert_not_called()
+        assert amr_core.rows("amr_batches") == []
 
-    def test_writes_the_run_summary_tsv(self, amr_output_dir, amr_airtable, sftp, tmp_path):
+    def test_writes_the_run_summary_tsv(self, amr_output_dir, amr_core, sftp, tmp_path):
         cli.cmd_amr(_output_args(amr_output_dir))
         summary = tmp_path / "RUN" / "AMR001" / "AMR001_output.tsv"
         assert summary.is_file()
@@ -620,7 +479,7 @@ def _with_gene_calls(output_dir: Path) -> Path:
 
 
 class TestAmrGeneCalls:
-    def test_faa_and_ffn_go_gzipped_to_the_genes_folder(self, amr_output_dir, amr_airtable, sftp):
+    def test_faa_and_ffn_go_gzipped_to_the_genes_folder(self, amr_output_dir, amr_core, sftp):
         _with_gene_calls(amr_output_dir)
         assert cli.cmd_amr(_output_args(amr_output_dir)) == 0
         remote = sorted(c[0][0] for c in sftp.upload_stream.call_args_list)
@@ -631,7 +490,7 @@ class TestAmrGeneCalls:
             "/Data/AMR/AMR001/genes/EHA00406.ffn.gz",
         ]
 
-    def test_the_uploaded_content_is_the_gzipped_file(self, amr_output_dir, amr_airtable, sftp):
+    def test_the_uploaded_content_is_the_gzipped_file(self, amr_output_dir, amr_core, sftp):
         import gzip
         import io
 
@@ -649,7 +508,7 @@ class TestAmrGeneCalls:
             prodigal / "EHA00405.ffn"
         ).read_bytes()
 
-    def test_gff_intermediates_are_not_sent(self, amr_output_dir, amr_airtable, sftp):
+    def test_gff_intermediates_are_not_sent(self, amr_output_dir, amr_core, sftp):
         _with_gene_calls(amr_output_dir)
         cli.cmd_amr(_output_args(amr_output_dir))
         remote = [c[0][0] for c in sftp.upload_stream.call_args_list]
@@ -657,7 +516,7 @@ class TestAmrGeneCalls:
         flat = [p.name for p in sftp.upload_flat.call_args[0][0]]
         assert not any(name.endswith((".faa", ".ffn", ".gff")) for name in flat)
 
-    def test_files_already_on_erda_are_skipped(self, amr_output_dir, amr_airtable, sftp):
+    def test_files_already_on_erda_are_skipped(self, amr_output_dir, amr_core, sftp):
         _with_gene_calls(amr_output_dir)
         sftp.remote_exists.side_effect = lambda path: path.endswith(".faa.gz")
         cli.cmd_amr(_output_args(amr_output_dir))
@@ -668,14 +527,14 @@ class TestAmrGeneCalls:
         ]
 
     def test_rerun_clears_the_batch_folder_before_the_gene_calls_go_up(
-            self, amr_output_dir, amr_airtable, sftp):
+            self, amr_output_dir, amr_core, sftp):
         _with_gene_calls(amr_output_dir)
         cli.cmd_amr(_output_args(amr_output_dir, rerun=True))
         calls = [c[0] for c in sftp.method_calls if c[0] in ("remove_remote_dir", "upload_stream")]
         assert calls[0] == "remove_remote_dir"
         assert calls.count("upload_stream") == 4
 
-    def test_a_run_without_gene_calls_still_finishes(self, amr_output_dir, amr_airtable, sftp):
+    def test_a_run_without_gene_calls_still_finishes(self, amr_output_dir, amr_core, sftp):
         assert cli.cmd_amr(_output_args(amr_output_dir)) == 0
         sftp.upload_stream.assert_not_called()
         sftp.upload_flat.assert_called_once()

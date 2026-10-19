@@ -1,4 +1,4 @@
-"""Tests for ehio.metadata — QC file parsers and Airtable payload builder."""
+"""Tests for ehio.metadata — QC file parsers and output file helpers."""
 
 from __future__ import annotations
 
@@ -16,9 +16,6 @@ from ehio.metadata import (
     parse_drakkar_cataloging_tsv,
     parse_sample_mapping_rates,
     parse_bin_metadata_csv,
-    build_entry_update,
-    PREPROCESSING_METRIC_KEYS,
-    BIN_METRIC_KEYS,
 )
 from ehio.cli import _rename_preprocessing_files
 from tests.conftest import FASTP_JSON, SINGLEM_SMF_TSV, NONPAREIL_TSV
@@ -176,7 +173,7 @@ class TestCollectPreprocessingMetadata:
 
 
 # ---------------------------------------------------------------------------
-# build_entry_update
+# Bin metadata parsing
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -338,43 +335,7 @@ class TestParseBinMetadataCsv:
     def test_missing_file_returns_empty(self, tmp_path: Path):
         assert parse_bin_metadata_csv(tmp_path / "missing.csv") == []
 
-    def test_bin_metric_keys_excludes_score(self):
-        assert "score" not in BIN_METRIC_KEYS
 
-
-class TestBuildEntryUpdate:
-    FIELD_MAP = {
-        "reads_pre_fastp":   "fldmD0Z4dNmEc0Uri",
-        "metagenomic_reads": "fldzI8PYD9asJYIkN",
-        "singlem_fraction":  "fldm3dHUMQ8X9fWoj",
-    }
-
-    def test_payload_contains_non_none_values(self):
-        metrics = {
-            "reads_pre_fastp":   10_000_000,
-            "metagenomic_reads": 8_500_000,
-            "singlem_fraction":  None,          # should be excluded
-        }
-        payload = build_entry_update("recENTRY000001", metrics, self.FIELD_MAP)
-        assert payload["id"] == "recENTRY000001"
-        assert "fldmD0Z4dNmEc0Uri" in payload["fields"]
-        assert "fldzI8PYD9asJYIkN" in payload["fields"]
-        assert "fldm3dHUMQ8X9fWoj" not in payload["fields"]
-
-    def test_all_none_produces_empty_fields(self):
-        metrics = {"reads_pre_fastp": None}
-        payload = build_entry_update("recX", metrics, self.FIELD_MAP)
-        assert payload["fields"] == {}
-
-    def test_unmapped_metric_is_ignored(self):
-        metrics = {"reads_pre_fastp": 10_000_000, "unknown_key": 999}
-        payload = build_entry_update("recX", metrics, self.FIELD_MAP)
-        assert "unknown_key" not in str(payload)
-
-    def test_metric_keys_constant_covers_all_fields(self):
-        """PREPROCESSING_METRIC_KEYS should reference all EHI_PPR_ENTRY_* config keys."""
-        config_key_prefixes = {v for v in PREPROCESSING_METRIC_KEYS.values()}
-        assert all(k.startswith("EHI_PPR_ENTRY_") for k in config_key_prefixes)
 
 
 # ---------------------------------------------------------------------------

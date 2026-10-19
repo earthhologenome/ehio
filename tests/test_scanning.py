@@ -13,6 +13,7 @@ from ehio.scanning import (
     session_exists,
     STOP_SENTINEL,
     _verify_reference,
+    _resolve_preprocessing_ref_flag,
     MODULES,
     DRAKKAR_CMD,
     launch_screen,
@@ -106,11 +107,11 @@ class TestBuildScriptContent:
         sentinel_pos = script.index("_EHIO_SUCCESS=1")
         assert sentinel_pos > output_pos
 
-    def test_exit_trap_passes_failures_dir_to_set_status(self):
+    def test_exit_trap_sets_error_status(self):
         script = self._script()
         status_line = next(l for l in script.splitlines() if "ehio set-status" in l)
-        assert f"--failures-dir {OUT_DIR}" in status_line
-        assert '--failures-since "$_EHIO_STARTED"' in status_line
+        assert "--status Error" in status_line
+        assert "--failures-dir" not in status_line
 
     def test_start_timestamp_recorded_before_trap(self):
         script = self._script()
@@ -582,9 +583,8 @@ class TestTokenHandoff:
         monkeypatch.setenv("EHI_CORE_PIPELINE", "from-codeome")
         monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
         with patch("ehio.scanning.subprocess.run") as run:
-            launch_screen("PPR001", "/run/PPR001.sh", token="airtable", core_token="selected")
+            launch_screen("PPR001", "/run/PPR001.sh", core_token="selected")
         env = run.call_args.kwargs["env"]
-        assert env["AIRTABLE_TOKEN"] == "airtable"
         assert env["EHI_CORE_PIPELINE"] == "selected"
         assert "EHI_CORE_TOKEN" not in set(env)
 
@@ -600,16 +600,15 @@ class TestTokenHandoff:
         monkeypatch.setenv("EHI_CORE_PIPELINE", "from-codeome")
         monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
         with patch("ehio.scanning.subprocess.run") as run:
-            _generate_input_files("preprocessing", "PPR001", "/run", "airtable", "selected")
+            _generate_input_files("preprocessing", "PPR001", "/run", "selected")
         env = run.call_args.kwargs["env"]
-        assert env["AIRTABLE_TOKEN"] == "airtable"
         assert env["EHI_CORE_PIPELINE"] == "selected"
         assert "EHI_CORE_TOKEN" not in set(env)
 
     def test_dry_run_input_carries_a_legacy_token_only_under_the_pipeline_name(self, monkeypatch):
         monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
         with patch("ehio.scanning.subprocess.run") as run:
-            _generate_input_files("preprocessing", "PPR001", "/run", "airtable", "from-legacy-env")
+            _generate_input_files("preprocessing", "PPR001", "/run", "from-legacy-env")
         env = run.call_args.kwargs["env"]
         assert env["EHI_CORE_PIPELINE"] == "from-legacy-env"
         assert "EHI_CORE_TOKEN" not in set(env)
@@ -633,12 +632,12 @@ class TestVerifyReference:
 
     def test_downloadable_url_passes(self):
         with patch("ehio.urls.check_url", return_value=None):
-            _verify_reference(self.URL, "G0001", "EHI_GENOME_URL_RAW", self._noop)
+            _verify_reference(self.URL, "G0001", "url_raw", self._noop)
 
     def test_broken_url_raises(self):
         with patch("ehio.urls.check_url", return_value="HTTP 404 Not Found"):
             with pytest.raises(BatchLaunchError) as exc:
-                _verify_reference(self.URL, "G0001", "EHI_GENOME_URL_RAW", self._noop)
+                _verify_reference(self.URL, "G0001", "url_raw", self._noop)
         assert "not downloadable" in str(exc.value)
         assert "HTTP 404 Not Found" in str(exc.value)
         assert "G0001" in str(exc.value)
@@ -646,13 +645,91 @@ class TestVerifyReference:
     def test_existing_local_path_passes(self, tmp_path):
         ref = tmp_path / "ref.fna.gz"
         ref.write_text("")
-        _verify_reference(str(ref), "G0001", "EHI_GENOME_URL_RAW", self._noop)
+        _verify_reference(str(ref), "G0001", "url_raw", self._noop)
 
     def test_missing_local_path_raises(self, tmp_path):
         with pytest.raises(BatchLaunchError) as exc:
             _verify_reference(str(tmp_path / "nope.fna.gz"), "G0001",
-                              "EHI_GENOME_URL_RAW", self._noop)
+                              "url_raw", self._noop)
         assert "not found" in str(exc.value)
+
+
+class TestReferenceFlag:
+    def _core(self, **genome):
+        from ehio.core import CoreSession
+        from tests.fake_core import FakeCoreClient
+
+        return CoreSession(FakeCoreClient(genomes={"G0081": genome}))
+
+    def test_indexed_genome_uses_x(self, tmp_path):
+        indexed = tmp_path / "G0081.tar.gz"
+        indexed.write_bytes(b"index")
+        core = self._core(url_indexed=str(indexed), url_raw="https://raw")
+        assert _resolve_preprocessing_ref_flag("G0081", core) == f"-x {indexed}"
+
+    def test_raw_only_genome_uses_r(self, tmp_path):
+        raw = tmp_path / "G0081.fna.gz"
+        raw.write_bytes(b"raw")
+        core = self._core(url_raw=str(raw))
+        assert _resolve_preprocessing_ref_flag("G0081", core) == f"-r {raw}"
+
+    def test_no_url_names_the_genome(self):
+        with pytest.raises(BatchLaunchError, match="G0081"):
+            _resolve_preprocessing_ref_flag("G0081", self._core())
+
+    def test_unknown_genome_names_its_code(self):
+        from ehio.core import CoreSession
+        from tests.fake_core import FakeCoreClient
+
+        with pytest.raises(BatchLaunchError, match="No reference genome G9999"):
+            _resolve_preprocessing_ref_flag("G9999", CoreSession(FakeCoreClient()))
+
+
+def test_launch_reads_the_genome_code_from_batch_entries(tmp_path):
+    from ehio.core import CoreSession
+    from tests.fake_core import FakeCoreClient
+
+    indexed = tmp_path / "G0081.tar.gz"
+    indexed.write_bytes(b"index")
+    fake = FakeCoreClient(
+        batches={"PPR001": {
+            "row": {"code": "PPR001", "status": "Ready", "reference_genome_code": "G9999"},
+            "entries": [{"code": "PR00001", "reference_genome_code": "G0081"}],
+        }},
+        genomes={"G0081": {"url_indexed": str(indexed)}},
+    )
+    values = {"EHI_PPR_OUTPUT_BASE": str(tmp_path / "PPR"), "RUN_BASE": str(tmp_path / "RUN")}
+    with patch("ehio.scanning.cfg.get", side_effect=lambda key, default=None: values.get(key, default)), \
+         patch("ehio.scanning.session_exists", return_value=False), \
+         patch("ehio.scanning.launch_screen"):
+        assert scan_module("preprocessing", core=CoreSession(fake)) == (1, 1)
+    assert fake.batch_entries_calls == [("preprocessing_batches", "PPR001")]
+    assert fake.reference_reads == ["G0081"]
+    script = (tmp_path / "RUN" / "PPR001" / "PPR001.sh").read_text()
+    assert f"-x {indexed}" in script
+
+
+@pytest.mark.parametrize("genomes, code, message", [
+    ({"G0081": {}}, "G0081", "neither an indexed nor a raw URL"),
+    ({}, "G9999", "No reference genome G9999"),
+])
+def test_launch_fails_a_batch_with_an_unusable_genome(tmp_path, capsys, genomes, code, message):
+    from ehio.core import CoreSession
+    from tests.fake_core import FakeCoreClient
+
+    fake = FakeCoreClient(
+        batches={"PPR001": {"row": {"code": "PPR001", "status": "Ready"},
+                            "entries": [{"code": "PR00001", "reference_genome_code": code}]}},
+        genomes=genomes,
+    )
+    values = {"EHI_PPR_OUTPUT_BASE": str(tmp_path / "PPR"), "RUN_BASE": str(tmp_path / "RUN")}
+    with patch("ehio.scanning.cfg.get", side_effect=lambda key, default=None: values.get(key, default)), \
+         patch("ehio.scanning.session_exists", return_value=False), \
+         patch("ehio.scanning.launch_screen") as launch:
+        assert scan_module("preprocessing", core=CoreSession(fake)) == (1, 0)
+    launch.assert_not_called()
+    assert message in capsys.readouterr().err
+    assert fake.rows("preprocessing_batches")[0]["values"]["status"] == "Error"
 
 
 # ---------------------------------------------------------------------------
@@ -928,78 +1005,31 @@ class TestDmbTasks:
                             else "" if key == "MAG_DMB_BATCH" else real_get(key, default))
         monkeypatch.setattr("ehio.scanning.session_exists", lambda name: False)
         core = FakeCore([{"code": "DMB0200", "status": "Ready", "tasks": ["Taxonomy"]}])
-        found, count = scan_module("quantifying", "tok", dry_run=True, core=CoreSession(core))
+        found, count = scan_module("quantifying", dry_run=True, core=CoreSession(core))
         assert (found, count) == (1, 1)
         script = (tmp_path / "RUN_BASE" / "DMB0200" / "DMB0200.sh").read_text()
         assert "drakkar profiling" not in script
         assert "--tasks taxonomy" in script
 
 
-# ---------------------------------------------------------------------------
-# Scanning Airtable and ehi-core together
-#
-# The same scan that reads Airtable's batch statuses reads ehi-core's, which is
-# taking over from it: a batch either database holds is launched, a batch both
-# hold is launched once and described by the core, and the status the launch
-# sets goes back to whichever of the two holds it.
+# Core-only batch scanning
 # ---------------------------------------------------------------------------
 
 from ehio import config as cfg
 from ehio.core import CoreError, CoreSession
-from ehio.scanning import (
-    AirtableBatches,
-    CoreBatches,
-    PendingBatch,
-    _merge,
-    _set_status,
-    _sources,
-    scan_module,
-)
-
-PPR_CODE      = cfg.get("EHI_PPR_BATCH_CODE")
-PPR_STATUS    = cfg.get("EHI_PPR_BATCH_STATUS")
-PPR_REFERENCE = cfg.get("EHI_PPR_BATCH_REFERENCE")
-PPR_BOOST     = cfg.get("EHI_PPR_BATCH_BOOST_TIME")
-DMB_CODE      = cfg.get("MAG_DMB_BATCH_CODE")
-DMB_STATUS    = cfg.get("MAG_DMB_BATCH_STATUS")
-DMB_ANI       = cfg.get("MAG_DMB_BATCH_ANI")
-
-
-def airtable_batch(code="PPR001", status="Ready", **fields):
-    return {"id": f"rec{code}", "fields": {PPR_CODE: code, PPR_STATUS: status, **fields}}
-
-
-class FakeAirtable:
-    """ehio.airtable.AirtableClient as the scan uses it."""
-
-    def __init__(self, records=(), fail_update=None):
-        self.records = list(records)
-        self.updates = []
-        self.fail_update = fail_update
-
-    def __call__(self, api_key=None, base_id=None):
-        return self
-
-    def fetch_pending_batches(self, batch_table, batch_status_field, trigger_status):
-        return [r for r in self.records
-                if r["fields"].get(batch_status_field) == trigger_status]
-
-    def update_records(self, table, updates):
-        if self.fail_update:
-            raise self.fail_update
-        self.updates.append((table, updates))
+from ehio.scanning import CoreBatches, PendingBatch, _set_status, _sources, scan_module
 
 
 class FakeCore:
-    """ehio.core.CoreClient as the scan uses it."""
+    """The pending-batch and write methods the scanner uses."""
+
+    url = "https://core.test/api"
 
     def __init__(self, rows=(), error=None, fail_upsert=None):
         self.rows = list(rows)
         self.error = error
         self.fail_upsert = fail_upsert
         self.upserts = []
-
-    url = "https://core.test/api"
 
     def ping(self):
         pass
@@ -1011,46 +1041,40 @@ class FakeCore:
     def progress(self, done):
         pass
 
+    def batch_entries(self, table, batch):
+        return {"batch": batch, "row": {"code": batch}, "entries": []}
+
     def pending_batches(self, table, statuses):
         if self.error:
             raise self.error
-        wanted = {s.lower() for s in statuses}
-        return [r for r in self.rows if str(r.get("status", "")).lower() in wanted]
+        wanted = {status.lower() for status in statuses}
+        return [row for row in self.rows if str(row.get("status", "")).lower() in wanted]
 
     def upsert(self, changes):
         if self.fail_upsert:
             raise self.fail_upsert
         self.upserts.append(changes)
-        return [{"table": t, "code": row["key"].get("code"), "action": "updated"}
-                for t, rows in changes for row in rows]
+        return [{"table": table, "code": row["key"].get("code"), "action": "updated"}
+                for table, rows in changes for row in rows]
 
     def statuses(self):
-        """Every (code, status) the scan wrote to the core, in order."""
         return [(row["key"]["code"], row["values"].get("status"))
                 for changes in self.upserts for _, rows in changes for row in rows]
 
 
-# --- a batch as the two databases describe it -------------------------------------
+def _only_core(monkeypatch, **extra):
+    real_get = cfg.get
+    def get(key, default=None):
+        if key == "EHI_PPR_BATCH":
+            return ""
+        if key in extra:
+            return extra[key]
+        return real_get(key, default)
+    monkeypatch.setattr(cfg, "get", get)
+
 
 class TestPendingBatch:
-    def test_the_core_row_is_read_before_the_airtable_record(self):
-        batch = PendingBatch("PPR001", "", "Ready",
-                             record=airtable_batch(**{PPR_BOOST: 2}),
-                             row={"code": "PPR001", "boost_time": 5})
-        assert batch.number("EHI_PPR_BATCH_BOOST_TIME") == 5
-
-    def test_airtable_fills_what_the_core_leaves_empty(self):
-        batch = PendingBatch("PPR001", "", "Ready",
-                             record=airtable_batch(**{PPR_BOOST: 2}),
-                             row={"code": "PPR001", "boost_time": None})
-        assert batch.number("EHI_PPR_BATCH_BOOST_TIME") == 2
-
-    def test_a_batch_only_airtable_holds_is_read_from_airtable(self):
-        batch = PendingBatch("PPR001", "", "Ready", record=airtable_batch(**{PPR_BOOST: 2}))
-        assert batch.number("EHI_PPR_BATCH_BOOST_TIME") == 2
-        assert batch.where == "Airtable"
-
-    def test_a_batch_only_the_core_holds_is_read_from_the_core(self):
+    def test_a_core_row_supplies_batch_options(self):
         batch = PendingBatch("DMB0157", "", "Ready",
                              row={"code": "DMB0157", "ani_threshold": 0.98,
                                   "annotation_type": "kegg"})
@@ -1062,27 +1086,13 @@ class TestPendingBatch:
         batch = PendingBatch("PPR001", "", "Ready", row={"code": "PPR001", "boost_time": "soon"})
         assert batch.number("EHI_PPR_BATCH_BOOST_TIME") is None
 
-    def test_the_core_genome_code_is_resolved_as_airtable_would_resolve_it(self):
-        batch = PendingBatch("PPR001", "", "Ready", row={"code": "PPR001",
-                                                         "reference_genome_code": "G0007"})
-        assert batch.reference_record()["fields"][PPR_REFERENCE] == "G0007"
-
-    def test_without_a_core_genome_the_airtable_record_is_resolved(self):
-        record = airtable_batch(**{PPR_REFERENCE: ["recGENOME1"]})
-        batch = PendingBatch("PPR001", "", "Ready", record=record, row={"code": "PPR001"})
-        assert batch.reference_record() is record
-
-
-# --- reading each database --------------------------------------------------------
-
 class TestCoreBatches:
     def _pending(self, rows, statuses=None):
-        core = FakeCore(rows)
-        source = CoreBatches("quantifying", CoreSession(core))
+        source = CoreBatches("quantifying", CoreSession(FakeCore(rows)))
         return source.pending(statuses or {"": "Ready", "resume": "Resume",
                                            "rerun": "Rerun", "reannotate": "Reannotate"})
 
-    def test_each_status_becomes_the_kind_of_launch_it_asks_for(self):
+    def test_each_status_becomes_the_requested_launch_kind(self):
         found = self._pending([
             {"code": "DMB0001", "status": "Ready"},
             {"code": "DMB0002", "status": "Resume"},
@@ -1090,232 +1100,88 @@ class TestCoreBatches:
             {"code": "DMB0004", "status": "Reannotate"},
             {"code": "DMB0005", "status": "Running"},
         ])
-        assert [(b.code, b.kind) for b in found] == [
+        assert [(batch.code, batch.kind) for batch in found] == [
             ("DMB0001", ""), ("DMB0002", "resume"),
             ("DMB0003", "rerun"), ("DMB0004", "reannotate"),
         ]
 
-    def test_a_status_matches_however_the_core_capitalises_it(self):
-        assert [b.kind for b in self._pending([{"code": "DMB0001", "status": "RERUN"}])] == ["rerun"]
+    def test_status_matching_ignores_case(self):
+        assert [batch.kind for batch in self._pending([{"code": "DMB0001", "status": "RERUN"}])] == ["rerun"]
 
-    def test_a_batch_without_a_code_is_left_alone(self):
+    def test_a_batch_without_a_code_is_skipped(self):
         assert self._pending([{"code": "", "status": "Ready"}]) == []
 
-    def test_the_reannotate_status_is_not_asked_for_outside_quantifying(self):
-        core = CoreBatches("preprocessing", CoreSession(FakeCore()))
-        assert core.pending({"": "", "reannotate": ""}) == []
+    def test_reannotate_is_not_requested_outside_quantifying(self):
+        source = CoreBatches("preprocessing", CoreSession(FakeCore()))
+        assert source.pending({"": "", "reannotate": ""}) == []
 
-    def test_a_core_that_cannot_be_reached_is_reported_and_gives_nothing(self, capsys):
-        core = FakeCore(error=CoreError("ehi-core could not read (404)", status=404))
-        found = CoreBatches("quantifying", CoreSession(core)).pending({"": "Ready"})
-        assert found == []
-        assert "not written to ehi-core" in capsys.readouterr().err
-
-    def test_a_required_core_that_cannot_be_reached_stops_the_scan(self):
+    def test_an_unreachable_core_stops_the_scan(self):
         core = FakeCore(error=CoreError("ehi-core could not read (404)", status=404))
         with pytest.raises(CoreError):
-            CoreBatches("quantifying", CoreSession(core, required=True)).pending({"": "Ready"})
+            CoreBatches("quantifying", CoreSession(core)).pending({"": "Ready"})
 
 
-class TestSources:
-    def test_both_databases_are_scanned_when_both_are_configured(self):
-        sources = _sources("preprocessing", "tok", CoreSession(FakeCore()))
-        assert [s.name for s in sources] == ["Airtable", "ehi-core"]
+def test_only_the_core_is_a_source_when_the_batch_table_is_unconfigured(monkeypatch):
+    _only_core(monkeypatch)
+    assert [source.name for source in _sources("preprocessing", CoreSession(FakeCore()))] == ["ehi-core"]
 
-    def test_without_the_core_the_scan_is_airtable_alone(self):
-        assert [s.name for s in _sources("preprocessing", "tok", CoreSession())] == ["Airtable"]
-
-    def test_a_module_airtable_does_not_hold_is_still_scanned_in_the_core(self, monkeypatch):
-        monkeypatch.setattr(cfg, "get", lambda key, default=None:
-                            "" if key == "EHI_PPR_BATCH" else cfg.load_config().get(key, default))
-        sources = _sources("preprocessing", "tok", CoreSession(FakeCore()))
-        assert [s.name for s in sources] == ["ehi-core"]
-
-
-# --- merging the two --------------------------------------------------------------
-
-class TestMerge:
-    STATUSES = {"": "Ready", "resume": "Resume", "rerun": "Rerun", "reannotate": ""}
-
-    def _merge(self, monkeypatch, records, rows):
-        monkeypatch.setattr("ehio.scanning.AirtableClient", FakeAirtable(records))
-        airtable = AirtableBatches("preprocessing", "tok")
-        core = CoreBatches("preprocessing", CoreSession(FakeCore(rows)))
-        return _merge("preprocessing", [airtable, core], self.STATUSES)
-
-    def test_a_batch_both_databases_hold_is_launched_once(self, monkeypatch):
-        merged = self._merge(monkeypatch, [airtable_batch("PPR001")],
-                             [{"code": "PPR001", "status": "Ready"}])
-        assert [b.code for b in merged] == ["PPR001"]
-        assert merged[0].where == "Airtable and ehi-core"
-
-    def test_a_batch_either_database_holds_alone_is_launched_too(self, monkeypatch):
-        merged = self._merge(monkeypatch, [airtable_batch("PPR001")],
-                             [{"code": "PPR002", "status": "Ready"}])
-        assert [(b.code, b.where) for b in merged] == [
-            ("PPR001", "Airtable"), ("PPR002", "ehi-core"),
-        ]
-
-    def test_when_the_two_disagree_the_core_says_what_the_batch_is_waiting_for(self, monkeypatch, capsys):
-        merged = self._merge(monkeypatch, [airtable_batch("PPR001", status="Ready")],
-                             [{"code": "PPR001", "status": "Rerun"}])
-        assert [(b.code, b.kind) for b in merged] == [("PPR001", "rerun")]
-        assert "'Ready' in Airtable but 'Rerun' in ehi-core" in capsys.readouterr().err
-
-    def test_a_batch_both_hold_keeps_the_code_airtable_named_the_run_directory_with(self, monkeypatch):
-        merged = self._merge(monkeypatch, [airtable_batch("ppr001")],
-                             [{"code": "PPR001", "status": "Ready"}])
-        assert [b.code for b in merged] == ["ppr001"]
-
-
-# --- writing the status back ------------------------------------------------------
 
 class TestSetStatus:
-    def _sources(self, monkeypatch, core=None, fail_update=None):
-        fake = FakeAirtable(fail_update=fail_update)
-        monkeypatch.setattr("ehio.scanning.AirtableClient", fake)
-        sources = [AirtableBatches("preprocessing", "tok")]
-        if core is not None:
-            sources.append(CoreBatches("preprocessing", CoreSession(core)))
-        return sources, fake
-
-    def test_a_batch_both_hold_is_set_in_both(self, monkeypatch):
+    def test_a_core_batch_status_is_written(self):
         core = FakeCore()
-        sources, fake = self._sources(monkeypatch, core=core)
-        batch = PendingBatch("PPR001", "", "Ready", record=airtable_batch(),
-                             row={"code": "PPR001"})
-        _set_status("preprocessing", batch, "Running", sources)
-        assert fake.updates[0][1][0]["fields"][PPR_STATUS] == "Running"
-        assert core.statuses() == [("PPR001", "Running")]
-
-    def test_a_batch_only_the_core_holds_never_reaches_airtable(self, monkeypatch):
-        core = FakeCore()
-        sources, fake = self._sources(monkeypatch, core=core)
         batch = PendingBatch("PPR001", "", "Ready", row={"code": "PPR001"})
-        _set_status("preprocessing", batch, "Running", sources)
-        assert fake.updates == []
+        _set_status("preprocessing", batch, "Running", [CoreBatches("preprocessing", CoreSession(core))])
         assert core.statuses() == [("PPR001", "Running")]
 
-    def test_a_dry_run_sets_nothing_anywhere(self, monkeypatch):
+    def test_a_dry_run_does_not_write_status(self):
         core = FakeCore()
-        sources, fake = self._sources(monkeypatch, core=core)
-        batch = PendingBatch("PPR001", "", "Ready", record=airtable_batch(), row={"code": "PPR001"})
-        _set_status("preprocessing", batch, "Running", sources, dry_run=True)
-        assert (fake.updates, core.statuses()) == ([], [])
+        batch = PendingBatch("PPR001", "", "Ready", row={"code": "PPR001"})
+        _set_status("preprocessing", batch, "Running", [CoreBatches("preprocessing", CoreSession(core))],
+                    dry_run=True)
+        assert core.statuses() == []
 
-    def test_a_launched_batch_whose_status_will_not_stick_stops_the_scan(self, monkeypatch):
-        from ehio.airtable import AirtableError
-
-        sources, _ = self._sources(monkeypatch, fail_update=AirtableError("403 Forbidden"))
-        batch = PendingBatch("PPR001", "", "Ready", record=airtable_batch())
-        with pytest.raises(AirtableError) as exc:
-            _set_status("preprocessing", batch, "Running", sources, strict=True)
-        assert "was launched, but its status" in str(exc.value)
-
-    def test_a_status_that_will_not_stick_elsewhere_is_only_reported(self, monkeypatch, capsys):
-        from ehio.airtable import AirtableError
-
-        sources, _ = self._sources(monkeypatch, fail_update=AirtableError("403 Forbidden"))
-        batch = PendingBatch("PPR001", "", "Ready", record=airtable_batch())
-        _set_status("preprocessing", batch, "Error", sources)
-        assert "could not set the status to 'Error' in Airtable" in capsys.readouterr().err
-
-    def test_a_launched_batch_the_core_will_not_take_the_status_of_stops_the_scan(self, monkeypatch, capsys):
+    def test_a_launched_batch_whose_core_status_fails_stops_the_scan(self, capsys):
         core = FakeCore(fail_upsert=CoreError("ehi-core request failed with HTTP 500"))
-        sources, _ = self._sources(monkeypatch, core=core)
         batch = PendingBatch("ABB0729", "resume", "Resume", row={"code": "ABB0729"})
+        source = CoreBatches("binning", CoreSession(core))
         with pytest.raises(CoreError) as exc:
-            _set_status("binning", batch, "Running", sources, strict=True)
-        assert "HTTP 500" in str(exc.value)
-        assert "was launched, but its status in ehi-core" in str(exc.value)
+            _set_status("binning", batch, "Running", [source], strict=True)
+        assert "ehi-core request failed" in str(exc.value)
         assert "status →" not in capsys.readouterr().err
 
-    def test_a_status_the_core_will_not_take_is_not_reported_as_set(self, monkeypatch, capsys):
+    def test_a_non_strict_status_failure_raises(self):
         core = FakeCore(fail_upsert=CoreError("ehi-core request failed with HTTP 500"))
-        sources, _ = self._sources(monkeypatch, core=core)
         batch = PendingBatch("PPR001", "", "Ready", row={"code": "PPR001"})
-        _set_status("preprocessing", batch, "Error", sources)
-        err = capsys.readouterr().err
-        assert "could not set the status to 'Error' in ehi-core" in err
-        assert "Airtable has it" not in err
-        assert "status →" not in err
+        with pytest.raises(CoreError):
+            _set_status("preprocessing", batch, "Error", [CoreBatches("preprocessing", CoreSession(core))])
 
-
-# --- the scan end to end ----------------------------------------------------------
 
 class TestScanModule:
-    def _scan(self, monkeypatch, tmp_path, records=(), rows=(), running=False, **kwargs):
-        """Scan preprocessing over the two fakes, with nothing left to launch."""
-        fake_airtable = FakeAirtable(records)
-        fake_core     = FakeCore(rows)
-        real_get = cfg.get
-
-        def bases(key, default=None):
-            if key == "EHI_PPR_OUTPUT_BASE":
-                return str(tmp_path / "PPR")
-            if key == "RUN_BASE":
-                return str(tmp_path / "RUN")
-            return real_get(key, default)
-
-        monkeypatch.setattr(cfg, "get", bases)
-        monkeypatch.setattr("ehio.scanning.AirtableClient", fake_airtable)
+    def _scan(self, monkeypatch, tmp_path, rows=(), running=False, **kwargs):
+        fake_core = FakeCore(rows)
+        _only_core(monkeypatch, EHI_PPR_OUTPUT_BASE=str(tmp_path / "PPR"),
+                   RUN_BASE=str(tmp_path / "RUN"))
         monkeypatch.setattr("ehio.scanning.session_exists", lambda name: running)
-        monkeypatch.setattr("ehio.scanning._resolve_preprocessing_ref_flag",
-                            lambda record, token, verbose=False: "")
         launched = []
         monkeypatch.setattr("ehio.scanning.launch_screen",
                             lambda name, script, token="", core_token="": launched.append(name))
-        found, count = scan_module("preprocessing", "tok",
-                                   core=CoreSession(fake_core), **kwargs)
-        return found, count, launched, fake_airtable, fake_core
+        found, count = scan_module("preprocessing", core=CoreSession(fake_core), **kwargs)
+        return found, count, launched, fake_core
 
-    def test_a_batch_only_the_core_holds_is_launched(self, monkeypatch, tmp_path):
-        found, count, launched, airtable, core = self._scan(
-            monkeypatch, tmp_path, rows=[{"code": "PPR009", "status": "Ready"}],
-        )
+    def test_a_ready_core_batch_is_launched_and_marked_running(self, monkeypatch, tmp_path):
+        found, count, launched, core = self._scan(
+            monkeypatch, tmp_path, rows=[{"code": "PPR009", "status": "Ready"}])
         assert (found, count, launched) == (1, 1, ["PPR009"])
-        assert airtable.updates == []
         assert core.statuses() == [("PPR009", "Running")]
 
-    def test_a_batch_both_hold_is_launched_once_and_set_in_both(self, monkeypatch, tmp_path):
-        found, count, launched, airtable, core = self._scan(
-            monkeypatch, tmp_path,
-            records=[airtable_batch("PPR001")],
-            rows=[{"code": "PPR001", "status": "Ready"}],
-        )
-        assert (found, count, launched) == (1, 1, ["PPR001"])
-        assert airtable.updates[0][1][0]["fields"][PPR_STATUS] == "Running"
-        assert core.statuses() == [("PPR001", "Running")]
-
-    def test_the_core_decides_what_a_batch_both_hold_is_waiting_for(self, monkeypatch, tmp_path):
+    def test_a_rerun_clears_its_old_run_directory(self, monkeypatch, tmp_path):
         run_dir = tmp_path / "RUN" / "PPR001"
         run_dir.mkdir(parents=True)
         (run_dir / "stale.txt").write_text("from the failed run")
-        self._scan(
-            monkeypatch, tmp_path,
-            records=[airtable_batch("PPR001", status="Ready")],
-            rows=[{"code": "PPR001", "status": "Rerun"}],
-        )
+        self._scan(monkeypatch, tmp_path, rows=[{"code": "PPR001", "status": "Rerun"}])
         assert not (run_dir / "stale.txt").exists()
 
-    def test_a_core_too_old_for_the_route_leaves_the_scan_to_airtable(self, monkeypatch, tmp_path):
-        fake_core = FakeCore(error=CoreError("404 Not Found", status=404))
-        real_get = cfg.get
-        monkeypatch.setattr(cfg, "get", lambda key, default=None:
-                            str(tmp_path / key) if key in ("EHI_PPR_OUTPUT_BASE", "RUN_BASE")
-                            else real_get(key, default))
-        monkeypatch.setattr("ehio.scanning.AirtableClient", FakeAirtable([airtable_batch("PPR001")]))
-        monkeypatch.setattr("ehio.scanning.session_exists", lambda name: False)
-        monkeypatch.setattr("ehio.scanning._resolve_preprocessing_ref_flag",
-                            lambda record, token, verbose=False: "")
-        launched = []
-        monkeypatch.setattr("ehio.scanning.launch_screen",
-                            lambda name, script, token="", core_token="": launched.append(name))
-        found, count = scan_module("preprocessing", "tok", core=CoreSession(fake_core))
-        assert (found, count, launched) == (1, 1, ["PPR001"])
-
-    def test_a_running_screen_session_is_still_skipped(self, monkeypatch, tmp_path):
-        found, count, launched, _, core = self._scan(
-            monkeypatch, tmp_path, rows=[{"code": "PPR009", "status": "Ready"}], running=True,
-        )
+    def test_a_running_screen_session_is_skipped(self, monkeypatch, tmp_path):
+        found, count, launched, core = self._scan(
+            monkeypatch, tmp_path, rows=[{"code": "PPR009", "status": "Ready"}], running=True)
         assert (found, count, launched, core.statuses()) == (1, 0, [], [])

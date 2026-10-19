@@ -1,12 +1,4 @@
-"""Batches ehi-core alone holds, run without Airtable.
-
-Airtable is being retired, so a batch can be created in the core and taken all
-the way through: the input files a drakkar run needs are written from the core's
-own rows, and the results are written back to it. Airtable is looked in first
-while it still holds today's batches; a batch it does not have is read from the
-core, and emptying a module's Airtable keys leaves the core as the only place
-looked at.
-"""
+"""Core-only batches run through input and output commands using a fake ehi-core."""
 
 from __future__ import annotations
 
@@ -20,21 +12,10 @@ from ehio import cli
 from tests.fake_core import FakeCoreClient, using
 
 
-def no_airtable() -> MagicMock:
-    """An Airtable that holds nothing, as it will once the batches move."""
-    client = MagicMock()
-    client.fetch_batch_record.return_value = None
-    client.fetch_batch_and_entries.return_value = (None, [])
-    return client
-
-
-def run(config: dict, airtable: MagicMock, fake: FakeCoreClient, call):
+def run(config: dict, fake: FakeCoreClient, call):
     patches = [
-        patch("ehio.airtable.AirtableClient", return_value=airtable),
-        patch.object(cli, "_resolve_token", return_value="tok"),
         patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)),
         patch.object(cli, "_require_cfg", side_effect=lambda k: config.get(k) or f"<{k}>"),
-        patch("ehio.batches.cfg.get", side_effect=lambda k, d=None: config.get(k, d)),
         using(fake),
     ]
     for p in patches:
@@ -46,14 +27,7 @@ def run(config: dict, airtable: MagicMock, fake: FakeCoreClient, call):
             p.stop()
 
 
-CONFIG = {
-    "EHI_BASE": "app1", "MAG_BASE": "app2",
-    "EHI_PPR_BATCH": "tblPPR", "EHI_ASB_BATCH": "tblASB",
-    "MAG_DMB_BATCH": "tblDMB", "EHI_AMR_BATCH": "tblAMR",
-    "EHI_PPR_BATCH_CODE": "fldPPR", "EHI_ASB_BATCH_CODE": "fldASB",
-    "MAG_DMB_BATCH_CODE": "fldDMB", "EHI_AMR_BATCH_CODE": "fldAMR",
-}
-
+CONFIG = {}
 
 def rows(path: Path) -> list[list[str]]:
     return [line.split("\t") for line in path.read_text().strip().splitlines()]
@@ -81,8 +55,8 @@ def ppr_core():
 def test_a_preprocessing_batch_only_the_core_holds_writes_its_sample_sheet(tmp_path, ppr_core):
     out = tmp_path / "samples.tsv"
     args = argparse.Namespace(batch="PRB0021", sample_file=str(out), input=True,
-                              no_url_check=True, airtable_token=None, core_token=None)
-    assert run(CONFIG, no_airtable(), ppr_core,
+                              no_url_check=True, core_token=None)
+    assert run(CONFIG, ppr_core,
                lambda: cli._run_preprocessing_input(args)) == 0
     assert rows(out) == [
         ["sample", "rawreads1", "rawreads2"],
@@ -99,28 +73,16 @@ def test_the_raw_reads_are_the_ones_written_not_what_preprocessing_produces(tmp_
     ]}})
     out = tmp_path / "samples.tsv"
     args = argparse.Namespace(batch="PRB0021", sample_file=str(out), input=True,
-                              no_url_check=True, airtable_token=None, core_token=None)
-    assert run(CONFIG, no_airtable(), fake, lambda: cli._run_preprocessing_input(args)) == 0
+                              no_url_check=True, core_token=None)
+    assert run(CONFIG, fake, lambda: cli._run_preprocessing_input(args)) == 0
     assert rows(out)[1][1] == "https://erda/raw_1.fq.gz"
-
-
-def test_nothing_of_a_core_batch_is_written_back_to_airtable(tmp_path, ppr_core):
-    airtable = no_airtable()
-    out = tmp_path / "samples.tsv"
-    args = argparse.Namespace(batch="PRB0021", sample_file=str(out), input=True,
-                              no_url_check=True, airtable_token=None, core_token=None)
-    run(CONFIG, airtable, ppr_core, lambda: cli._run_preprocessing_input(args))
-    airtable.update_records.assert_not_called()
-    airtable.create_records.assert_not_called()
-    # Its rows are already in the core, so the input step has nothing to copy in.
-    assert ppr_core.upserts == []
 
 
 def test_a_batch_neither_database_holds_is_reported(tmp_path, ppr_core):
     args = argparse.Namespace(batch="PRB9999", sample_file=str(tmp_path / "s.tsv"), input=True,
-                              no_url_check=True, airtable_token=None, core_token=None)
+                              no_url_check=True, core_token=None)
     with pytest.raises(SystemExit):
-        run(CONFIG, no_airtable(), ppr_core, lambda: cli._run_preprocessing_input(args))
+        run(CONFIG, ppr_core, lambda: cli._run_preprocessing_input(args))
 
 
 # --- binning ----------------------------------------------------------------------
@@ -141,8 +103,8 @@ def test_a_coassembly_the_core_holds_becomes_one_sample_sheet_row_per_library(tm
     out = tmp_path / "samples.tsv"
     args = argparse.Namespace(batch="ABB0021", sample_file=str(out), input=True,
                               reads1_field=None, reads2_field=None,
-                              airtable_token=None, core_token=None)
-    assert run(CONFIG, no_airtable(), fake, lambda: cli._run_binning_input(args)) == 0
+                              core_token=None)
+    assert run(CONFIG, fake, lambda: cli._run_binning_input(args)) == 0
     assert rows(out) == [
         ["sample", "assembly", "rawreads1", "rawreads2"],
         ["EHI00011", "EHA00021", "https://erda/PPR/EHI00011_M_1.fq.gz",
@@ -154,7 +116,7 @@ def test_a_coassembly_the_core_holds_becomes_one_sample_sheet_row_per_library(tm
 
 def test_the_batch_type_is_checked_against_the_grouping_from_the_core_too(tmp_path, capsys):
     """The check that keeps a mismatch from surfacing as an empty drakkar run
-    reads the batch type from the core the same way it reads Airtable's."""
+    reads the batch type from ehi-core."""
     fake = FakeCoreClient(batches={"ABB0022": {
         "row": {"code": "ABB0022", "batch_type": "Individual"},
         "entries": [
@@ -166,8 +128,8 @@ def test_the_batch_type_is_checked_against_the_grouping_from_the_core_too(tmp_pa
     }})
     args = argparse.Namespace(batch="ABB0022", sample_file=str(tmp_path / "s.tsv"), input=True,
                               reads1_field=None, reads2_field=None,
-                              airtable_token=None, core_token=None)
-    assert run(CONFIG, no_airtable(), fake, lambda: cli._run_binning_input(args)) == 0
+                              core_token=None)
+    assert run(CONFIG, fake, lambda: cli._run_binning_input(args)) == 0
     err = capsys.readouterr().err
     assert "Batch assembly type: individual" in err
     assert "shared by several entries (EHA00022)" in err
@@ -186,8 +148,8 @@ def test_an_amr_batch_the_core_holds_stages_its_assemblies(tmp_path):
     manifest = tmp_path / "assemblies.tsv"
     args = argparse.Namespace(batch="AMR0021", manifest_file=str(manifest), input=True,
                               assemblies_dir=str(tmp_path / "staged"), redownload=False,
-                              download_timeout=600.0, airtable_token=None, core_token=None)
-    assert run(CONFIG, no_airtable(), fake, lambda: cli._run_amr_input(args)) == 0
+                              download_timeout=600.0, core_token=None)
+    assert run(CONFIG, fake, lambda: cli._run_amr_input(args)) == 0
     assert rows(manifest)[1][0] == "EHA00021"
 
 
@@ -212,47 +174,13 @@ def test_a_dmb_batch_the_core_holds_writes_its_reads_and_mags(tmp_path):
     quality = tmp_path / "quality.tsv"
     args = argparse.Namespace(batch="DMB0021", input=True, reads_file=str(reads),
                               mags_file=str(mags), quality_file=str(quality),
-                              airtable_token=None, core_token=None)
-    assert run(CONFIG, no_airtable(), fake, lambda: cli._run_quantifying_input(args)) == 0
+                              core_token=None)
+    assert run(CONFIG, fake, lambda: cli._run_quantifying_input(args)) == 0
     assert rows(reads)[1][0] == "EHI00011"
     assert mags.read_text().strip() == "https://erda/MAG/EHM000001.fa.gz"
 
 
-# --- what the core is told about an Airtable batch ---------------------------------
-
-
-def test_an_airtable_coassembly_tells_the_core_which_samples_it_groups(tmp_path):
-    """Airtable keeps one entry per sample carrying its assembly code; the core
-    links the assembly to every sample, so a coassembly keeps all of them."""
-    config = {**CONFIG,
-              "EHI_ASB_ENTRY": "tblE", "EHI_ASB_ENTRY_BATCH": "fldB",
-              "EHI_ASB_ENTRY_CODE": "fldC", "EHI_ASB_ENTRY_EHI_NUMBER": "fldEHI",
-              "EHI_ASB_ENTRY_ASSEMBLY_CODE": "fldA", "EHI_ASB_ENTRY_READS1": "fldR1",
-              "EHI_ASB_ENTRY_READS2": "fldR2", "EHI_ASB_ENTRY_PREPROCESSING": "fldPR",
-              "EHI_ASB_BATCH_TYPE": "fldT"}
-    airtable = MagicMock()
-    airtable.fetch_batch_and_entries.return_value = (
-        {"id": "recB", "fields": {"fldASB": "ABB0030", "fldT": "Coassembly"}},
-        [
-            {"id": "r1", "fields": {"fldC": "EHA00030", "fldEHI": "EHI00011", "fldA": "EHA00030",
-                                    "fldR1": "https://erda/a_1.fq.gz", "fldR2": "https://erda/a_2.fq.gz", "fldPR": "PR00021"}},
-            {"id": "r2", "fields": {"fldC": "EHA00030", "fldEHI": "EHI00012", "fldA": "EHA00030",
-                                    "fldR1": "https://erda/b_1.fq.gz", "fldR2": "https://erda/b_2.fq.gz", "fldPR": "PR00022"}},
-        ],
-    )
-    fake = FakeCoreClient()
-    args = argparse.Namespace(batch="ABB0030", sample_file=str(tmp_path / "s.tsv"), input=True,
-                              reads1_field=None, reads2_field=None,
-                              airtable_token=None, core_token=None)
-    run(config, airtable, fake, lambda: cli._run_binning_input(args))
-    assert fake.groupings == [("ABB0030", {"EHA00030": ["PR00021", "PR00022"]})]
-
-
-# --- dereplicate without profiling -----------------------------------------------
-#
-# A batch whose Tasks name Dereplicate but not Profile maps nothing: its input
-# step writes the MAGs and their quality without reading a single sample, and
-# what 'drakkar dereplicating' kept is recorded from dRep's winners table.
+# --- core-only dereplication -------------------------------------------------------
 
 DEREP_MAGS = [
     {"code": "EHM000001", "name": "EHA00021_bin_1.fa", "fasta_url": "https://erda/MAG/EHA00021_bin_1.fa.gz",
@@ -267,8 +195,8 @@ def test_a_batch_that_only_dereplicates_needs_no_samples(tmp_path):
     mags, quality = tmp_path / "mags.tsv", tmp_path / "quality.tsv"
     args = argparse.Namespace(batch="DMB0040", input=True, no_reads=True, reads_file=str(tmp_path / "reads.tsv"),
                               mags_file=str(mags), quality_file=str(quality),
-                              airtable_token=None, core_token=None)
-    assert run(CONFIG, no_airtable(), fake, lambda: cli._run_quantifying_input(args)) == 0
+                              core_token=None)
+    assert run(CONFIG, fake, lambda: cli._run_quantifying_input(args)) == 0
     assert mags.read_text().split() == [m["fasta_url"] for m in DEREP_MAGS]
     assert len(rows(quality)) == 3
     assert not (tmp_path / "reads.tsv").exists()
@@ -286,9 +214,9 @@ def _derep_output(tmp_path: Path) -> Path:
 def test_derep_output_records_what_drep_kept(tmp_path):
     fake = FakeCoreClient(mags=DEREP_MAGS, batches={"DMB0040": {"row": {"code": "DMB0040", "drakkar_version": "2.6.1"}}})
     args = argparse.Namespace(batch="DMB0040", derep_output=True, input=False, output=False,
-                              local_dir=str(_derep_output(tmp_path)), airtable_token=None, core_token=None)
+                              local_dir=str(_derep_output(tmp_path)), core_token=None)
     with patch.object(cli, "_get_drakkar_version", return_value="2.6.7"):
-        assert run(CONFIG, no_airtable(), fake, lambda: cli.cmd_quantifying(args)) == 0
+        assert run(CONFIG, fake, lambda: cli.cmd_quantifying(args)) == 0
     assert fake.links == [("DMB0040", [], ["EHM000001"])]
     batch = fake.rows("dereplication_batches")[-1]["values"]
     assert batch["drakkar_version"] == "2.6.1/2.6.7"
@@ -299,9 +227,9 @@ def test_derep_output_records_what_drep_kept(tmp_path):
 def test_derep_output_without_a_winners_table_fails(tmp_path):
     fake = FakeCoreClient(mags=DEREP_MAGS, batches={"DMB0040": {"row": {"code": "DMB0040"}}})
     args = argparse.Namespace(batch="DMB0040", derep_output=True, input=False, output=False,
-                              local_dir=str(tmp_path), airtable_token=None, core_token=None)
+                              local_dir=str(tmp_path), core_token=None)
     with pytest.raises(SystemExit):
-        run(CONFIG, no_airtable(), fake, lambda: cli.cmd_quantifying(args))
+        run(CONFIG, fake, lambda: cli.cmd_quantifying(args))
     assert fake.links == []
 
 
@@ -315,7 +243,7 @@ def test_profiling_with_skip_derep_marks_no_mag_as_kept(tmp_path):
         "entries": [{"code": "PR00021", "preprocessing_code": "PR00021", "hologenome_code": "EHI00011"}],
     }})
     args = argparse.Namespace(batch="DMB0040", output=True, input=False, skip_derep=True, rerun=False,
-                              local_dir=str(tmp_path), airtable_token=None, core_token=None,
+                              local_dir=str(tmp_path), core_token=None,
                               host=None, user=None, port=None, identity=None, remote_dir=None, verbose=False)
     config = {**CONFIG, "SFTP_HOST": "erda", "SFTP_USER": "u", "SFTP_REMOTE_BASE": "/Data",
               "CLEANUP_OUTPUT_DIR": "false"}
@@ -324,6 +252,6 @@ def test_profiling_with_skip_derep_marks_no_mag_as_kept(tmp_path):
     ctx.__exit__ = MagicMock(return_value=False)
     with patch.object(cli, "_get_drakkar_version", return_value="2.6.7"), \
          patch("ehio.transfer.SFTPTransfer", return_value=ctx):
-        assert run(config, no_airtable(), fake, lambda: cli._run_quantifying_output(args)) == 0
+        assert run(config, fake, lambda: cli._run_quantifying_output(args)) == 0
     assert fake.links == []
     assert fake.rows("dereplication_mappings")[0]["values"] == {"mapping_rate": 71.5}

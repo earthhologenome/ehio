@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from ehio import cli
 from ehio.scanning import STOP_SENTINEL
 from ehio.slurm import SlurmJob, SlurmUnavailable
+from tests.fake_core import FakeCoreClient, using
 
 MODULES = ["preprocessing", "binning", "quantifying", "amr"]
 
@@ -28,19 +29,15 @@ def batch_dirs(tmp_path: Path):
 
 
 @pytest.fixture
-def airtable():
-    client = MagicMock()
-    client.fetch_batch_record.return_value = {"id": "rec123", "fields": {}}
-    with patch("ehio.airtable.AirtableClient", return_value=client), \
-         patch.object(cli, "_resolve_token", return_value="tok"), \
-         patch.object(cli, "_require_cfg", side_effect=lambda key: f"<{key}>"):
-        yield client
+def core():
+    fake = FakeCoreClient()
+    with using(fake):
+        yield fake
 
 
 def _args(module: str = "binning", keep_jobs: bool = False) -> argparse.Namespace:
     return argparse.Namespace(
-        module=module, batch="ABB0659", keep_jobs=keep_jobs, airtable_token=None,
-    )
+        module=module, batch="ABB0659", keep_jobs=keep_jobs)
 
 
 # ---------------------------------------------------------------------------
@@ -49,46 +46,41 @@ def _args(module: str = "binning", keep_jobs: bool = False) -> argparse.Namespac
 
 class TestCmdStop:
     @pytest.mark.parametrize("module", MODULES)
-    def test_runs_for_every_module(self, module, airtable, batch_dirs):
+    def test_runs_for_every_module(self, module, core, batch_dirs):
         # regression: _SET_STATUS_CFG carries five keys, and unpacking four of
         # them raised ValueError before any batch could be stopped
         with patch("subprocess.run", return_value=MagicMock(returncode=0)), \
              patch.object(cli, "_cancel_batch_jobs"):
             assert cli.cmd_stop(_args(module)) == 0
 
-    def test_an_ena_submission_is_stopped_in_ehi_core_alone(self, batch_dirs):
-        from tests.fake_core import FakeCoreClient, using
-
-        fake = FakeCoreClient()
+    def test_an_ena_submission_is_stopped_in_ehi_core_alone(self, core, batch_dirs):
         with patch("subprocess.run", return_value=MagicMock(returncode=0)) as run, \
-             patch.object(cli, "_cancel_batch_jobs"), \
-             patch.object(cli, "_resolve_token", side_effect=AssertionError("no Airtable")), \
-             using(fake):
+             patch.object(cli, "_cancel_batch_jobs"):
             assert cli.cmd_stop(_args("ena")) == 0
         assert run.call_args[0][0] == ["screen", "-S", "ABB0659", "-X", "quit"]
-        [row] = fake.rows("ena_submissions")
+        [row] = core.rows("ena_submissions")
         assert row["values"] == {"status": "Stopped"}
 
-    def test_kills_the_screen_session(self, airtable, batch_dirs):
+    def test_kills_the_screen_session(self, core, batch_dirs):
         with patch("subprocess.run", return_value=MagicMock(returncode=0)) as run, \
              patch.object(cli, "_cancel_batch_jobs"):
             cli.cmd_stop(_args())
         assert run.call_args[0][0] == ["screen", "-S", "ABB0659", "-X", "quit"]
 
-    def test_cancels_jobs_by_default(self, airtable, batch_dirs):
+    def test_cancels_jobs_by_default(self, core, batch_dirs):
         output_dir, run_dir, out_file = batch_dirs
         with patch("subprocess.run", return_value=MagicMock(returncode=0)), \
              patch.object(cli, "_cancel_batch_jobs") as cancel:
             cli.cmd_stop(_args())
         assert cancel.call_args[0][1:] == (str(output_dir), str(run_dir), str(out_file))
 
-    def test_keep_jobs_skips_cancelling(self, airtable, batch_dirs):
+    def test_keep_jobs_skips_cancelling(self, core, batch_dirs):
         with patch("subprocess.run", return_value=MagicMock(returncode=0)), \
              patch.object(cli, "_cancel_batch_jobs") as cancel:
             cli.cmd_stop(_args(keep_jobs=True))
         assert not cancel.called
 
-    def test_writes_stop_marker_before_killing_the_session(self, airtable, batch_dirs):
+    def test_writes_stop_marker_before_killing_the_session(self, core, batch_dirs):
         _, run_dir, _ = batch_dirs
         marker = run_dir / STOP_SENTINEL
         seen = {}
@@ -102,18 +94,21 @@ class TestCmdStop:
             cli.cmd_stop(_args())
         assert seen["marker_existed"] and marker.exists()
 
-    def test_status_written_after_the_jobs_are_cancelled(self, airtable, batch_dirs):
+    def test_status_written_after_the_jobs_are_cancelled(self, core, batch_dirs):
         order = []
         with patch("subprocess.run", return_value=MagicMock(returncode=0)), \
              patch.object(cli, "_cancel_batch_jobs", side_effect=lambda *a: order.append("cancel")):
-            airtable.update_records.side_effect = lambda *a, **k: order.append("status")
+            core.upsert = lambda changes: order.append("status") or []
             cli.cmd_stop(_args())
         assert order == ["cancel", "status"]
 
-    def test_unknown_batch_exits(self, airtable, batch_dirs):
-        airtable.fetch_batch_record.return_value = None
-        with pytest.raises(SystemExit):
-            cli.cmd_stop(_args())
+    def test_a_batch_missing_from_core_is_reported(self, core, batch_dirs, capsys):
+        with patch("subprocess.run", return_value=MagicMock(returncode=0)), \
+             patch.object(cli, "_cancel_batch_jobs"):
+            assert cli.cmd_stop(_args()) == 0
+        assert "held no batch 'ABB0659'" in capsys.readouterr().err
+        assert core.rows("assembly_batches")[-1]["values"]["status"] == "Stopped"
+
 
 
 # ---------------------------------------------------------------------------

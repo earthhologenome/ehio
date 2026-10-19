@@ -1,11 +1,5 @@
 """ehi-core API client for ehio.
 
-ehi-core is the EHI's own database for the bioinformatic pipeline, taking over
-from the Airtable tables as they run out of room. While batches are still
-created in Airtable, ehio writes everything it writes there into the core as
-well, and the MAGs, which Airtable's MAG table can no longer take, live in the
-core alone.
-
 ehio reaches the core's pipeline routes (/api/pipeline/*) at EHI_CORE_URL with
 the pipeline token, which is never stored in the config:
 
@@ -32,10 +26,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 from urllib.parse import quote
 
-try:
-    import requests
-except ImportError:  # requests ships with pyairtable
-    requests = None  # type: ignore[assignment]
+import requests
 
 
 TOKEN_HINT = (
@@ -125,8 +116,6 @@ class CoreClient:
         wait_minutes: float = WAIT_MINUTES,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        if requests is None:
-            raise CoreError("The requests package is required to reach ehi-core. Run: pip install requests")
         base = url.strip().rstrip("/")
         self._base = base if base.endswith("/api") else f"{base}/api"
         self._session = requests.Session()
@@ -149,11 +138,15 @@ class CoreClient:
     def url(self) -> str:
         return self._base
 
-    def _call(self, method: str, path: str, action: str, body: Any = None) -> Any:
+    def _call(self, method: str, path: str, action: str, body: Any = None,
+              *, outside_run: bool = False) -> Any:
         url = f"{self._base}/pipeline{path}"
         for attempt in range(1, self._attempts + 1):
             try:
-                response = self._session.request(method, url, json=body, timeout=self._timeout)
+                kwargs = {"json": body, "timeout": self._timeout}
+                if outside_run:
+                    kwargs["headers"] = {"X-Pipeline-Run": None}
+                response = self._session.request(method, url, **kwargs)
             except requests.RequestException as exc:
                 if attempt == self._attempts:
                     raise CoreError(f"Could not reach ehi-core at {self._base} to {action}: {exc}") from exc
@@ -171,6 +164,27 @@ class CoreClient:
     def ping(self) -> None:
         """Check that the core answers and accepts the token."""
         self._call("GET", "/ping", "check the pipeline token")
+
+    def reference_genome(self, code: str) -> dict[str, Any]:
+        """Read a reference genome by code."""
+        path = f"/reference_genomes/{quote(code, safe='')}"
+        try:
+            return self._call("GET", path, f"read reference genome {code}", outside_run=True)
+        except CoreError as exc:
+            if exc.status == 404:
+                raise CoreError(f"No reference genome {code}", status=404, detail=exc.detail) from exc
+            raise
+
+    def set_genome_indexed(self, code: str, url: str) -> dict[str, Any]:
+        """Register an uploaded index outside the pipeline run lock."""
+        path = f"/reference_genomes/{quote(code, safe='')}"
+        try:
+            return self._call("PATCH", path, f"index reference genome {code}",
+                              {"url_indexed": url, "indexed": True}, outside_run=True)
+        except CoreError as exc:
+            if exc.status == 404:
+                raise CoreError(f"No reference genome {code}", status=404, detail=exc.detail) from exc
+            raise
 
     # --- Runs: one ehio writing at a time ---------------------------------------
 
@@ -297,8 +311,7 @@ class CoreClient:
     def pending_batches(self, table: str, statuses: list[str]) -> list[dict[str, Any]]:
         """The batches of one batch table whose status is one of `statuses`.
 
-        This is the core's side of the scan that reads Airtable's batch
-        statuses: each batch comes back as the editor holds it, so the scan
+        Each batch comes back as the editor holds it, so the scan
         reads the reference genome, the boosts and the batch type from it.
         """
         query = "&".join(f"status={quote(status, safe='')}" for status in statuses)
@@ -308,8 +321,8 @@ class CoreClient:
     def batch_entries(self, table: str, batch: str) -> dict[str, Any]:
         """What a batch works on, with the batch's own row.
 
-        An assembly batch comes back one row per sample, the way Airtable's
-        entries are and the sample sheet needs, so a coassembly gives one row
+        An assembly batch comes back one row per sample, as the sample sheet
+        needs, so a coassembly gives one row
         per library with the assembly code they share.
         """
         path = f"/{quote(table, safe='')}/{quote(batch, safe='')}/entries"
@@ -333,7 +346,7 @@ class CoreClient:
     def link_batch_mags(
         self, batch: str, mags: list[str], representatives: list[str] | None = None
     ) -> dict[str, Any]:
-        """Add MAGs (EHM codes, bin names or Airtable record ids) to a batch and,
+        """Add MAGs (EHM codes or bin names) to a batch and,
         when `representatives` is given, make them exactly the ones it kept."""
         body: dict[str, Any] = {"mags": list(mags)}
         if representatives is not None:
@@ -346,7 +359,7 @@ _VERIFIED: set[tuple[str, str]] = set()
 
 
 def verify(client: CoreClient, token: str) -> None:
-    """Ping the core once per process and token, like the Airtable token check."""
+    """Ping the core once per process and token."""
     if (client.url, token) in _VERIFIED:
         return
     client.ping()
@@ -378,20 +391,10 @@ def _run_label(what: str | None, units: list[Unit]) -> str:
 
 
 class CoreSession:
-    """ehi-core as one command uses it.
+    """ehi-core as one command uses it; writes always raise on failure."""
 
-    Falsy when the core is not in use for this command (EHI_CORE_URL empty, or
-    no token yet), so callers write ``if core:`` around core-only work.
-
-    ``mirror`` writes what ehio also writes to Airtable: while Airtable is still
-    the record, a failure there is reported and the batch carries on, unless
-    ``required`` (EHI_CORE_REQUIRED, or a command whose data only the core
-    holds).  ``write`` is for data the core alone holds, and raises.
-    """
-
-    def __init__(self, client: CoreClient | None = None, required: bool = False) -> None:
+    def __init__(self, client: CoreClient | None = None) -> None:
         self.client = client
-        self.required = required
 
     def __bool__(self) -> bool:
         return self.client is not None
@@ -431,33 +434,9 @@ class CoreSession:
             )
         return results
 
-    def mirror(self, what: str, units: list[Unit]) -> list[dict[str, Any]]:
-        """``write``, reporting a failure instead of raising it unless required."""
-        if not self.client:
-            return []
-        try:
-            return self.write(units, what)
-        except CoreError as exc:
-            if self.required:
-                raise
-            _warn(f"{what} not written to ehi-core (Airtable has it): {exc}")
-            return []
-
-    def mirror_call(self, what: str, call: Callable[[CoreClient], Any]) -> Any:
-        """Any other client call, under the same rule as ``mirror``."""
-        if not self.client:
-            return None
-        try:
-            return call(self.client)
-        except CoreError as exc:
-            if self.required:
-                raise
-            _warn(f"{what} not written to ehi-core: {exc}")
-            return None
-
 
 def _report_skipped(results: list[dict[str, Any]]) -> None:
-    """Name the Airtable facts a newly created row could not take.
+    """Name the defaults a newly created row could not take.
 
     On a row the core already held they only mean the core knew better; on a
     new one they are gaps worth seeing, such as a MAG left without its assembly.

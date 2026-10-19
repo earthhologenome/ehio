@@ -9,6 +9,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.13.0] - 2026-10-19
+
+### Removed
+
+- **Airtable support.** ehi-core is the only backend: batches, entries, MAGs, reference genomes and statuses are read from it and written to it. This is a breaking change:
+  - `AIRTABLE_TOKEN` and `--airtable-token` are no longer read. Use `EHI_CORE_PIPELINE` (or `EHI_CORE_TOKEN`) or `--core-token`.
+  - `EHI_BASE`, `MAG_BASE`, `GENOME_BASE`, the Airtable table keys and every Airtable field key in the config are ignored.
+  - `EHI_CORE_REQUIRED` is gone: the core is always required, so a command with no `EHI_CORE_URL` or token stops, and a write that does not reach the core fails the batch.
+  - The `pyairtable` dependency is replaced by `requests`.
+- **Failure-report attachments.** When a batch fails, drakkar's failure report is no longer uploaded to the batch record; the batch is still set to the error status and the report is appended to `{batch}.err`.
+- **AMR result attachments.** The AMR tables and manifest are no longer attached to the AMR batch record. The files still go to ERDA, and the core keeps their URLs.
+
+### Changed
+
+- **Reference genomes are resolved and indexed through ehi-core.** Scanning and `ehio preprocessing` read a genome with `GET /reference_genomes/{code}`, and a freshly built index is registered with `PATCH /reference_genomes/{code}` (`ehio preprocessing --output`, `ehio reference`).
+
 ## [0.12.0] - 2026-10-19
 
 ### Changed

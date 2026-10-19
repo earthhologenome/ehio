@@ -1,22 +1,4 @@
-"""What ehio writes to ehi-core, built from Airtable records and drakkar output.
-
-Every write to the core is an upsert (ehi-core's app/pipeline/service.py):
-
-- ``values`` are what ehio sets — a status, a version, a metric, a file URL —
-  and are always written;
-- ``defaults`` are the facts ehio read from an Airtable record, and only fill
-  cells the core has empty.
-
-So a batch created in Airtable after the core was loaded is created in the core
-the first time ehio touches it, and ehio's output always has a row to land on.
-A link names its target by code, or by the Airtable record id a link cell
-holds, which the core resolves through the ids its rows were imported with.
-
-Airtable builds some URLs with formulas; the core stores them, so ehio writes
-the public ERDA address of every file it uploads (ERDA_SHARE_BASE).
-
-Everything here only builds rows; ehio.core sends them.
-"""
+"""Build ehi-core rows from drakkar output and ERDA file URLs."""
 
 from __future__ import annotations
 
@@ -37,43 +19,6 @@ BATCH_TABLES = {
     "ena":           "ena_submissions",
 }
 
-# Facts of a batch record ehio copies into the core when the core lacks them:
-# config key of the Airtable field → core column.
-BATCH_FACTS: dict[str, dict[str, str]] = {
-    "preprocessing": {
-        "EHI_PPR_BATCH_STATUS":       "status",
-        "EHI_PPR_BATCH_DATE":         "run_on",
-        "EHI_PPR_BATCH_BOOST_TIME":   "boost_time",
-        "EHI_PPR_BATCH_BOOST_MEMORY": "boost_memory",
-    },
-    "binning": {
-        "EHI_ASB_BATCH_STATUS":       "status",
-        "EHI_ASB_BATCH_DATE":         "run_on",
-        "EHI_ASB_BATCH_TYPE":         "batch_type",
-        "EHI_ASB_BATCH_BOOST_TIME":   "boost_time",
-        "EHI_ASB_BATCH_BOOST_MEMORY": "boost_memory",
-    },
-    "quantifying": {
-        "MAG_DMB_BATCH_STATUS":          "status",
-        "MAG_DMB_BATCH_TYPE":            "batch_type",
-        "MAG_DMB_BATCH_ANI":             "ani_threshold",
-        "MAG_DMB_BATCH_ANNOTATION_TYPE": "annotation_type",
-        "MAG_DMB_BATCH_BOOST_TIME":      "boost_time",
-        "MAG_DMB_BATCH_BOOST_MEMORY":    "boost_memory",
-    },
-    "amr": {
-        "EHI_AMR_BATCH_STATUS":       "status",
-        "EHI_AMR_BATCH_DATE":         "run_on",
-        "EHI_AMR_BATCH_BOOST_TIME":   "boost_time",
-        "EHI_AMR_BATCH_BOOST_MEMORY": "boost_memory",
-    },
-    # ENA submissions live in the core alone: there is no Airtable record to
-    # copy facts from.
-    "ena": {},
-}
-
-# Metric keys of ehio's parsers → core columns, beside the config keys the same
-# metrics go to in Airtable (ehio.metadata *_METRIC_KEYS).
 PREPROCESSING_COLUMNS = {
     "reads_pre_fastp":       "reads_pre_fastp",
     "bases_pre_fastp":       "bases_pre_fastp",
@@ -147,37 +92,6 @@ ANNOTATION_COLUMNS = {
     "genes_kegg":        "kegg_hits",
 }
 
-# A MAG record's fields in Airtable (config key) → core columns, for the MAGs
-# the core does not hold yet or holds with gaps.
-MAG_FACTS = {
-    "MAG_ENTRY_ASSEMBLY":                 "assembly_id",
-    "MAG_ENTRY_CHECKM_COMPLETENESS":      "completeness",
-    "MAG_ENTRY_CHECKM_CONTAMINATION":     "contamination",
-    "MAG_ENTRY_SIZE":                     "size_bp",
-    "MAG_ENTRY_GC":                       "gc",
-    "MAG_ENTRY_N50":                      "n50",
-    "MAG_ENTRY_CONTIGS_NUMBER":           "contigs",
-    "MAG_ENTRY_CODING_DENSITY":           "coding_density",
-    "MAG_ENTRY_DOMAIN":                   "tax_domain",
-    "MAG_ENTRY_PHYLUM":                   "tax_phylum",
-    "MAG_ENTRY_CLASS":                    "tax_class",
-    "MAG_ENTRY_ORDER":                    "tax_order",
-    "MAG_ENTRY_FAMILY":                   "tax_family",
-    "MAG_ENTRY_GENUS":                    "tax_genus",
-    "MAG_ENTRY_SPECIES":                  "tax_species",
-    "MAG_ENTRY_GTDBTK_VERSION":           "gtdbtk_version",
-    "MAG_ENTRY_GTDB_RELEASE":             "gtdb_release",
-    "MAG_ENTRY_GTDB_FASTANI":             "fastani_ani",
-    "MAG_ENTRY_GTDB_CLOSEST_ANI":         "closest_ani",
-    "MAG_ENTRY_GTDB_CLOSEST_AF":          "closest_af",
-    "MAG_ENTRY_GENES_NUMBER":             "genes",
-    "MAG_ENTRY_GENES_NUMBER_UNANNOTATED": "genes_unannotated",
-    "MAG_ENTRY_GENES_KEGG_NUMBER":        "kegg_hits",
-    "MAG_ENTRY_URL_FASTA":                "fasta_url",
-}
-
-# How far a MAG was annotated, each level covering the one before.  Airtable's
-# older records say "true" for a full annotation.
 ANNOTATION_LEVELS = ("kegg", "genes", "all")
 
 
@@ -195,35 +109,13 @@ def row(
     key: dict[str, Any] | None = None,
     values: dict[str, Any] | None = None,
     defaults: dict[str, Any] | None = None,
-    airtable_id: str | None = None,
 ) -> Row:
     """One upsert row. Empty values are left out: ehio never clears a cell."""
     found_by = _clean(key)
     if code:
         found_by["code"] = code
     out: Row = {"key": found_by, "values": _clean(values), "defaults": _clean(defaults)}
-    if airtable_id:
-        out["airtable_record_id"] = airtable_id
     return out
-
-
-def cell(fields: dict[str, Any], config_key: str) -> Any:
-    """An Airtable cell by the config key naming its field, as a plain value.
-
-    A link or lookup cell gives its first item; an attachment, or Airtable's
-    {"specialValue": "NaN"}, gives nothing.
-    """
-    field_id = str(cfg.get(config_key) or "").strip()
-    if not field_id:
-        return None
-    value = fields.get(field_id)
-    if isinstance(value, list):
-        value = value[0] if value else None
-    if isinstance(value, dict):
-        return None
-    if isinstance(value, str):
-        return value.strip() or None
-    return value
 
 
 def columns(metrics: dict[str, Any] | None, mapping: dict[str, str]) -> dict[str, Any]:
@@ -249,62 +141,19 @@ def annotation_level(value: Any) -> str | None:
 # Batches
 # ---------------------------------------------------------------------------
 
-# Airtable words the core spells differently.
-_DMB_TYPES = {"genomes": "genome", "pangenomes": "pangenome"}
-
-
-def batch(module: str, code: str, record: dict | None = None, **values: Any) -> Unit:
-    """A batch row: `values` set by ehio, the Airtable record's facts as defaults."""
-    record = record or {}
-    fields = record.get("fields", {})
-    facts = {column: cell(fields, key) for key, column in BATCH_FACTS[module].items()}
-    if module == "quantifying":
-        kind = str(facts.get("batch_type") or "").strip().lower()
-        facts["batch_type"] = _DMB_TYPES.get(kind, kind)
-        facts["annotation_type"] = str(facts.get("annotation_type") or "").strip().lower()
-    return [(BATCH_TABLES[module], [row(code, values=values, defaults=facts, airtable_id=record.get("id"))])]
+def batch(module: str, code: str, **values: Any) -> Unit:
+    """The values written to one batch row."""
+    return [(BATCH_TABLES[module], [row(code, values=values)])]
 
 
 # ---------------------------------------------------------------------------
 # Preprocessing
 # ---------------------------------------------------------------------------
 
-def preprocessings(
-    batch_code: str,
-    entries: Iterable[dict],
-    metrics: dict[str, dict] | None = None,
-) -> list[Unit]:
-    """One unit per entry: its hologenome, created from the raw reads if the
-    core lacks it, and its preprocessing with the QC metrics drakkar reported."""
-    units: list[Unit] = []
-    for entry in entries:
-        fields = entry.get("fields", {})
-        code = cell(fields, "EHI_PPR_ENTRY_CODE")
-        if not code:
-            continue
-        ehi = cell(fields, "EHI_PPR_ENTRY_EHI_NUMBER")
-        unit: Unit = []
-        if ehi:
-            unit.append(("hologenomes", [row(ehi, defaults={
-                "forward_url": cell(fields, "EHI_PPR_ENTRY_RAW_FILE_FORWARD"),
-                "reverse_url": cell(fields, "EHI_PPR_ENTRY_RAW_FILE_REVERSE"),
-            })]))
-        unit.append(("preprocessings", [row(
-            code,
-            values=columns((metrics or {}).get(code), PREPROCESSING_COLUMNS),
-            defaults={"batch_id": batch_code, "hologenome_id": ehi},
-            airtable_id=entry.get("id"),
-        )]))
-        units.append(unit)
-    return units
-
-
 def preprocessing_metrics(metrics: dict[str, dict]) -> list[Unit]:
     """The QC metrics of each preprocessing, by its code.
 
-    What ``preprocessings`` writes for a batch read from Airtable, minus the
-    Airtable facts: a batch read from the core is already there, with its
-    libraries, so only what drakkar produced is left to write.
+    The core already holds the batch and its libraries.
     """
     return [
         [("preprocessings", [row(code, values=columns(found, PREPROCESSING_COLUMNS))])]
@@ -335,30 +184,6 @@ def preprocessing_files(batch_code: str, code_to_ehi: dict[str, str], uploaded: 
 # Assembly and binning
 # ---------------------------------------------------------------------------
 
-def assemblies(
-    batch_code: str,
-    entries: Iterable[dict],
-    metrics: dict[str, dict] | None = None,
-) -> list[Unit]:
-    """One unit per assembly entry, with the metrics drakkar reported for it
-    (keyed by entry code)."""
-    units: list[Unit] = []
-    for entry in entries:
-        fields = entry.get("fields", {})
-        code = cell(fields, "EHI_ASB_ENTRY_CODE")
-        if not code:
-            continue
-        units.append([("assemblies", [row(
-            code,
-            values=columns((metrics or {}).get(code), ASSEMBLY_COLUMNS),
-            # Which samples an assembly is built from is a link of its own in
-            # the core, set for the whole batch at once (ehio.cli).
-            defaults={"batch_id": batch_code},
-            airtable_id=entry.get("id"),
-        )])])
-    return units
-
-
 def assembly_metrics(metrics: dict[str, dict]) -> list[Unit]:
     """The metrics of each assembly, by its code — the core's own batches."""
     return [
@@ -369,7 +194,7 @@ def assembly_metrics(metrics: dict[str, dict]) -> list[Unit]:
 
 def assembly_samples(samples: Iterable[tuple[str | None, str | None, dict]]) -> list[Unit]:
     """What drakkar measured of each sample of an assembly, on the sample's row:
-    (assembly code, preprocessing code or Airtable record id, metrics).
+    (assembly code, preprocessing code, metrics).
 
     The core only updates these rows, because which samples an assembly holds is
     set for the whole batch at once (CoreClient.link_assembly_samples); a sample
@@ -441,30 +266,6 @@ def _amr_values(
     return values
 
 
-def amr_assemblies(
-    amr_code: str,
-    records: Iterable[dict],
-    stats: dict[str, dict] | None = None,
-    gene_calls: set[str] | None = None,
-) -> list[Unit]:
-    """The assemblies of an AMR batch as Airtable holds them: linked to the
-    batch, with their AMR metrics and gene calls."""
-    code_key = "EHI_ASB_ENTRY_ASSEMBLY_CODE" if cfg.get("EHI_ASB_ENTRY_ASSEMBLY_CODE") else "EHI_ASB_ENTRY_CODE"
-    units: list[Unit] = []
-    for record in records:
-        fields = record.get("fields", {})
-        code = cell(fields, code_key)
-        if not code:
-            continue
-        units.append([("assemblies", [row(
-            code,
-            values=_amr_values(amr_code, code, stats, gene_calls),
-            defaults={"batch_id": cell(fields, "EHI_ASB_ENTRY_BATCH")},
-            airtable_id=record.get("id"),
-        )])])
-    return units
-
-
 def amr_metrics(
     amr_code: str,
     codes: Iterable[str],
@@ -483,51 +284,6 @@ def amr_metrics(
 # MAGs of a dereplication batch
 # ---------------------------------------------------------------------------
 
-def airtable_mags(records: Iterable[dict]) -> list[Unit]:
-    """MAG records read from Airtable, for the core to fill what it lacks.
-
-    Found by bin name (else code), so each keeps the code Airtable gave it.
-    The annotation depth fills the core's too; that the MAG is annotated at
-    all is set outright, since Airtable's word is the one ehio wrote.
-    """
-    units: list[Unit] = []
-    for record in records:
-        fields = record.get("fields", {})
-        name = cell(fields, "MAG_ENTRY_NAME")
-        code = cell(fields, "MAG_ENTRY_CODE")
-        if not (name or code):
-            continue
-        facts = {column: cell(fields, key) for key, column in MAG_FACTS.items()}
-        level = annotation_level(cell(fields, "MAG_ENTRY_ANNOTATED"))
-        facts["annotation_level"] = level
-        units.append([("mags", [row(
-            code,
-            key={"name": name},
-            values={"annotated": True} if level else None,
-            defaults=facts,
-            airtable_id=record.get("id"),
-        )])])
-    return units
-
-
-def mag_from_airtable(record: dict) -> dict[str, Any]:
-    """An Airtable MAG record in the shape 'ehio quantifying' and 'annotating' use."""
-    fields = record.get("fields", {})
-    return {
-        "code":             cell(fields, "MAG_ENTRY_CODE"),
-        "name":             str(cell(fields, "MAG_ENTRY_NAME") or ""),
-        "fasta_url":        cell(fields, "MAG_ENTRY_URL_FASTA"),
-        "completeness":     cell(fields, "MAG_ENTRY_CHECKM_COMPLETENESS"),
-        "contamination":    cell(fields, "MAG_ENTRY_CHECKM_CONTAMINATION"),
-        # Kept as Airtable says it, "true" included: 'annotating --input'
-        # knows what the legacy word means.
-        "annotation_level": str(cell(fields, "MAG_ENTRY_ANNOTATED") or "").lower(),
-        "airtable_id":      record.get("id"),
-        # Airtable counts the MAGs dereplication kept but never lists them.
-        "is_representative": False,
-    }
-
-
 def mag_from_core(mag: dict) -> dict[str, Any]:
     """A MAG as the core returns it, in the same shape."""
     return {
@@ -537,7 +293,6 @@ def mag_from_core(mag: dict) -> dict[str, Any]:
         "completeness":     mag.get("completeness"),
         "contamination":    mag.get("contamination"),
         "annotation_level": str(mag.get("annotation_level") or ""),
-        "airtable_id":      mag.get("airtable_record_id"),
         # Whether the batch's dereplication kept it.
         "is_representative": bool(mag.get("is_representative")),
     }
@@ -555,7 +310,7 @@ def annotated_mag(mag: dict, metrics: dict[str, Any]) -> Unit:
 
 def mappings(batch_code: str, entries: Iterable[tuple[str | None, str | None, Any]]) -> list[Unit]:
     """A dereplication batch's mappings, one per preprocessed sample, found by
-    batch and preprocessing: (preprocessing code, Airtable's DM code, mapping rate)."""
+    batch and preprocessing: (preprocessing code, mapping code, mapping rate)."""
     units: list[Unit] = []
     for preprocessing, code, rate in entries:
         if not preprocessing:

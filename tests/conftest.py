@@ -50,41 +50,6 @@ NONPAREIL_TSV = (
 
 
 # ---------------------------------------------------------------------------
-# Mock Airtable records (field IDs as keys, as returned by use_field_ids=True)
-# ---------------------------------------------------------------------------
-
-BATCH_RECORD = {
-    "id": "recBATCH000001",
-    "fields": {
-        "fldeNHpDmJDinU1Uc": "PPR001",           # EHI_PPR_BATCH_CODE
-        "fldhFIPsoslCbCyfo": "Ready",              # EHI_PPR_BATCH_STATUS
-        "fldPte4nQtlSfen8B": "https://example.com/ref.fna",  # EHI_PPR_BATCH_REFERENCE
-    },
-}
-
-ENTRY_RECORDS = [
-    {
-        "id": "recENTRY000001",
-        "fields": {
-            "fldNGN3g6Lvqo4ySR": "EHI00001",                          # EHI_PPR_ENTRY_CODE
-            "fld2lF4Tj0MQ82HIg": ["recBATCH000001"],                   # EHI_PPR_ENTRY_BATCH
-            "fldSsNtgHYgxRaYxN": "https://example.com/EHI00001_1.fq.gz",  # reads1
-            "fldMmJiQLVVoJOAjF": "https://example.com/EHI00001_2.fq.gz",  # reads2
-        },
-    },
-    {
-        "id": "recENTRY000002",
-        "fields": {
-            "fldNGN3g6Lvqo4ySR": "EHI00002",
-            "fld2lF4Tj0MQ82HIg": ["recBATCH000001"],
-            "fldSsNtgHYgxRaYxN": "https://example.com/EHI00002_1.fq.gz",
-            "fldMmJiQLVVoJOAjF": "https://example.com/EHI00002_2.fq.gz",
-        },
-    },
-]
-
-
-# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -125,8 +90,7 @@ def drakkar_output(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _no_core_token(monkeypatch):
-    """No test reaches the real ehi-core: without a token, a config that names
-    EHI_CORE_URL runs on Airtable alone."""
+    """No test reaches the real ehi-core without an explicit fake client."""
     from ehio import core
 
     monkeypatch.delenv("EHI_CORE_PIPELINE", raising=False)

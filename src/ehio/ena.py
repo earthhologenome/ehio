@@ -62,7 +62,7 @@ DEFAULT_CHECKLIST = "ERC000013"
 DEFAULT_CENTER = "Earth Hologenome Initiative"
 
 # What ENA is told about the library, the same for every EHI hologenome: every
-# one of the 4,018 records of Airtable's SE table held these values.
+# the library settings are shared by all current EHI hologenomes.
 DEFAULT_LIBRARY = {
     "library_strategy":  "WGS",
     "library_selection": "RANDOM",
@@ -198,7 +198,7 @@ class Settings:
 def text(value: Any) -> str:
     """A cell as the text of a table cell.
 
-    Airtable's lookup fields come as lists, which are joined; a whole number
+    Lookup values may come as lists, which are joined; a whole number
     read as a float loses its '.0', so a taxon id stays a taxon id. Tabs and
     line breaks would break the table ena-upload-cli reads, so they become
     spaces.
@@ -454,10 +454,10 @@ def _sample(lab: str, entry: dict[str, Any], aliases: Aliases, settings: Setting
         return Sample(lab, aliases.of(accession, "samples"), accession=accession)
     held = entry.get("sample")
     if not isinstance(held, dict):
-        raise EnaError("ehi-core holds no such sample: sync the samples from Airtable")
+        raise EnaError("ehi-core holds no such sample")
     row, lacking = sample_row(lab, held, settings.sample_fields, project=study)
     if lacking:
-        raise EnaError(f"the sample holds no {', '.join(lacking)} (fill it in Airtable, then sync)")
+        raise EnaError(f"the sample holds no {', '.join(lacking)} (complete the sample in ehi-core)")
     unreadable = _unreadable(row)
     if unreadable:
         raise EnaError(f"'#' in {', '.join(unreadable)}, which ena-upload-cli cannot read")

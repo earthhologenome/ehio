@@ -1,4 +1,4 @@
-"""ehio — bridge between Airtable and Drakkar workflows."""
+"""ehio — bridge between ehi-core and Drakkar workflows."""
 
 from __future__ import annotations
 from importlib.metadata import version, PackageNotFoundError

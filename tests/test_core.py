@@ -146,6 +146,43 @@ class TestCoreClient:
         assert client.batch_mags("DMB0001") == [{"code": "EHM000001"}]
         assert session.request.call_args.args[1].endswith("/pipeline/dereplication_batches/DMB0001/mags")
 
+    def test_reference_genome_reads_the_pipeline_route(self):
+        genome = {"code": "G0081", "species": "Host", "accession": "A1",
+                  "url_raw": "https://raw", "url_indexed": None, "indexed": False}
+        client, session = _client(_response(200, genome))
+        assert client.reference_genome("G0081") == genome
+        assert _sent(session) == [("GET", "/reference_genomes/G0081")]
+
+    def test_reference_genome_quotes_an_odd_code(self):
+        code = "G 00/81"
+        client, session = _client(_response(200, {"code": code}))
+        assert client.reference_genome(code) == {"code": code}
+        assert _sent(session) == [("GET", "/reference_genomes/G%2000%2F81")]
+
+    def test_unknown_reference_names_its_code(self):
+        client, _ = _client(_response(404, {"detail": "No reference genome G9999"}))
+        with pytest.raises(CoreError, match="No reference genome G9999") as exc:
+            client.reference_genome("G9999")
+        assert exc.value.status == 404
+
+    def test_index_registration_sends_url_outside_a_run(self):
+        genome = {"code": "G0081", "url_indexed": "https://share/GEN/G0081.tar.gz",
+                  "indexed": True}
+        client, session = _client(_response(200, genome))
+        client._session.headers["X-Pipeline-Run"] = "7"
+        assert client.set_genome_indexed("G0081", genome["url_indexed"]) == genome
+        sent = session.request.call_args
+        assert sent.kwargs["json"] == {"url_indexed": genome["url_indexed"], "indexed": True}
+        assert sent.kwargs["headers"] == {"X-Pipeline-Run": None}
+        assert _sent(session) == [("PATCH", "/reference_genomes/G0081")]
+
+    def test_index_registration_quotes_an_odd_code(self):
+        code = "G 00/81"
+        url = "https://share/GEN/index.tar.gz"
+        client, session = _client(_response(200, {"code": code, "url_indexed": url}))
+        assert client.set_genome_indexed(code, url)["url_indexed"] == url
+        assert _sent(session) == [("PATCH", "/reference_genomes/G%2000%2F81")]
+
     def test_representatives_are_only_sent_when_given(self):
         client, session = _client(_begun(), _response(200, {}), ENDED, _begun(8), _response(200, {}), ENDED)
         client.link_batch_mags("DMB0001", ["recM1"])
@@ -256,10 +293,6 @@ def _unit(code: str):
 
 
 class TestCoreSession:
-    def test_an_absent_core_is_falsy_and_mirrors_nothing(self):
-        session = CoreSession()
-        assert not session
-        assert session.mirror("anything", [_unit("PR00001")]) == []
 
     def test_one_bad_record_costs_only_itself(self):
         client = MagicMock()
@@ -292,17 +325,7 @@ class TestCoreSession:
         CoreSession(client).write([_unit(f"PR{n:05d}") for n in range(core.UNITS_PER_REQUEST + 1)])
         assert client.upsert.call_count == 2
 
-    def test_mirror_reports_a_failure_and_carries_on(self, capsys):
-        client = MagicMock()
-        client.upsert.side_effect = CoreError("down")
-        assert CoreSession(client).mirror("QC metrics", [_unit("PR00001")]) == []
-        assert "QC metrics not written to ehi-core" in capsys.readouterr().err
 
-    def test_mirror_raises_when_the_core_is_required(self):
-        client = MagicMock()
-        client.upsert.side_effect = CoreError("down")
-        with pytest.raises(CoreError):
-            CoreSession(client, required=True).mirror("QC metrics", [_unit("PR00001")])
 
     def test_a_new_row_missing_a_fact_is_reported(self, capsys):
         client = MagicMock()
@@ -330,17 +353,10 @@ def _args(**values) -> argparse.Namespace:
 
 
 class TestCoreForACommand:
-    def test_no_url_means_airtable_alone(self):
-        with _cfg():
-            assert not cli._core(_args())
 
-    def test_no_token_yet_means_airtable_alone_with_a_warning(self, capsys):
-        with _cfg(EHI_CORE_URL="https://core.test"):
-            assert not cli._core(_args())
-        assert "EHI_CORE_PIPELINE" in capsys.readouterr().err
 
     def test_no_token_stops_the_command_when_the_core_is_required(self):
-        with _cfg(EHI_CORE_URL="https://core.test", EHI_CORE_REQUIRED="true"):
+        with _cfg(EHI_CORE_URL="https://core.test"):
             with pytest.raises(SystemExit):
                 cli._core(_args())
 
@@ -350,7 +366,6 @@ class TestCoreForACommand:
             core = cli._core(_args())
         assert core
         assert verify.call_args.args[1] == "from-env"
-        assert not core.required
 
     def test_the_codeome_token_wins_over_the_legacy_environment_token(self, monkeypatch):
         monkeypatch.setenv("EHI_CORE_PIPELINE", "from-codeome")
@@ -371,42 +386,21 @@ class TestCoreForACommand:
         monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
         args = _args(module=None, dry_run=False, verbose=False)
         with _cfg(EHI_CORE_URL="https://core.test"), \
-             patch.object(cli, "_resolve_token", return_value="airtable"), \
              patch.object(cli, "_core", return_value=CoreSession(MagicMock())), \
              patch("ehio.scanning.run_scan", return_value=0) as run_scan:
             cli.cmd_scanning(args)
         assert run_scan.call_args.kwargs["core_token"] == "from-codeome"
 
-    def test_scanning_keeps_the_explicit_token_after_core_verification_fails(self):
-        args = _args(core_token="from-flag", module=None, dry_run=False, verbose=False)
-        with _cfg(EHI_CORE_URL="https://core.test"), \
-             patch.object(cli, "_resolve_token", return_value="airtable"), \
-             patch("ehio.core.verify", side_effect=CoreError("ehi-core is down")), \
-             patch("ehio.scanning.run_scan", return_value=0) as run_scan:
-            cli.cmd_scanning(args)
-        assert not run_scan.call_args.kwargs["core"]
-        assert run_scan.call_args.kwargs["core_token"] == "from-flag"
 
-    def test_scanning_does_not_pass_an_explicit_token_without_a_core_url(self):
-        args = _args(core_token="from-flag", module=None, dry_run=False, verbose=False)
-        with _cfg(EHI_CORE_URL=""), \
-             patch.object(cli, "_resolve_token", return_value="airtable"), \
-             patch("ehio.scanning.run_scan", return_value=0) as run_scan:
-            cli.cmd_scanning(args)
-        assert run_scan.call_args.kwargs["core_token"] == ""
 
-    def test_an_unreachable_core_is_left_out_of_a_mirroring_command(self, capsys):
-        with _cfg(EHI_CORE_URL="https://core.test"), \
-             patch("ehio.core.verify", side_effect=CoreError("ehi-core is down")):
-            assert not cli._core(_args(core_token="t"))
-        assert "ehi-core is down" in capsys.readouterr().err
 
     def test_an_unreachable_core_stops_a_command_working_on_mags(self):
         with _cfg(EHI_CORE_URL="https://core.test"), \
              patch("ehio.core.verify", side_effect=CoreError("ehi-core is down")):
-            with pytest.raises(SystemExit):
+            with pytest.raises(CoreError, match="ehi-core is down"):
                 cli._core(_args(core_token="t"), holds=True)
 
-    def test_required_makes_every_write_required(self):
-        with _cfg(EHI_CORE_URL="https://core.test", EHI_CORE_REQUIRED="true"), patch("ehio.core.verify"):
-            assert cli._core(_args(core_token="t")).required
+    def test_a_legacy_required_environment_setting_is_ignored(self, monkeypatch):
+        monkeypatch.setenv("EHI_CORE_REQUIRED", "false")
+        with _cfg(EHI_CORE_URL="https://core.test"), patch("ehio.core.verify"):
+            assert cli._core(_args(core_token="t"))

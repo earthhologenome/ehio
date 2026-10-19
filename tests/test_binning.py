@@ -15,6 +15,7 @@ from ehio.cli import (
     _gzip_into,
     _run_binning_output,
 )
+from tests.fake_core import FakeCoreClient, using
 
 
 CONTIGS = ">EHA00405_1\nACGTACGTACGT\n>EHA00405_2\nTTTTGGGGCCCC\n"
@@ -77,8 +78,10 @@ def test_binning_output_refuses_a_batch_without_cataloging_output(tmp_path: Path
     """drakkar exits 0 on some of its own error paths; an empty output
     directory must fail the step instead of marking the batch as done."""
     args = argparse.Namespace(
-        batch="ASB001", local_dir=str(tmp_path), airtable_token="tok", verbose=False,
+        batch="ASB001", local_dir=str(tmp_path), verbose=False,
     )
-    with pytest.raises(SystemExit):
+    fake = FakeCoreClient(batches={"ASB001": {"row": {"code": "ASB001"}}})
+    with using(fake), pytest.raises(SystemExit):
         _run_binning_output(args)
+    assert fake.upserts == []
 

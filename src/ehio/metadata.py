@@ -1,4 +1,4 @@
-"""Parse drakkar preprocessing output files and build Airtable update payloads."""
+"""Parse drakkar output files and write summary tables."""
 
 from __future__ import annotations
 
@@ -182,28 +182,6 @@ def collect_preprocessing_metadata(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Airtable payload builder
-# ---------------------------------------------------------------------------
-
-def build_entry_update(
-    record_id: str,
-    metrics: dict[str, Any],
-    field_map: dict[str, str],
-) -> dict[str, Any]:
-    """Build an Airtable update payload for one entry record.
-
-    field_map maps metric keys (e.g. "reads_pre_fastp") to Airtable field IDs
-    (e.g. "fldmD0Z4dNmEc0Uri"). Only fields with non-None values are included.
-    """
-    fields: dict[str, Any] = {}
-    for metric_key, field_id in field_map.items():
-        value = metrics.get(metric_key)
-        if value is not None:
-            fields[field_id] = value
-    return {"id": record_id, "fields": fields}
-
-
 def _parse_tsv_keyed(
     tsv_path: Path,
     key_col: str,
@@ -368,15 +346,6 @@ QUANTIFYING_OUTPUT_TSV_COLUMNS: list[str] = [
     "sample",
     "mapping_rate",
 ]
-
-BIN_METRIC_KEYS: dict[str, str] = {
-    "completeness":  "MAG_ENTRY_CHECKM_COMPLETENESS",
-    "contamination": "MAG_ENTRY_CHECKM_CONTAMINATION",
-    "size":          "MAG_ENTRY_SIZE",
-    "N50":           "MAG_ENTRY_N50",
-    "contig_count":  "MAG_ENTRY_CONTIGS_NUMBER",
-}
-
 
 def parse_bin_metadata_csv(csv_path: Path) -> list[dict[str, Any]]:
     """Read drakkar's all_bin_metadata.csv.
@@ -568,41 +537,6 @@ def write_quantifying_output_tsv(
             writer.writerow({"sample": sample, **m})
 
 
-# Default mapping: metric key → config key (resolved to field IDs at call time)
-PREPROCESSING_METRIC_KEYS: dict[str, str] = {
-    "reads_pre_fastp":        "EHI_PPR_ENTRY_READS_PRE_FASTP",
-    "bases_pre_fastp":        "EHI_PPR_ENTRY_BASES_PRE_FASTP",
-    "adapter_trimmed_reads":  "EHI_PPR_ENTRY_ADAPTER_TRIMMED_READS",
-    "adapter_trimmed_bases":  "EHI_PPR_ENTRY_ADAPTER_TRIMMED_BASES",
-    "reads_post_fastp":       "EHI_PPR_ENTRY_READS_POST_FASTP",
-    "bases_post_fastp":       "EHI_PPR_ENTRY_BASES_POST_FASTP",
-    "host_reads":             "EHI_PPR_ENTRY_HOST_READS",
-    "host_bases":             "EHI_PPR_ENTRY_HOST_BASES",
-    "metagenomic_reads":      "EHI_PPR_ENTRY_METAGENOMIC_READS",
-    "metagenomic_bases":      "EHI_PPR_ENTRY_METAGENOMIC_BASES",
-    "singlem_fraction":       "EHI_PPR_ENTRY_SINGLEM_FRACTION",
-    "nonpareil_C":            "EHI_PPR_ENTRY_NONPAREIL_C",
-    "nonpareil_LR":           "EHI_PPR_ENTRY_NONPAREIL_LR",
-    "nonpareil_modelR":       "EHI_PPR_ENTRY_NONPAREIL_MODELR",
-    "nonpareil_LRstar":       "EHI_PPR_ENTRY_NONPAREIL_LRSTAR",
-    "nonpareil_diversity":    "EHI_PPR_ENTRY_NONPAREIL_DIVERSITY",
-}
-
-BINNING_METRIC_KEYS: dict[str, str] = {
-    "assembly_length":          "EHI_ASB_ENTRY_ASSEMBLY_LENGTH",
-    "assembly_n50":             "EHI_ASB_ENTRY_ASSEMBLY_N50",
-    "assembly_l50":             "EHI_ASB_ENTRY_ASSEMBLY_L50",
-    "assembly_contigs_number":  "EHI_ASB_ENTRY_ASSEMBLY_CONTIGS_NUMBER",
-    "assembly_contigs_largest": "EHI_ASB_ENTRY_ASSEMBLY_CONTIGS_LARGEST",
-    "assembly_mapping_rate":    "EHI_ASB_ENTRY_ASSEMBLY_MAPPING_RATE",
-    "bins_number":              "EHI_ASB_ENTRY_BINS_NUMBER",
-}
-
-QUANTIFYING_METRIC_KEYS: dict[str, str] = {
-    "mapping_rate": "MAG_DMB_ENTRY_MAPPING_RATE",
-}
-
-
 # ---------------------------------------------------------------------------
 # Annotating parsers
 # ---------------------------------------------------------------------------
@@ -716,7 +650,7 @@ def parse_gtdbtk_versions(gtdbtk_dir: Path) -> dict[str, str]:
 
 
 # drakkar strips the FASTA suffix from a genome file to name everything it
-# writes about that genome, so the MAG called 'EHA00123_bin_1.fa' in Airtable
+# writes about that genome, so a MAG file named 'EHA00123_bin_1.fa'
 # is 'EHA00123_bin_1' in every drakkar output path.
 _FASTA_SUFFIX_RE = re.compile(r"\.(?:fa|fna|fasta)(?:\.gz)?$", re.IGNORECASE)
 
@@ -750,7 +684,7 @@ def parse_counts_genomes(path: Path) -> list[str]:
     The counts table of a DMB batch holds one row per dereplicated genome and
     one column per sample, so its first column is the genome catalogue the
     batch ended up with — the only record of which of the batch's MAGs
-    survived dereplication, since Airtable keeps the count but not the list.
+    survived dereplication.
 
     The file is read gzipped or plain, the header row is dropped, and every
     name is returned as a drakkar MAG id, so a table written with the '.fa'
@@ -899,33 +833,6 @@ def parse_annotation_tsv(tsv_path: Path) -> dict[str, Any]:
     return result
 
 
-ANNOTATING_TAXONOMY_KEYS: dict[str, str] = {
-    "domain":  "MAG_ENTRY_DOMAIN",
-    "phylum":  "MAG_ENTRY_PHYLUM",
-    "class_":  "MAG_ENTRY_CLASS",
-    "order":   "MAG_ENTRY_ORDER",
-    "family":  "MAG_ENTRY_FAMILY",
-    "genus":   "MAG_ENTRY_GENUS",
-    "species": "MAG_ENTRY_SPECIES",
-}
-
-ANNOTATING_GTDB_KEYS: dict[str, str] = {
-    "gtdb_fastani":     "MAG_ENTRY_GTDB_FASTANI",
-    "gtdb_closest_ani": "MAG_ENTRY_GTDB_CLOSEST_ANI",
-    "gtdb_closest_af":  "MAG_ENTRY_GTDB_CLOSEST_AF",
-    "gtdbtk_version":   "MAG_ENTRY_GTDBTK_VERSION",
-    "gtdb_release":     "MAG_ENTRY_GTDB_RELEASE",
-}
-
-ANNOTATING_FUNC_KEYS: dict[str, str] = {
-    "coding_density":    "MAG_ENTRY_CODING_DENSITY",
-    "genes_number":      "MAG_ENTRY_GENES_NUMBER",
-    "genes_unannotated": "MAG_ENTRY_GENES_NUMBER_UNANNOTATED",
-    "genes_kegg":        "MAG_ENTRY_GENES_KEGG_NUMBER",
-    "annotated":         "MAG_ENTRY_ANNOTATED",
-}
-
-
 # ---------------------------------------------------------------------------
 # AMR parsers
 # ---------------------------------------------------------------------------
@@ -968,24 +875,11 @@ def write_amr_output_tsv(
             writer.writerow({"assembly": assembly, **m})
 
 
-# The two 'without_coordinates' columns of amr_qc.tsv are diagnostics of the
-# callers rather than results, so they are left out of Airtable.
-AMR_METRIC_KEYS: dict[str, str] = {
-    "amrfinder_hits":    "EHI_ASB_ENTRY_AMR_AMRFINDER_HITS",
-    "rgi_hits":          "EHI_ASB_ENTRY_AMR_RGI_HITS",
-    "mobility_regions":  "EHI_ASB_ENTRY_AMR_MOBILITY_REGIONS",
-    "amr_loci":          "EHI_ASB_ENTRY_AMR_LOCI",
-    "multi_tool_loci":   "EHI_ASB_ENTRY_AMR_MULTI_TOOL_LOCI",
-    "mobility_links":    "EHI_ASB_ENTRY_AMR_MOBILITY_LINKS",
-    "mobile_loci":       "EHI_ASB_ENTRY_AMR_MOBILE_LOCI",
-}
-
-# Aggregate tables drakkar writes to {output_dir}/amr/: the file name and the
-# config key holding the EHI_AMR_BATCH attachment field it is uploaded to.
-AMR_OUTPUT_FILES: dict[str, str] = {
-    "amr_drug_classes.tsv.xz": "EHI_AMR_BATCH_FILE_DRUG_CLASSES",
-    "amr_hits.tsv.xz":         "EHI_AMR_BATCH_FILE_HITS",
-    "amr_loci.tsv.xz":         "EHI_AMR_BATCH_FILE_LOCI",
-    "amr_mobility.tsv.xz":     "EHI_AMR_BATCH_FILE_MOBILITY",
-    "mobility_regions.tsv.xz": "EHI_AMR_BATCH_FILE_MOBILITY_REGIONS",
-}
+# Aggregate tables drakkar writes to {output_dir}/amr/.
+AMR_OUTPUT_FILES = (
+    "amr_drug_classes.tsv.xz",
+    "amr_hits.tsv.xz",
+    "amr_loci.tsv.xz",
+    "amr_mobility.tsv.xz",
+    "mobility_regions.tsv.xz",
+)

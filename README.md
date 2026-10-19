@@ -7,11 +7,10 @@
 3. **Scanning** — monitors the batch tables for pending work and automatically launches Drakkar runs in named `screen` sessions.
 4. **Archiving** — deposits the raw reads of the hologenomes in the European Nucleotide Archive (see [`ehio ena`](#ehio-ena)).
 
-Airtable is running out of room, so the EHI's own database, **ehi-core**, is
-taking over from it. A batch can live in either: Airtable is looked in first,
-because it holds today's batches, and a batch it does not hold is read from the
-core and run entirely from there. Everything ehio writes to Airtable is also
-written to the core, and MAGs live in the core alone (see [ehi-core](#ehi-core)).
+ehi-core, the EHI's own database, is the only backend: batches, entries,
+reference genomes and MAGs are read from it and results are written back to it
+(see [ehi-core](#ehi-core)). Earlier versions also supported Airtable; that
+support has been removed.
 
 ---
 
@@ -38,123 +37,51 @@ ehio config --edit   # open in terminal editor
 ehio config --view   # print to stdout
 ```
 
-The file is structured in three layers:
-
-### 1. Database structure (fill in once)
+The file holds the ehi-core address, the SFTP connection, the output directories, the scanning statuses, the Drakkar profile and the ENA settings:
 
 ```yaml
-EHI_BASE:    "appXXXXXXXXXXXXXX"   # EHI Airtable base ID
-MAG_BASE:    "appXXXXXXXXXXXXXX"   # MAG Airtable base ID
-GENOME_BASE: "appXXXXXXXXXXXXXX"   # Genome Airtable base ID
+EHI_CORE_URL: "https://<ehi-core-host>"
+EHI_CORE_WAIT_MINUTES: "120"
 
-EHI_PPR_BATCH: "tblXXXXXXXXXXXXXX"  # Preprocessing batch table
-EHI_PPR_ENTRY: "tblXXXXXXXXXXXXXX"  # Preprocessing entry table
-EHI_ASB_BATCH: "tblXXXXXXXXXXXXXX"  # Assembly/binning batch table
-EHI_ASB_ENTRY: "tblXXXXXXXXXXXXXX"  # Assembly/binning entry table
-EHI_AMR_BATCH: "tblXXXXXXXXXXXXXX"  # AMR batch table
-MAG_DMB_BATCH: "tblXXXXXXXXXXXXXX"  # Dereplication/mapping batch table
-MAG_DMB_ENTRY: "tblXXXXXXXXXXXXXX"  # Dereplication/mapping entry table
-GENOME_ENTRY:  "tblXXXXXXXXXXXXXX"  # Genome entry table
-```
-
-### 2. Field name mappings (fill in once per module)
-
-Each module has a set of keys that map Airtable field names to their role in ehio, for example:
-
-```yaml
-PREPROCESSING_BATCH_NAME_FIELD: "batch_id"
-PREPROCESSING_READS1_FIELD: "r1_url"
-PREPROCESSING_READS2_FIELD: "r2_url"
-```
-
-### 3. Runtime settings
-
-SFTP connection, output directories, Drakkar profile, and scanning behaviour:
-
-```yaml
 SFTP_HOST: "io.erda.dk"
 SFTP_USER: "user@example.com"
+SFTP_REMOTE_BASE: "/EarthHologenomeInitiative/Data"
+
 DRAKKAR_PROFILE: "slurm"
-PREPROCESSING_OUTPUT_BASE: "/home/user/projects"
+EHI_PPR_OUTPUT_BASE: "/projects/ehi/data/PPR"
 ```
 
-### Airtable token
-
-The token is **never** stored in the config file. Provide it via:
-
-```bash
-export AIRTABLE_TOKEN="patXXXXXXXXXXXXXX"
-```
-
-or pass it per command with `--airtable-token`.
-
-Every command validates the token against Airtable before doing any work, so an
-invalid, expired or revoked token stops the command immediately:
-
-```
-Error: Airtable rejected the token (401 Unauthorized): it is invalid, expired or revoked.
-```
-
-A token that Airtable accepts can still lack access to a given base or table. In
-that case the failing operation reports what was denied and why, instead of
-raising a traceback:
-
-```
-Error: Airtable denied permission to update records in table tblXXXX of base appXXXX
-(403 Forbidden). The token is recognised but not allowed to do this: check that it has
-the data.records:read and data.records:write scopes, and that appXXXX is in the token's
-list of accessible bases.
-```
-
-The token needs the `data.records:read` and `data.records:write` scopes, and both
-`EHI_BASE` and `MAG_BASE` must be added to its list of accessible bases.
+Batch tables, entry tables and their fields are not configured: ehio talks to
+ehi-core's pipeline routes, which know them.
 
 ### ehi-core token
 
-ehio reaches ehi-core at `EHI_CORE_URL` with the pipeline token. Codeome
-supplies it as `EHI_CORE_PIPELINE`. Like the Airtable token, it is never stored
-in the config. Outside Codeome, export it in the environment:
+ehio reaches ehi-core at `EHI_CORE_URL` with the pipeline token (the routes under
+`/api/pipeline/`). Codeome supplies it as `EHI_CORE_PIPELINE`. The token is
+**never** stored in the config. Outside Codeome, export it in the environment:
 
 ```bash
 export EHI_CORE_PIPELINE="..."
 ```
 
-The explicit `--core-token` flag takes priority. Existing environments can
-continue using `EHI_CORE_TOKEN` as a fallback. `ehio scanning` hands the
-selected token on to the batches it launches. Until a token is set, ehio runs
-on Airtable alone and says so on every command.
+or pass it per command with `--core-token`, which takes priority. Existing
+environments can continue using `EHI_CORE_TOKEN` as a fallback. `ehio scanning`
+hands the selected token on to the batches it launches.
+
+Every command checks the token against ehi-core before doing any work, so a
+missing, invalid or revoked token stops the command immediately. Without
+`EHI_CORE_URL` or a token the command stops and says which is missing.
 
 ---
 
 ## ehi-core
 
-ehi-core is the EHI's own database for the bioinformatic pipeline, taking over
-from the Airtable tables as they run out of room. A batch can now be created in
-either database and `ehio scanning` launches it (see
-[`ehio scanning`](#ehio-scanning)); everything ehio writes to Airtable is
-written to the core too:
+ehi-core is the EHI's own database for the bioinformatic pipeline, and the only
+one ehio reads from and writes to. A batch is created in ehi-core, set to Ready,
+and `ehio scanning` launches it (see [`ehio scanning`](#ehio-scanning)). Each
+batch, its entries (samples, assemblies, MAGs) and its status live there.
 
-| Step | Written to the core |
-|---|---|
-| any status change (scanning, `set-status`, `stop`, done) | the batch's status |
-| `preprocessing --output` | QC and Nonpareil metrics, the ERDA URLs of the reads and host BAM, versions |
-| `binning --output` | assembly metrics, the ERDA URL of each assembly, versions |
-| `amr --output` | AMR metrics, the ERDA URLs of the gene calls and the hits and loci tables, versions |
-| `quantifying --output` | the mappings under Airtable's DM codes, which MAGs dereplication kept, versions |
-| `annotating --output` | taxonomy, GTDB and gene metrics, and how far each MAG was annotated |
-| `ena` | each hologenome's ENA study, sample, experiment and run accessions, a new ENA sample's accession on its sample, and the submission's status and log (ENA submissions live in the core alone) |
-
-Each record is matched by the code Airtable gave it. A batch, entry or
-hologenome the core doesn't hold yet (created in Airtable after the core was
-loaded) is added from its Airtable record the first time ehio reads it, so the
-output step always has a row to write to. Facts copied from Airtable only fill
-empty cells: they never overwrite what the core holds.
-
-### Running a batch from the core alone
-
-Every command takes its batch from whichever database holds it. Airtable is
-looked in first; a batch it does not hold is read from the core, and its input
-files, its results and its status are all handled there:
+What each step reads from the core:
 
 | Step | Read from the core |
 |---|---|
@@ -169,37 +96,32 @@ The core answers with the batch's own row too — the assembly type, the ANI
 threshold, the annotation type, the reference genome — because that is what the
 run is launched with.
 
-Two things still live in Airtable and are read from there whichever database
-holds the batch: the **reference genome table** (a core batch names its genome
-by code, which the resolver already accepts) and the laboratory tables. A
-failure report can only be attached to an Airtable record, so a core batch
-keeps its result files on ERDA and the core keeps their URLs.
+What each step writes to it:
 
-**Switching Airtable off.** Emptying a module's Airtable keys — `EHI_BASE` /
-`MAG_BASE`, its batch table and its batch code field — leaves the core as the
-only database looked at for that module. Nothing else has to change.
-DMB batches are switched off this way: `MAG_DMB_BATCH` is empty, so every DMB
-batch, whatever its Tasks, is read from and reported to the core alone.
+| Step | Written to the core |
+|---|---|
+| any status change (scanning, `set-status`, `stop`, done) | the batch's status |
+| `preprocessing --output` | QC and Nonpareil metrics, the ERDA URLs of the reads and host BAM, versions |
+| `binning --output` | assembly metrics, the ERDA URL of each assembly, the new MAGs (the core gives them their EHM codes, with the ERDA URL of their FASTA), versions |
+| `amr --output` | AMR metrics, the ERDA URLs of the gene calls and the hits and loci tables, versions |
+| `quantifying --output` | the mappings, which MAGs dereplication kept, versions |
+| `annotating --output` | taxonomy, GTDB and gene metrics, and how far each MAG was annotated |
+| `ena` | each hologenome's ENA study, sample, experiment and run accessions, a new ENA sample's accession on its sample, and the submission's status and log |
 
-**MAGs live in the core alone.** Airtable's MAG table is full. Two databases
-each numbering new MAGs would also give one EHM code to two genomes. So:
+**Reference genomes.** A preprocessing batch names its reference genome by code.
+ehio resolves it with `GET /reference_genomes/{code}` on the core, which gives
+the raw FASTA URL and, when the genome has been indexed, the URL of its Bowtie2
+index. After a run that built an index, `preprocessing --output` and
+`ehio reference` upload it to ERDA and register it with
+`PATCH /reference_genomes/{code}` (`url_indexed`, `indexed`), so later batches on
+the same host are launched with `-x`.
 
-- `binning --output` creates the new MAGs in the core only. The core gives
-  them their EHM codes, with the ERDA URL of their FASTA.
-- `quantifying --input` and all three `annotating` modes read a DMB batch's
-  MAGs from the core. The MAGs linked to the batch in Airtable are first copied
-  in, with the annotation depth Airtable holds, and linked to the batch there.
-- `annotating --output` annotates every MAG in the core. It still annotates
-  the MAGs Airtable holds there too.
+**Files stay on ERDA.** Result files go to ERDA over SFTP and the core keeps
+their URLs. Failure reports and AMR result tables are not attached to batch
+records any more (see [`ehio scanning`](#ehio-scanning) and [`ehio amr`](#ehio-amr)).
 
-What happens when the core can't be reached:
-
-- While Airtable is still the record, a failed write to the core is reported
-  and the batch carries on. `EHI_CORE_REQUIRED: "true"` makes it fail the
-  batch instead.
-- The commands working on MAGs always stop, because the core may hold MAGs
-  Airtable doesn't.
-- `EHI_CORE_URL: ""` switches the core off, and ehio behaves as it did before.
+**When the core can't be reached,** the command stops: a write that did not reach
+the core is reported and fails the batch, since the core is the only record.
 
 ehio jobs write to the core one at a time. Each write takes the core first,
 reports its progress as it goes (the core's editor shows staff what is being
@@ -212,38 +134,9 @@ ehi-core is free: writing status of batch 'PRB0003'.
 ```
 
 `EHI_CORE_WAIT_MINUTES` (120 by default) is how long a job waits at the most.
-After that the write counts as a failed one, under the rules above. A job that
-dies mid-write holds the core for 10 minutes at most. A core too old to take
-turns is written to as before.
-
----
-
-## Airtable database structure
-
-ehio expects two Airtable bases with a shared relational pattern: each base has a **batch table** (one row per batch) and an **entry table** (one row per sample), with a linked field on the batch record pointing to its entries.
-
-```
-EHI_BASE
-├── EHI_PPR_BATCH  ── linked ──▶  EHI_PPR_ENTRY   (preprocessing)
-├── EHI_ASB_BATCH  ── linked ──▶  EHI_ASB_ENTRY   (assembly/binning)
-└── EHI_AMR_BATCH  ── linked ──▶  EHI_ASB_ENTRY   (antimicrobial resistance)
-
-MAG_BASE
-└── MAG_DMB_BATCH  ── linked ──▶  MAG_DMB_ENTRY   (dereplication/mapping)
-
-GENOME_BASE
-└── GENOME_ENTRY                                   (reference genomes)
-```
-
-The AMR batch table is the one exception to the batch/entry pattern: it has no
-entry table of its own and links straight to the assembly records of
-`EHI_ASB_ENTRY`, so an assembly can be run through the AMR workflow at any time
-after the binning batch that produced it is done, and the same assembly can
-belong to several AMR batches.
-
-**Batch tables** hold batch-level metadata and a status field that ehio reads (for scanning) and updates (after launching or completing a run).
-
-**Entry tables** hold per-sample metadata including file URLs for inputs (reads, reference genomes, bin paths) and status fields that ehio updates after a run completes.
+After that the write counts as a failed one. A job that dies mid-write holds the
+core for 10 minutes at most. A core too old to take turns is written to as
+before.
 
 ---
 
@@ -251,12 +144,12 @@ belong to several AMR batches.
 
 ### `ehio preprocessing`
 
-Bridges the preprocessing step. Connects to `EHI_BASE` only.
+Bridges the preprocessing step.
 
 | Direction | What it does |
 |-----------|-------------|
-| `--input` | Looks up the batch in `EHI_PPR_BATCH`, follows the linked field to `EHI_PPR_ENTRY`, and writes a Drakkar sample info TSV with columns `sample`, `reads1`, `reads2`, `reference`. Local read paths must exist and remote read URLs must be downloadable, otherwise the command fails before Drakkar starts (`--no-url-check` skips the download check). |
-| `--output` | Transfers the `preprocessing/final/` directory to SFTP and marks all entry records as processed in `EHI_PPR_ENTRY`. If the batch ran against a raw reference genome, the Bowtie2 index Drakkar built is archived, uploaded to `{SFTP_REMOTE_BASE}/GEN/{genome_code}.tar.gz` and the genome record is flagged as indexed, so later batches on the same host are launched with `-x`. |
+| `--input` | Reads the batch and its entries from ehi-core, and writes a Drakkar sample info TSV with columns `sample`, `reads1`, `reads2`, `reference`. Local read paths must exist and remote read URLs must be downloadable, otherwise the command fails before Drakkar starts (`--no-url-check` skips the download check). |
+| `--output` | Transfers the `preprocessing/final/` directory to SFTP and writes the metrics and file URLs of every entry to ehi-core. If the batch ran against a raw reference genome, the Bowtie2 index Drakkar built is archived, uploaded to `{SFTP_REMOTE_BASE}/GEN/{genome_code}.tar.gz` and the genome is flagged as indexed in ehi-core (`PATCH /reference_genomes/{code}`), so later batches on the same host are launched with `-x`. |
 
 ```bash
 # Generate drakkar input file for batch PPR001
@@ -265,7 +158,7 @@ ehio preprocessing --input -b PPR001 -f samples.tsv
 # Run drakkar (example)
 drakkar preprocessing -f samples.tsv -o /projects/PPR001
 
-# Transfer results and update Airtable
+# Transfer results and update ehi-core
 ehio preprocessing --output -b PPR001 --local-dir /projects/PPR001
 ```
 
@@ -292,12 +185,12 @@ The command exits non-zero and says why when there is nothing to upload, so it c
 
 ### `ehio binning`
 
-Bridges the assembly and binning step. Reads from `EHI_BASE`; on output, also writes MAG metadata to `MAG_BASE`.
+Bridges the assembly and binning step.
 
 | Direction | What it does |
 |-----------|-------------|
-| `--input` | Looks up the batch in `EHI_ASB_BATCH`, follows links to `EHI_ASB_ENTRY`, and writes a Drakkar sample info TSV with preprocessed read URLs. |
-| `--output` | Transfers the assemblies and the batch summary tables to `{SFTP_REMOTE_BASE}/ASB/{batch}` and the bins to `{SFTP_REMOTE_BASE}/MAG/{batch}`, both gzipped; marks entries as processed in `EHI_ASB_ENTRY`; and writes new MAG metadata to `MAG_BASE`. |
+| `--input` | Reads the batch and its entries from ehi-core, and writes a Drakkar sample info TSV with preprocessed read URLs. |
+| `--output` | Transfers the assemblies and the batch summary tables to `{SFTP_REMOTE_BASE}/ASB/{batch}` and the bins to `{SFTP_REMOTE_BASE}/MAG/{batch}`, both gzipped; writes the assembly metrics and URLs to ehi-core; and creates the new MAGs there. |
 
 ```bash
 ehio binning --input -b ASB001 -f samples.tsv
@@ -305,7 +198,7 @@ drakkar cataloging -f samples.tsv -o /projects/ASB001
 ehio binning --output -b ASB001 --local-dir /projects/ASB001
 ```
 
-**Assembly type.** `EHI_ASB_BATCH_TYPE` on the batch record takes `Individual`, `Coassembly` or `Multicoverage`. The grouping itself always comes from the assembly codes of the entries — entries sharing a code are co-assembled by Drakkar — and the type declares what that grouping is meant to be:
+**Assembly type.** The batch's assembly type in ehi-core takes `Individual`, `Coassembly` or `Multicoverage`. The grouping itself always comes from the assembly codes of the entries — entries sharing a code are co-assembled by Drakkar — and the type declares what that grouping is meant to be:
 
 | Type | Effect |
 |------|--------|
@@ -319,12 +212,12 @@ A batch with the field unset runs as it always did: the assembly codes decide, a
 
 ### `ehio quantifying`
 
-Bridges the dereplication and mapping step. Connects to `MAG_BASE` only.
+Bridges the dereplication and mapping step.
 
 | Direction | What it does |
 |-----------|-------------|
-| `--input` | Looks up the batch in `MAG_DMB_BATCH`, follows links to `MAG_DMB_ENTRY`, and writes two files: a bins path file (`bins.txt`) and a reads sample file (`samples.tsv`) for Drakkar profiling. |
-| `--output` | Transfers the `profiling_genomes/final/` tables to SFTP as `{batch}_counts.tsv.gz`, `{batch}_bases.tsv.gz` and `{batch}_mag_info.tsv.gz` (the per-MAG metrics: size, completeness, contamination, contig count), and marks entries as processed in `MAG_DMB_ENTRY`. With `--skip-derep` (a batch profiled without dereplicating) no MAG is recorded as kept by dereplication. |
+| `--input` | Reads the batch's MAGs and samples from ehi-core, and writes two files: a bins path file (`bins.txt`) and a reads sample file (`samples.tsv`) for Drakkar profiling. |
+| `--output` | Transfers the `profiling_genomes/final/` tables to SFTP as `{batch}_counts.tsv.gz`, `{batch}_bases.tsv.gz` and `{batch}_mag_info.tsv.gz` (the per-MAG metrics: size, completeness, contamination, contig count), and writes the mappings to ehi-core. With `--skip-derep` (a batch profiled without dereplicating) no MAG is recorded as kept by dereplication. |
 | `--derep-output` | For a batch that dereplicates without profiling: reads which MAGs `drakkar dereplicating` kept from dRep's `Wdb.csv`, marks them in ehi-core and writes their number and the drakkar version on the batch. |
 
 `--input --no-reads` writes the MAG and quality files only, without reading the batch's samples, which is all `drakkar dereplicating` needs.
@@ -340,22 +233,22 @@ ehio quantifying --output -b DMB001 --local-dir /projects/DMB001
 
 ### `ehio annotating`
 
-Bridges the taxonomic and functional annotation step of a DMB batch, which runs after `ehio quantifying --output` in the same output directory. Connects to `MAG_BASE` only.
+Bridges the taxonomic and functional annotation step of a DMB batch, which runs after `ehio quantifying --output` in the same output directory.
 
 | Direction | What it does |
 |-----------|-------------|
 | `--stage` | Rebuilds the dereplicated genome directory of a batch whose results are already on ERDA, so an old batch can be annotated again without being profiled again; with `--all-mags`, stages every MAG of the batch instead. See [What a DMB batch does: Tasks](#what-a-dmb-batch-does-tasks). |
-| `--input` | Lists the dereplicated genomes that still need annotating, skipping the MAGs whose `MAG_ENTRY_ANNOTATED` value already covers the batch's annotation type (`kegg` ⊂ `genes` ⊂ `all`). A MAG at `genes` in an `all` batch is written to a second file, so it gets cluster annotation only instead of being annotated from scratch. `--rerun` annotates every genome regardless. |
-| `--output` | Writes taxonomy and gene metrics back to `MAG_ENTRY`, transfers the batch-level tables to `{SFTP_REMOTE_BASE}/DMB/{batch}` and the per-genome tables to `{SFTP_REMOTE_BASE}/ANN/{batch}`, and marks the batch done. |
+| `--input` | Lists the dereplicated genomes that still need annotating, skipping the MAGs whose annotation depth in ehi-core already covers the batch's annotation type (`kegg` ⊂ `genes` ⊂ `all`). A MAG at `genes` in an `all` batch is written to a second file, so it gets cluster annotation only instead of being annotated from scratch. `--rerun` annotates every genome regardless. |
+| `--output` | Writes taxonomy and gene metrics back to the MAGs in ehi-core, transfers the batch-level tables to `{SFTP_REMOTE_BASE}/DMB/{batch}` and the per-genome tables to `{SFTP_REMOTE_BASE}/ANN/{batch}`, and marks the batch done. |
 
 `--output` reads two things from `annotating/`:
 
 - `genome_taxonomy.tsv` — the GTDB-Tk summary. The classification string is split into its seven ranks, and `closest_genome_ani`, `closest_placement_ani` and `closest_genome_af` are written alongside them. Every MAG classified also gets the GTDB-Tk version and GTDB release of the run (`gtdbtk_version`, `gtdb_release`, e.g. `2.7.2` and `R232`), read from `gtdbtk/gtdbtk.json`, or from the first lines of `gtdbtk/gtdbtk.log` when the JSON is missing.
 - `final/{mag}_genes.tsv` — one gene table per genome. Since drakkar 2.0.0 this is a long-form evidence table with one row per accepted hit, so a gene appears once per source and once per ranked hit within a source, always including a `prodigal` row carrying the gene call itself. ehio counts over distinct genes: `genes_number` is every gene predicted, `genes_kegg` the genes with a KEGG hit, `genes_unannotated` the genes with no KEGG, Pfam or CAZy hit, and `coding_density` the fraction of the genome the gene calls cover. The 1.x wide table, one row per gene and one column per database, is still read.
 
-A MAG is named by its FASTA file in Airtable (`EHA00123_bin_1.fa`) and by that name with the suffix stripped in every drakkar output path (`EHA00123_bin_1_genes.tsv`), so the two are matched on the stripped id. `final/{mag}_clusters.tsv` sits beside the gene tables and holds a different table — the dbCAN gene clusters, antiSMASH regions, geNomad mobile elements and defense systems — so it is transferred but not parsed.
+A MAG is named by its FASTA file in ehi-core (`EHA00123_bin_1.fa`) and by that name with the suffix stripped in every drakkar output path (`EHA00123_bin_1_genes.tsv`), so the two are matched on the stripped id. `final/{mag}_clusters.tsv` sits beside the gene tables and holds a different table — the dbCAN gene clusters, antiSMASH regions, geNomad mobile elements and defense systems — so it is transferred but not parsed.
 
-Once a MAG has its metrics, `MAG_ENTRY_ANNOTATED` is set to the batch's annotation type, which is what lets the next batch skip it.
+Once a MAG has its metrics, its annotation depth in ehi-core is set to the batch's annotation type, which is what lets the next batch skip it.
 
 #### What a DMB batch does: Tasks
 
@@ -412,12 +305,12 @@ A genome in the catalogue with no MAG record, no FASTA URL, or a URL that cannot
 
 ### `ehio amr`
 
-Bridges the antimicrobial resistance step. Connects to `EHI_BASE` only.
+Bridges the antimicrobial resistance step.
 
 | Direction | What it does |
 |-----------|-------------|
-| `--input` | Looks up the batch in `EHI_AMR_BATCH`, follows `EHI_AMR_BATCH_LIST_ASSEMBLIES` to the linked `EHI_ASB_ENTRY` records, downloads every assembly FASTA from `EHI_ASB_ENTRY_ASSEMBLY_URL` into the batch staging directory, and writes a drakkar amr manifest (`assembly_id`, `assembly_path`, `assembly_type`) pointing at the local copies. |
-| `--output` | Parses `amr/amr_qc.tsv`, writes the per-assembly AMR counts back to the assembly records in `EHI_ASB_ENTRY`, transfers the aggregate tables to `{SFTP_REMOTE_BASE}/AMR/{batch}` and attaches them to the AMR batch record, and transfers the prodigal gene calls to `{SFTP_REMOTE_BASE}/AMR/{batch}/genes`. |
+| `--input` | Reads the assemblies of the batch from ehi-core, downloads every assembly FASTA from its ERDA URL into the batch staging directory, and writes a drakkar amr manifest (`assembly_id`, `assembly_path`, `assembly_type`) pointing at the local copies. |
+| `--output` | Parses `amr/amr_qc.tsv`, writes the per-assembly AMR counts back to the assemblies in ehi-core, transfers the aggregate tables to `{SFTP_REMOTE_BASE}/AMR/{batch}`, and transfers the prodigal gene calls to `{SFTP_REMOTE_BASE}/AMR/{batch}/genes`. |
 
 ```bash
 ehio amr --input -b AMR001 -f assemblies.tsv -d /projects/ehi/data/AMR/AMR001/data/assemblies
@@ -439,9 +332,9 @@ all such problems are reported together rather than one per run.
 **Assembly type.** Every batch runs as `metagenome`, which is written into the
 `assembly_type` column of the manifest and selects the Prodigal mode and RGI's
 `--low_quality` handling. Isolate assemblies are not part of the EHI database,
-so there is no Airtable field for it.
+so the batch does not carry a field for it.
 
-**Stats.** One row of `amr_qc.tsv` per assembly goes to `EHI_ASB_ENTRY`:
+**Stats.** One row of `amr_qc.tsv` per assembly goes to the assembly in ehi-core:
 `amrfinder_hits`, `rgi_hits`, `mobility_regions`, `amr_loci`, `multi_tool_loci`,
 `mobility_links` and `mobile_loci`. The two `*_without_coordinates` columns are
 diagnostics of the callers rather than results, and are not written.
@@ -449,13 +342,9 @@ diagnostics of the callers rather than results, and are not written.
 **Files.** The five aggregate tables (`amr_hits`, `amr_loci`, `amr_drug_classes`,
 `amr_mobility`, `mobility_regions`, all `.tsv.xz`) go to `AMR/{batch}` on ERDA
 batch-prefixed, together with gzipped copies of `amr_qc.tsv` and
-`assembly_summary.tsv` and the `manifest.yaml` provenance record. The same five
-tables are attached to the AMR batch record, together with the manifest
-(`EHI_AMR_BATCH_FILE_MANIFEST`). Airtable caps an attachment upload
-at 5 MB of base64 (~3.7 MB of file), so a table above that is reported and left
-on ERDA only — the transfer is never the step that fails. A rerun clears the
-attachment fields first, since Airtable's upload endpoint appends rather than
-replaces.
+`assembly_summary.tsv` and the `manifest.yaml` provenance record. The core keeps
+their ERDA URLs. The tables are no longer attached to the AMR batch record: they
+are on ERDA only.
 
 **Gene calls.** `drakkar amr` calls genes with prodigal before AMRFinderPlus runs,
 and keeps one pair of files per assembly in `amr/raw/prodigal/`. Both are gzipped
@@ -478,9 +367,8 @@ still finishes.
 
 Deposits the raw reads of the hologenomes of an **ENA submission** (`EHS…`) in
 the [European Nucleotide Archive](https://www.ebi.ac.uk/ena). ENA submissions
-live in ehi-core alone — they replace Airtable's Submissions table, which ehio
-does not read — and everything ENA is told comes from the core, so this command
-needs the core and neither reads from nor writes to Airtable.
+live in ehi-core alone — they replace the former Submissions table — and everything ENA is told comes from the core, so this command
+needs the core.
 Staff create a submission in the core's editor, name the ENA study it goes
 under (`PRJEB…`), paste the hologenomes into it and set it Ready.
 
@@ -497,8 +385,8 @@ For each hologenome of the submission that holds no run accession yet, ehio:
 
 When every hologenome is deposited the submission is set to Done; otherwise to
 Error. Either way its **Log** in the core says what was deposited and, for each
-hologenome that was not, why — so a sample Airtable has not fully described is
-fixed in the laboratory's Airtable table, the core's copy synced, and the
+hologenome that was not, why — so a sample the laboratory has not fully described is
+fixed in the laboratory's Samples table, the core's copy synced, and the
 submission set Ready again. Hologenomes already holding a
 run accession are skipped, so a submission can be launched as often as needed.
 
@@ -518,7 +406,7 @@ ehio ena -b EHS0001
 | ENA object | Read from |
 |---|---|
 | Study | the submission's `study_accession` in ehi-core |
-| Sample | the sample the hologenome links to in ehi-core — the core's copy of the laboratory's Samples table, which stays in Airtable and is refreshed with ehi-core's `python -m airtable_import sync`. Columns are mapped in `ENA_SAMPLE_FIELDS` (checklist column → sample column) and sent under checklist `ENA_CHECKLIST` (ERC000013, host associated). `project name` is the submission's study, and no scientific name is sent: ena-upload-cli looks it up from the taxon id (a metagenome, such as feces metagenome), since the laboratory's table names the host there. |
+| Sample | the sample the hologenome links to in ehi-core — the core's copy of the laboratory's Samples table, which ehi-core refreshes with its own `python -m airtable_import sync`. Columns are mapped in `ENA_SAMPLE_FIELDS` (checklist column → sample column) and sent under checklist `ENA_CHECKLIST` (ERC000013, host associated). `project name` is the submission's study, and no scientific name is sent: ena-upload-cli looks it up from the taxon id (a metagenome, such as feces metagenome), since the laboratory's table names the host there. |
 | Experiment | the hologenome in ehi-core (library name, library source or data type, platform, instrument model), plus `ENA_LIBRARY_STRATEGY`, `ENA_LIBRARY_SELECTION`, `ENA_LIBRARY_LAYOUT` and `ENA_INSERT_SIZE` (WGS, RANDOM, PAIRED, 400: every EHI library so far) |
 | Run | the hologenome's raw reads, as `{EHI}_raw_1.fq.gz` and `{EHI}_raw_2.fq.gz` |
 
@@ -561,26 +449,18 @@ core: only the submission's Log, marked as a test.
 
 ### `ehio scanning`
 
-Polls all four batch tables, in Airtable **and in ehi-core**, and the ENA submissions of ehi-core, for batches whose status matches `SCANNING_TRIGGER_STATUS` (default: `ready`). For each pending batch it finds:
+Polls the four batch tables and the ENA submissions in ehi-core for batches whose status matches `SCANNING_TRIGGER_STATUS` (default: `ready`). For each pending batch it finds:
 
 1. Checks whether a `screen` session named after the batch already exists — skips if so.
 2. For preprocessing batches, resolves the reference genome (`-x` indexed tarball, else `-r` raw fasta) and verifies it can be downloaded; if not, the batch is marked `PROCESSING_ERROR_STATUS` and skipped instead of being launched.
 3. Creates a detached `screen` session: `screen -dmS BATCH_NAME bash -c "..."`.
 4. The session runs the full `ehio --input` + `drakkar` command chain.
-5. Sets the batch status to `SCANNING_LAUNCHED_STATUS` (default: `running`) in both databases.
-
-**Both databases are scanned.** ehi-core is taking over from Airtable, and the scan reads both so the change can be made one batch at a time:
-
-- A batch both databases hold is launched **once**. It keeps the code Airtable gave it, because the run directory and the screen session are named after that, and is otherwise described by the core — the boosts, the assembly or profiling type, the ANI threshold, the annotation type and the reference genome. When the two disagree about what the batch is waiting for, that is printed and the core's answer is taken.
-- A batch **only the core holds** is launched too, read entirely from the core (see [Running a batch from the core alone](#running-a-batch-from-the-core-alone)), and its status is set in the core alone.
-- A batch **only Airtable holds** is launched as it always was, and the status write creates its row in the core, the way every other Airtable fact reaches it.
-- A core that can't be reached, or one too old to know the route, is reported and the scan carries on with Airtable — unless `EHI_CORE_REQUIRED`. With `EHI_CORE_URL` empty, the scan is Airtable's alone, as before.
-- An Airtable batch table that isn't configured no longer ends the scan for that module: the core is still scanned.
+5. Sets the batch status to `SCANNING_LAUNCHED_STATUS` (default: `running`) in ehi-core.
 
 The core is read through `GET /api/pipeline/{table}/pending`, which takes one `status` parameter per status to look for and matches it however it is capitalised.
 
 ```bash
-# Scan every module in both databases
+# Scan every module
 ehio scanning
 
 # Scan one module only
@@ -620,11 +500,11 @@ ehio ena -b BATCH -d OUTPUT_DIR
 
 `OUTPUT_DIR` is constructed as `{MODULE_OUTPUT_BASE}/{BATCH_NAME}`.
 
-If any step fails, the exit trap of the launch script appends a failure report to `{BATCH}.err`, sets the batch status to `PROCESSING_ERROR_STATUS` (in both databases) and attaches drakkar's own failure report — `OUTPUT_DIR/logging/drakkar_<run_id>.failures.tsv`, one row per failed job with its failure category — to the batch record, so the source of the error can be read straight from Airtable. The attachment field is configured per module with `EHI_PPR_BATCH_ERROR_FILES`, `EHI_ASB_BATCH_ERROR_FILES`, `MAG_DMB_BATCH_ERROR_FILES` and `EHI_AMR_BATCH_ERROR_FILES`; leave a key empty to disable uploading for that module.
+If any step fails, the exit trap of the launch script appends a failure report to `{BATCH}.err` and sets the batch status to `PROCESSING_ERROR_STATUS` in ehi-core. Drakkar's own failure report is no longer uploaded to the batch record: it stays in `OUTPUT_DIR/logging/drakkar_<run_id>.failures.tsv` (one row per failed job with its failure category).
 
 Every drakkar call in the script is bracketed by a check of the run metadata drakkar writes for the run it starts (`drakkar_<run_id>.yaml`, stamped `status: success` once the workflow ends), because drakkar reports some of its own errors — a Snakemake lock, a missing input file — by printing a message and exiting 0. drakkar 2.5.0 moved that file, the failure table and the Snakemake log into `OUTPUT_DIR/logging/`; before it they sat in the output root and in `OUTPUT_DIR/log/`. ehio reads both layouts everywhere, so a batch launched under one drakkar and resumed under another is still checked, and its failure report is still found.
 
-**Drakkar version recorded on the batch.** When a batch finishes, the drakkar version that produced it is written to the batch record (`EHI_PPR_BATCH_DRAKKAR_VERSION` and its per-module counterparts). It is read from the run metadata in the output directory, not from the installed drakkar, so the field says which version actually did the work. A batch holds one metadata file per drakkar run — quantifying alone calls drakkar four times, and a resumed batch adds more — so a batch that spans an upgrade reports every version that did part of it, oldest run first: `2.4.4/2.4.5`. On a DMB batch the field is written twice: once by `ehio quantifying --output`, and again by `ehio annotating --output` at the end of the batch, by which point the annotation runs have been recorded too. If the output directory holds no run metadata (it was cleaned up, or the drakkar that ran predates the metadata), the installed drakkar is asked instead.
+**Drakkar version recorded on the batch.** When a batch finishes, the drakkar version that produced it is written to the batch record in ehi-core. It is read from the run metadata in the output directory, not from the installed drakkar, so the field says which version actually did the work. A batch holds one metadata file per drakkar run — quantifying alone calls drakkar four times, and a resumed batch adds more — so a batch that spans an upgrade reports every version that did part of it, oldest run first: `2.4.4/2.4.5`. On a DMB batch the field is written twice: once by `ehio quantifying --output`, and again by `ehio annotating --output` at the end of the batch, by which point the annotation runs have been recorded too. If the output directory holds no run metadata (it was cleaned up, or the drakkar that ran predates the metadata), the installed drakkar is asked instead.
 
 ---
 
@@ -635,7 +515,7 @@ A running batch is a screen session holding the drakkar workflow, plus the Slurm
 1. Writes a stop marker (`{RUN_BASE}/{batch}/.ehio_stopped`), so the exit trap of the dying launch script reports the stop instead of flagging the batch as an error.
 2. Quits the screen session. This comes first on purpose — while the workflow is alive it resubmits any job cancelled under it (the drakkar slurm profile runs with `retries` and `keep-going`).
 3. Cancels every queued or running Slurm job of the batch, re-checking the queue afterwards in case jobs were submitted while it was cancelling.
-4. Sets the batch status to `SCANNING_STOPPED_STATUS` (default: `Stopped`) in both databases. A batch only ehi-core holds is stopped the same way, and its status set in the core alone.
+4. Sets the batch status to `SCANNING_STOPPED_STATUS` (default: `Stopped`) in ehi-core.
 
 The jobs of a batch are recognised in two independent ways, so orphans left by an earlier session are caught as well: by the directory they were submitted from ( `{MODULE_OUTPUT_BASE}/{batch}` or `{RUN_BASE}/{batch}`), and by the snakemake run ids that the Slurm executor uses as job names and logs as `SLURM run ID: <uuid>` in `{RUN_BASE}/{batch}/{batch}.out` — a batch can hold several of those, since quantifying calls drakkar more than once.
 
@@ -657,7 +537,7 @@ ehio jobs -m preprocessing -b PPR001
 ## Overall data flow
 
 ```
-Airtable (EHI_BASE / MAG_BASE)  +  ehi-core
+ehi-core
         │
         │  ehio <module> --input -b BATCH
         ▼
@@ -671,10 +551,10 @@ Airtable (EHI_BASE / MAG_BASE)  +  ehi-core
         │
         │  ehio <module> --output -b BATCH
         ▼
-  SFTP remote storage  +  Airtable status updated
+  SFTP remote storage  +  ehi-core status and metrics updated
 ```
 
-`ehio scanning` automates the middle two steps by watching both databases for batches marked `ready` and launching the sequence in a named screen session.
+`ehio scanning` automates the middle two steps by watching ehi-core for batches marked `ready` and launching the sequence in a named screen session.
 
 ---
 

@@ -147,7 +147,7 @@ class TestText:
         assert ena.text(55149.0) == "55149"
         assert ena.text(45.84) == "45.84"
 
-    def test_airtable_special_values_and_blanks_are_empty(self):
+    def test_special_values_and_blanks_are_empty(self):
         assert ena.text({"specialValue": "NaN"}) == ""
         assert ena.text(None) == ""
 
@@ -305,12 +305,11 @@ class TestPlan:
         found = plan_of([entry], settings)
         assert found.samples == []
         assert found.problems == ["EHI00032 (sample AGP08): the sample holds no collection date, "
-                                  "geographic location (latitude) (fill it in Airtable, then sync)"]
+                                  "geographic location (latitude) (complete the sample in ehi-core)"]
 
     def test_a_sample_ehi_core_does_not_hold(self, settings):
         found = plan_of([hologenome("EHI00032", "AGP99", sample=None)], settings)
-        assert found.problems == ["EHI00032 (sample AGP99): ehi-core holds no such sample: "
-                                  "sync the samples from Airtable"]
+        assert found.problems == ["EHI00032 (sample AGP99): ehi-core holds no such sample"]
 
     def test_a_library_without_ena_words_for_its_instrument_is_reported(self, settings):
         found = plan_of([hologenome("EHI00032", "AGP08", instrument_model=None, platform="")], settings)
@@ -486,8 +485,6 @@ def run_ena(tmp_path, fake, upload_cli, monkeypatch, **extra) -> int:
     monkeypatch.setenv("ENA_PASSWORD", "pw")
     served = {"PRJEB76898": STUDY_XML, "ERS22455981": SAMPLE_XML}
     with patch.object(cli.cfg, "get", side_effect=lambda k, d=None: CONFIG.get(k, d)), \
-         patch.object(cli, "_resolve_token", side_effect=AssertionError("Airtable is not needed")), \
-         patch("ehio.airtable.AirtableClient", side_effect=AssertionError("Airtable is not read")), \
          patch.object(ena, "_fetch", side_effect=lambda url, creds, timeout: next(
              (body for acc, body in served.items() if url.endswith(acc)), None)), \
          patch.object(ena, "run_upload_cli", upload_cli), \
@@ -571,7 +568,7 @@ class TestScanning:
 
     def test_its_batches_are_looked_for_in_ehi_core_alone(self):
         core = MagicMock()
-        [source] = _sources("ena", token="tok", core=core)
+        [source] = _sources("ena", core=core)
         assert source.name == "ehi-core" and source.table == "ena_submissions"
 
     def test_the_launch_script_runs_ehio_ena_and_no_drakkar(self):
@@ -584,8 +581,8 @@ class TestScanning:
 def test_set_status_writes_an_ena_submission_to_ehi_core_alone():
     fake = FakeCoreClient()
     args = argparse.Namespace(module="ena", batch="EHS0001", status="Error", failures_dir="/ENA/EHS0001",
-                              failures_since="0", airtable_token=None, core_token=None)
-    with using(fake), patch.object(cli, "_resolve_token", side_effect=AssertionError("no Airtable")):
+                              failures_since="0", core_token=None)
+    with using(fake):
         assert cli.cmd_set_status(args) == 0
     [row] = fake.rows("ena_submissions")
     assert (row["key"], row["values"]) == ({"code": "EHS0001"}, {"status": "Error"})

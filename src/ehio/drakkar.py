@@ -1,4 +1,4 @@
-"""Generate drakkar-compatible input files from Airtable records."""
+"""Generate drakkar-compatible input files from ehi-core rows."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def normalise_dmb_tasks(value: object) -> tuple[str, ...]:
 
 
 def normalise_assembly_type(value: object) -> str:
-    """Return the canonical assembly type of an Airtable batch-type value.
+    """Return the canonical assembly type of a batch-type value.
 
     Punctuation and case are ignored, so 'Coassembly', 'co-assembly' and
     'Co assembly' all mean the same thing.  An empty or unrecognised value
@@ -157,7 +157,7 @@ def check_assembly_type(
 
 
 def _first(value: object) -> str:
-    """Return an Airtable cell as a stripped string, taking [0] of a list."""
+    """Return a cell as a stripped string, taking [0] of a list."""
     if isinstance(value, list):
         value = value[0] if value else ""
     return str(value).strip()
@@ -264,16 +264,10 @@ def verify_remote_urls(
 # drakkar output layout
 # ---------------------------------------------------------------------------
 
-# drakkar 2.5.0 collected everything a run records about itself — the run
-# metadata, the Snakemake log, the failure table and the benchmark roll-up —
-# into a 'logging/' subdirectory of the output directory, and renamed the
-# failure table from 'drakkar_<run id>_failures.tsv' to
-# 'drakkar_<run id>.failures.tsv'.  Earlier versions wrote both into the output
-# root.  A batch can span the upgrade — launched with one version, resumed with
-# another — so both layouts are always read, exactly as drakkar itself does.
+# drakkar 2.5.0 moved run metadata into a 'logging/' subdirectory of the
+# output directory. Earlier versions wrote it into the output root. A batch
+# can span the upgrade, so both layouts are read.
 LOGGING_DIRNAME = "logging"
-
-FAILURE_REPORT_GLOBS = ("drakkar_*.failures.tsv", "drakkar_*_failures.tsv")
 
 # Run metadata is 'drakkar_<run id>.yaml', the run id being the UTC launch
 # timestamp.  The glob alone would also match the benchmark roll-up an older
@@ -291,31 +285,6 @@ def drakkar_run_dirs(output_dir: str | Path) -> list[Path]:
     """
     directory = Path(output_dir)
     return [directory / LOGGING_DIRNAME, directory]
-
-
-def find_failure_report(output_dir: str | Path, since: float | None = None) -> Path | None:
-    """Return the most recent drakkar failure report in output_dir, or None.
-
-    drakkar writes one failure table per run when a workflow stops after
-    failures: 'logging/drakkar_<run id>.failures.tsv' since 2.5.0, and
-    'drakkar_<run id>_failures.tsv' in the output root before it.  A batch can
-    run drakkar several times (profiling, then annotating), each with its own
-    run id, so the newest report is the one describing the failure that just
-    happened.
-
-    `since` is a Unix timestamp: reports older than it are ignored, which keeps
-    the report of an earlier, already-reported launch of the same batch from
-    being mistaken for the current one.
-    """
-    reports: list[Path] = []
-    for directory in drakkar_run_dirs(output_dir):
-        for pattern in FAILURE_REPORT_GLOBS:
-            reports += [p for p in directory.glob(pattern) if p.is_file()]
-    if since is not None:
-        reports = [p for p in reports if p.stat().st_mtime >= since]
-    if not reports:
-        return None
-    return max(reports, key=lambda p: p.stat().st_mtime)
 
 
 def find_run_metadata(output_dir: str | Path) -> list[Path]:
@@ -412,7 +381,7 @@ def drakkar_versions_used(output_dir: str | Path) -> list[str]:
 
 
 def format_drakkar_versions(versions: list[str]) -> str:
-    """Join the versions of a batch as they are written to Airtable ('2.4.4/2.5.0')."""
+    """Join the versions of a batch as they are recorded ('2.4.4/2.5.0')."""
     return "/".join(versions)
 
 
@@ -487,7 +456,7 @@ AMR_MANIFEST_COLUMNS = ["assembly_id", "assembly_path", "assembly_type"]
 
 
 def normalise_amr_assembly_type(value: object, default: str = "metagenome") -> str:
-    """Return the canonical AMR assembly type of an Airtable batch-type value.
+    """Return the canonical AMR assembly type of a batch-type value.
 
     Case and punctuation are ignored, so 'Metagenome' and 'meta-genome' both
     mean the same thing.  An empty or unrecognised value returns `default`,

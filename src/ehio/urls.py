@@ -1,6 +1,6 @@
 """Reachability checks for remote input files (reads and reference genomes).
 
-Airtable holds URLs that drakkar downloads at run time.  A typo or an expired
+ehi-core holds URLs that drakkar downloads at run time.  A typo or an expired
 link only surfaces deep inside a Snakemake job, so ehio verifies the URLs up
 front and fails with a controlled error instead.
 """
@@ -26,7 +26,7 @@ DEFAULT_TIMEOUT = 20.0
 
 
 class DownloadError(RuntimeError):
-    """A file referenced in Airtable could not be downloaded."""
+    """A referenced file could not be downloaded."""
 
 
 def is_remote_url(value: str) -> bool:

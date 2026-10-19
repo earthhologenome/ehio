@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ehio"
-version = "0.12.0"
-description = "Bridge between Airtable metadata and Drakkar workflows, with SFTP output transfer."
+version = "0.13.0"
+description = "Bridge between ehi-core metadata and Drakkar workflows, with SFTP output transfer."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "pyairtable>=2.3",
+  "requests>=2.31",
   "paramiko>=3.4",
   "pyyaml>=6",
   # Deposits the reads of an ENA submission ('ehio ena'). It pins pytest 7.4

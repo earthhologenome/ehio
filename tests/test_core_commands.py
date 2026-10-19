@@ -1,83 +1,45 @@
-"""The commands that write to ehi-core: what reaches the core, and what still
-reaches Airtable, while batches are created in Airtable."""
+"""Commands that read core-only batches and write their results to ehi-core."""
 
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ehio import cli
+from ehio.core import CoreError
 from tests.fake_core import FakeCoreClient, using
 
-SFTP = {
-    "SFTP_HOST": "erda",
-    "SFTP_USER": "user",
-    "SFTP_PORT": "22",
-    "SFTP_REMOTE_BASE": "/Data",
-    "CLEANUP_OUTPUT_DIR": "false",
-    "PROCESSING_DONE_STATUS": "Done",
-    "ERDA_SHARE_BASE": "https://erda/share",
+CONFIG = {
+    "SFTP_HOST": "erda", "SFTP_USER": "user", "SFTP_PORT": "22",
+    "SFTP_REMOTE_BASE": "/Data", "ERDA_SHARE_BASE": "https://erda/share",
+    "CLEANUP_OUTPUT_DIR": "false", "PROCESSING_DONE_STATUS": "Done",
 }
 
 
-def _patched(config: dict, airtable: MagicMock):
-    """Airtable, the token and the config, as each command test needs them."""
-    return (
-        patch("ehio.airtable.AirtableClient", return_value=airtable),
-        patch.object(cli, "_resolve_token", return_value="tok"),
-        patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)),
-        patch.object(cli, "_require_cfg", side_effect=lambda k: config[k]),
-        patch.object(cli, "_get_drakkar_version", return_value="2.5.0"),
-    )
+@contextmanager
+def _configured(fake: FakeCoreClient, config: dict | None = None):
+    values = {**CONFIG, **(config or {})}
+    with patch.object(cli.cfg, "get", side_effect=lambda k, d=None: values.get(k, d)), \
+         patch.object(cli, "_require_cfg", side_effect=lambda k: values[k]), \
+         patch.object(cli, "_get_drakkar_version", return_value="2.5.0"), using(fake):
+        yield
 
 
+@contextmanager
 def _sftp():
-    xfer = MagicMock()
-    xfer.upload.return_value = (1, 0)
-    xfer.upload_flat.return_value = (1, 0)
-    xfer.remote_exists.return_value = False
-    ctx = MagicMock()
-    ctx.__enter__ = MagicMock(return_value=xfer)
-    ctx.__exit__ = MagicMock(return_value=False)
-    return patch("ehio.transfer.SFTPTransfer", return_value=ctx)
-
-
-def _run(patches, call):
-    for p in patches:
-        p.start()
-    try:
-        return call()
-    finally:
-        for p in reversed(patches):
-            p.stop()
-
-
-# ---------------------------------------------------------------------------
-# binning --output: new MAGs are created in the core only
-# ---------------------------------------------------------------------------
-
-BINNING_CFG = {
-    **SFTP,
-    "EHI_BASE": "appEHI",
-    "MAG_BASE": "appMAG",
-    "EHI_ASB_BATCH": "tblABB",
-    "EHI_ASB_ENTRY": "tblEHA",
-    "EHI_ASB_BATCH_CODE": "fldABBCODE",
-    "EHI_ASB_BATCH_STATUS": "fldABBSTATUS",
-    "EHI_ASB_ENTRY_BATCH": "fldABBLINK",
-    "EHI_ASB_ENTRY_CODE": "fldEHA",
-    "EHI_ASB_ENTRY_ASSEMBLY_LENGTH": "fldLEN",
-    "MAG_ENTRY": "tblMAG",
-    "MAG_ENTRY_NAME": "fldMAGNAME",
-}
-
-BIN_METADATA = (
-    "genome,completeness,contamination,score,size,N50,contig_count\n"
-    "EHA00405_bin_1.fa,91.2,1.1,0.9,2000000,9000,80\n"
-)
+    transfer = MagicMock()
+    transfer.upload.return_value = (1, 0)
+    transfer.upload_flat.return_value = (1, 0)
+    transfer.remote_exists.return_value = False
+    context = MagicMock()
+    context.__enter__ = MagicMock(return_value=transfer)
+    context.__exit__ = MagicMock(return_value=False)
+    with patch("ehio.transfer.SFTPTransfer", return_value=context):
+        yield transfer
 
 
 @pytest.fixture
@@ -88,157 +50,93 @@ def cataloging(tmp_path: Path) -> Path:
     final = tmp_path / "cataloging" / "final"
     (final / "EHA00405").mkdir(parents=True)
     (final / "EHA00405" / "EHA00405_bin_1.fa").write_text(">c\nACGT\n")
-    (final / "all_bin_metadata.csv").write_text(BIN_METADATA)
+    (final / "all_bin_metadata.csv").write_text(
+        "genome,completeness,contamination,score,size,N50,contig_count\n"
+        "EHA00405_bin_1.fa,91.2,1.1,0.9,2000000,9000,80\n"
+    )
     (final / "all_bin_paths.txt").write_text("cataloging/final/EHA00405/EHA00405_bin_1.fa\n")
     (tmp_path / "cataloging.tsv").write_text("assembly\tassembly_length\nEHA00405\t123456\n")
     return tmp_path
 
 
 @pytest.fixture
-def binning_airtable():
-    client = MagicMock()
-    client.fetch_batch_and_entries.return_value = (
-        {"id": "recABB", "fields": {"fldABBCODE": "ABB0700"}},
-        [{"id": "recEHA", "fields": {"fldEHA": "EHA00405", "fldABBLINK": ["recABB"]}}],
-    )
-    client.fetch_existing_values.return_value = set()
-    return client
+def assembly_core():
+    return FakeCoreClient(batches={"ABB0700": {
+        "row": {"code": "ABB0700"},
+        "entries": [
+            {"assembly_code": "EHA00405", "preprocessing_code": "PR00021", "hologenome_code": "EHI00011"},
+            {"assembly_code": "EHA00405", "preprocessing_code": "PR00022", "hologenome_code": "EHI00012"},
+        ],
+    }})
 
 
-def _binning_args(local: Path) -> argparse.Namespace:
+def _output_args(local: Path, batch="ABB0700") -> argparse.Namespace:
     return argparse.Namespace(
-        batch="ABB0700", local_dir=str(local), airtable_token=None, core_token=None, verbose=False,
+        batch=batch, local_dir=str(local), core_token=None, verbose=False,
         host=None, user=None, port=None, identity=None, remote_dir=None, rerun=False,
         connect_timeout=300.0,
     )
 
 
-class TestBinningOutput:
-    def _run(self, cataloging, airtable, fake=None):
-        patches = [*_patched(BINNING_CFG, airtable), _sftp()]
-        if fake is not None:
-            patches.append(using(fake))
-        return _run(patches, lambda: cli._run_binning_output(_binning_args(cataloging)))
+def _binning_output(local: Path, fake: FakeCoreClient):
+    with _configured(fake), _sftp():
+        return cli._run_binning_output(_output_args(local))
 
-    def test_new_mags_go_to_the_core_and_not_to_airtable(self, cataloging, binning_airtable):
-        fake = FakeCoreClient()
-        assert self._run(cataloging, binning_airtable, fake) == 0
-        binning_airtable.create_records.assert_not_called()
-        [mag] = fake.rows("mags")
+
+class TestBinningOutput:
+    def test_new_mags_go_to_the_core(self, cataloging, assembly_core):
+        assert _binning_output(cataloging, assembly_core) == 0
+        [mag] = assembly_core.rows("mags")
         assert mag["key"] == {"name": "EHA00405_bin_1.fa"}
         assert mag["values"]["completeness"] == 91.2
         assert mag["values"]["fasta_url"] == "https://erda/share/MAG/ABB0700/EHA00405_bin_1.fa.gz"
         assert mag["defaults"] == {"assembly_id": "EHA00405"}
 
-    def test_without_the_core_mags_still_go_to_airtable(self, cataloging, binning_airtable):
-        assert self._run(cataloging, binning_airtable) == 0
-        created = binning_airtable.create_records.call_args[0][1]
-        assert created[0]["fldMAGNAME"] == "EHA00405_bin_1.fa"
-
-    def test_the_assembly_gets_its_metrics_and_its_fasta_url(self, cataloging, binning_airtable):
-        fake = FakeCoreClient()
-        self._run(cataloging, binning_airtable, fake)
-        rows = fake.rows("assemblies")
+    def test_assembly_metrics_and_fasta_url_reach_the_core(self, cataloging, assembly_core):
+        assert _binning_output(cataloging, assembly_core) == 0
+        rows = assembly_core.rows("assemblies")
         assert rows[0]["values"] == {"assembly_length": 123456}
-        assert rows[0]["defaults"] == {"batch_id": "ABB0700"}
-        assert any(
-            row["values"].get("assembly_url") == "https://erda/share/ASB/ABB0700/EHA00405_contigs.fasta.gz"
-            for row in rows
-        )
+        assert rows[0]["key"] == {"code": "EHA00405"}
+        assert any(row["values"].get("assembly_url") ==
+                   "https://erda/share/ASB/ABB0700/EHA00405_contigs.fasta.gz" for row in rows)
 
-    def test_each_samples_mapping_rate_goes_to_its_sample_not_its_assembly(self, cataloging, binning_airtable):
-        """The core keeps the rate on the assembly's sample, found by assembly and
-        preprocessing, since a coassembly has one per sample."""
-        (cataloging / "cataloging.tsv").write_text(
-            "assembly\tassembly_length\tmapping_rate_percent\tsample_mapping_rates\n"
-            "EHA00405\t123456\t80.0\tEHI00001:87.5\n"
-        )
-        entry = binning_airtable.fetch_batch_and_entries.return_value[1][0]
-        entry["fields"].update({"fldEHI": "EHI00001", "fldPR": ["recPR1"]})
-        config = {**BINNING_CFG, "EHI_ASB_ENTRY_EHI_NUMBER": "fldEHI", "EHI_ASB_ENTRY_PREPROCESSING": "fldPR",
-                  "EHI_ASB_ENTRY_ASSEMBLY_CODE": "fldEHA"}
-        fake = FakeCoreClient()
-        patches = [*_patched(config, binning_airtable), _sftp(), using(fake)]
-        assert _run(patches, lambda: cli._run_binning_output(_binning_args(cataloging))) == 0
-
-        assert fake.rows("assemblies")[0]["values"] == {"assembly_length": 123456}
-        assert fake.rows("assembly_samples") == [{
-            "key": {"assembly_id": "EHA00405", "preprocessing_id": "recPR1"},
-            "values": {"mapping_percent": 87.5}, "defaults": {},
-        }]
-        # Sent again, so a batch launched before the core knew it has its sample rows.
-        assert fake.groupings == [("ABB0700", {"EHA00405": ["recPR1"]})]
-
-    def test_a_sample_whose_preprocessing_is_not_known_gets_no_rate(self, cataloging, binning_airtable):
-        (cataloging / "cataloging.tsv").write_text(
-            "assembly\tassembly_length\tsample_mapping_rates\nEHA00405\t123456\tEHA00405:87.5\n"
-        )
-        fake = FakeCoreClient()
-        assert self._run(cataloging, binning_airtable, fake) == 0
-        assert fake.rows("assembly_samples") == []
-        assert fake.groupings == []
-
-    def test_the_batch_is_done_in_the_core_too(self, cataloging, binning_airtable):
-        fake = FakeCoreClient()
-        self._run(cataloging, binning_airtable, fake)
-        done = fake.rows("assembly_batches")[-1]
-        assert done["values"] == {"status": "Done", "ehio_version": cli.__version__, "drakkar_version": "2.5.0"}
-        assert done["airtable_record_id"] == "recABB"
-
-    def test_a_core_batch_writes_each_samples_rate_by_its_preprocessing(self, cataloging):
+    def test_each_mapping_rate_goes_to_its_preprocessing(self, cataloging, assembly_core):
         (cataloging / "cataloging.tsv").write_text(
             "assembly\tassembly_length\tsample_mapping_rates\n"
             "EHA00405\t123456\tEHI00011:61.0;EHI00012:34.5\n"
         )
-        airtable = MagicMock()
-        airtable.fetch_batch_and_entries.return_value = (None, [])
-        fake = FakeCoreClient(batches={"ABB0700": {"row": {"code": "ABB0700"}, "entries": [
-            {"assembly_code": "EHA00405", "preprocessing_code": "PR00021", "hologenome_code": "EHI00011"},
-            {"assembly_code": "EHA00405", "preprocessing_code": "PR00022", "hologenome_code": "EHI00012"},
-        ]}})
-        assert self._run(cataloging, airtable, fake) == 0
-
-        [assembly] = [row for row in fake.rows("assemblies") if "assembly_length" in row["values"]]
-        assert assembly["key"] == {"code": "EHA00405"}
-        assert assembly["values"] == {"assembly_length": 123456}
-        assert [(row["key"]["preprocessing_id"], row["values"]) for row in fake.rows("assembly_samples")] == [
+        assert _binning_output(cataloging, assembly_core) == 0
+        assert [(row["key"]["preprocessing_id"], row["values"])
+                for row in assembly_core.rows("assembly_samples")] == [
             ("PR00021", {"mapping_percent": 61.0}),
             ("PR00022", {"mapping_percent": 34.5}),
         ]
-        # The core set its own grouping: nothing is regrouped from here.
-        assert fake.groupings == []
+        assert assembly_core.groupings == []
 
-    def test_a_core_failure_on_the_mags_fails_the_batch(self, cataloging, binning_airtable):
-        from ehio.core import CoreError
+    def test_a_sample_without_a_known_preprocessing_gets_no_rate(self, cataloging, assembly_core):
+        (cataloging / "cataloging.tsv").write_text(
+            "assembly\tassembly_length\tsample_mapping_rates\n"
+            "EHA00405\t123456\tEHI99999:87.5\n"
+        )
+        assert _binning_output(cataloging, assembly_core) == 0
+        assert assembly_core.rows("assembly_samples") == []
 
-        fake = FakeCoreClient()
-        original = fake.upsert
-        fake.upsert = lambda changes: (_ for _ in ()).throw(CoreError("down")) \
-            if changes and changes[0][0] == "mags" else original(changes)
+    def test_the_batch_is_done(self, cataloging, assembly_core):
+        assert _binning_output(cataloging, assembly_core) == 0
+        done = assembly_core.rows("assembly_batches")[-1]
+        assert done["key"] == {"code": "ABB0700"}
+        assert done["values"] == {"status": "Done", "ehio_version": cli.__version__,
+                                  "drakkar_version": "2.5.0"}
+
+    def test_a_mag_write_failure_fails_the_batch(self, cataloging, assembly_core):
+        original = assembly_core.upsert
+        def fail_mags(changes):
+            if changes and changes[0][0] == "mags":
+                raise CoreError("down")
+            return original(changes)
+        assembly_core.upsert = fail_mags
         with pytest.raises(CoreError):
-            self._run(cataloging, binning_airtable, fake)
-
-
-# ---------------------------------------------------------------------------
-# quantifying --output: mappings under Airtable's codes, and the MAGs kept
-# ---------------------------------------------------------------------------
-
-QUANTIFYING_CFG = {
-    **SFTP,
-    "MAG_BASE": "appMAG",
-    "MAG_DMB_BATCH": "tblDMB",
-    "MAG_DMB_ENTRY": "tblDM",
-    "MAG_PPR": "tblPPR",
-    "MAG_DMB_BATCH_CODE": "fldDMBCODE",
-    "MAG_DMB_BATCH_LIST_PPR": "fldPPRS",
-    "MAG_DMB_BATCH_STATUS": "fldDMBSTATUS",
-    "MAG_PPR_EHI": "fldPPREHI",
-    "MAG_PPR_CODE": "fldPPRCODE",
-    "MAG_DMB_ENTRY_BATCH": "fldDMLINK",
-    "MAG_DMB_ENTRY_PPR": "fldDMPPR",
-    "MAG_DMB_ENTRY_CODE": "fldDMCODE",
-    "MAG_DMB_ENTRY_MAPPING_RATE": "fldRATE",
-}
+            _binning_output(cataloging, assembly_core)
 
 
 @pytest.fixture
@@ -250,173 +148,70 @@ def profiling(tmp_path: Path) -> Path:
     return tmp_path
 
 
-@pytest.fixture
-def quantifying_airtable():
-    client = MagicMock()
-    client.fetch_batch_record.return_value = {"id": "recDMB", "fields": {"fldDMBCODE": "DMB0300", "fldPPRS": ["recP1"]}}
-    client.fetch_record_by_id.side_effect = lambda table, rec_id: {
-        "id": "recP1", "fields": {"fldPPREHI": ["EHI00001"], "fldPPRCODE": "PR00001"},
-    }
-    client._table.return_value.all.return_value = []
-    client.create_records.return_value = [
-        {"id": "recDM1", "fields": {"fldDMPPR": ["recP1"], "fldDMCODE": "DM00042"}},
-    ]
-    return client
+def test_quantifying_mappings_and_kept_mags_reach_the_core(profiling):
+    fake = FakeCoreClient(
+        mags=[{"code": "EHM000001", "name": "EHA00405_bin_1.fa"},
+              {"code": "EHM000002", "name": "EHA00405_bin_2.fa"}],
+        batches={"DMB0300": {"row": {"code": "DMB0300"}, "entries": [
+            {"code": "DM00042", "preprocessing_code": "PR00001", "hologenome_code": "EHI00001"},
+        ]}},
+    )
+    with _configured(fake), _sftp():
+        assert cli._run_quantifying_output(_output_args(profiling, "DMB0300")) == 0
+    [mapping] = fake.rows("dereplication_mappings")
+    assert mapping["key"] == {"batch_id": "DMB0300", "preprocessing_id": "PR00001"}
+    assert mapping["values"] == {"mapping_rate": 71.5}
+    assert fake.links == [("DMB0300", [], ["EHM000001"])]
+    assert fake.rows("dereplication_batches")[-1]["values"]["status"] == "Done"
 
 
-class TestQuantifyingOutput:
-    def test_mappings_keep_airtables_codes_and_kept_mags_are_marked(self, profiling, quantifying_airtable):
-        fake = FakeCoreClient([
-            {"code": "EHM000001", "name": "EHA00405_bin_1.fa"},
-            {"code": "EHM000002", "name": "EHA00405_bin_2.fa"},
-        ])
-        args = _binning_args(profiling)
-        args.batch = "DMB0300"
-        patches = [*_patched(QUANTIFYING_CFG, quantifying_airtable), _sftp(), using(fake)]
-        assert _run(patches, lambda: cli._run_quantifying_output(args)) == 0
-
-        [mapping] = fake.rows("dereplication_mappings")
-        assert mapping["key"] == {"batch_id": "DMB0300", "preprocessing_id": "PR00001", "code": "DM00042"}
-        assert mapping["values"] == {"mapping_rate": 71.5}
-        assert fake.links == [("DMB0300", [], ["EHM000001"])]
-        assert fake.rows("dereplication_batches")[-1]["values"]["status"] == "Done"
+@pytest.mark.parametrize("module,batch,table", [
+    ("preprocessing", "PRB0500", "preprocessing_batches"),
+    ("binning", "ABB0729", "assembly_batches"),
+    ("quantifying", "DMB0300", "dereplication_batches"),
+    ("amr", "AMR001", "amr_batches"),
+])
+def test_set_status_reaches_core(module, batch, table):
+    fake = FakeCoreClient()
+    args = argparse.Namespace(module=module, batch=batch, status="Error",
+                              failures_dir=None, failures_since=None, core_token=None)
+    with _configured(fake):
+        assert cli.cmd_set_status(args) == 0
+    assert fake.rows(table)[0] == {"key": {"code": batch}, "values": {"status": "Error"}, "defaults": {}}
 
 
-# ---------------------------------------------------------------------------
-# set-status and stop
-# ---------------------------------------------------------------------------
+def test_set_status_accepts_legacy_failure_options(capsys):
+    args = cli._build_parser().parse_args([
+        "set-status", "--module", "preprocessing", "--batch", "PRB0500",
+        "--status", "Error", "--failures-dir", "x", "--failures-since", "y",
+    ])
+    fake = FakeCoreClient()
+    with _configured(fake):
+        assert args.func(args) == 0
+    assert fake.rows("preprocessing_batches")[0]["values"] == {"status": "Error"}
+    with pytest.raises(SystemExit) as exc:
+        cli._build_parser().parse_args(["set-status", "--help"])
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--failures-dir" not in help_text
+    assert "--failures-since" not in help_text
 
-# Airtable still set up for every module: the keys that say a module's
-# batches are looked for there at all.
-AIRTABLE_ON = {
-    "EHI_BASE": "app1", "MAG_BASE": "app2",
-    "EHI_PPR_BATCH": "tblPPR", "EHI_ASB_BATCH": "tblASB",
-    "MAG_DMB_BATCH": "tblDMB", "EHI_AMR_BATCH": "tblAMR",
-    "EHI_PPR_BATCH_CODE": "fldPPR", "EHI_ASB_BATCH_CODE": "fldASB",
-    "MAG_DMB_BATCH_CODE": "fldDMB", "EHI_AMR_BATCH_CODE": "fldAMR",
-}
+
+def test_a_core_status_failure_is_reported(capsys):
+    fake = FakeCoreClient()
+    fake.upsert = MagicMock(side_effect=CoreError("ehi-core is down"))
+    args = argparse.Namespace(module="binning", batch="ABB0729", status="Error",
+                              failures_dir=None, failures_since=None, core_token=None)
+    with _configured(fake), pytest.raises(CoreError):
+        cli.cmd_set_status(args)
+    assert "status →" not in capsys.readouterr().err
 
 
-class TestStatus:
-    def test_set_status_reaches_the_core(self):
-        airtable = MagicMock()
-        airtable.fetch_batch_record.return_value = {"id": "recDMB", "fields": {}}
-        fake = FakeCoreClient()
-        args = argparse.Namespace(
-            module="quantifying", batch="DMB0300", status="Annotating taxonomy",
-            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
-        )
-        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
-        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
-        assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
-        [row] = fake.rows("dereplication_batches")
-        assert row["key"] == {"code": "DMB0300"}
-        assert row["values"] == {"status": "Annotating taxonomy"}
-
-    def test_a_module_switched_off_in_airtable_sets_its_status_in_the_core_alone(self):
-        """Emptying MAG_DMB_BATCH moves DMB batches to the core: the status, and
-        the exit trap of a failed run, must not go looking for the Airtable table."""
-        airtable = MagicMock()
-        fake = FakeCoreClient()
-        args = argparse.Namespace(
-            module="quantifying", batch="DMB0157", status="Annotating function",
-            failures_dir="/runs/DMB0157", failures_since=None, airtable_token=None, core_token=None,
-        )
-        patches = [*_patched({**AIRTABLE_ON, "MAG_DMB_BATCH": ""}, airtable), using(fake)]
-        assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
-        airtable.fetch_batch_record.assert_not_called()
-        airtable.update_records.assert_not_called()
-        [row] = fake.rows("dereplication_batches")
-        assert (row["key"], row["values"]) == ({"code": "DMB0157"}, {"status": "Annotating function"})
-
-    def test_a_core_that_is_down_does_not_stop_a_status_change(self, capsys):
-        from ehio.core import CoreError
-
-        airtable = MagicMock()
-        airtable.fetch_batch_record.return_value = {"id": "recPRB", "fields": {}}
-        fake = FakeCoreClient()
-        fake.upsert = MagicMock(side_effect=CoreError("ehi-core is down"))
-        args = argparse.Namespace(
-            module="preprocessing", batch="PRB0001", status="Error",
-            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
-        )
-        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
-        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
-        assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
-        airtable.update_records.assert_called_once()
-        assert "ehi-core is down" in capsys.readouterr().err
-
-    def test_a_batch_only_the_core_holds_still_reaches_its_status(self):
-        """A batch created in ehi-core has no Airtable record, and the exit trap
-        of a failed run has nothing else to report its error to."""
-        airtable = MagicMock()
-        airtable.fetch_batch_record.return_value = None
-        fake = FakeCoreClient()
-        args = argparse.Namespace(
-            module="preprocessing", batch="PRB0500", status="Error",
-            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
-        )
-        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
-        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
-        assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
-        airtable.update_records.assert_not_called()
-        [row] = fake.rows("preprocessing_batches")
-        assert (row["key"], row["values"]) == ({"code": "PRB0500"}, {"status": "Error"})
-
-    def test_a_batch_only_the_core_holds_is_not_reported_set_when_the_core_refuses(self, capsys):
-        from ehio.core import CoreError
-
-        airtable = MagicMock()
-        airtable.fetch_batch_record.return_value = None
-        fake = FakeCoreClient()
-        fake.upsert = MagicMock(side_effect=CoreError("ehi-core is down"))
-        args = argparse.Namespace(
-            module="binning", batch="ABB0729", status="Error",
-            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
-        )
-        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
-        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
-        with pytest.raises(CoreError):
-            _run(patches, lambda: cli.cmd_set_status(args))
-        assert "status →" not in capsys.readouterr().err
-
-    def test_a_batch_neither_database_holds_is_reported(self, capsys):
-        airtable = MagicMock()
-        airtable.fetch_batch_record.return_value = None
-        fake = FakeCoreClient()   # every upsert comes back as "created"
-        args = argparse.Namespace(
-            module="preprocessing", batch="PRB9999", status="Error",
-            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
-        )
-        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
-        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
-        assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
-        assert "held no batch 'PRB9999' either" in capsys.readouterr().err
-
-    def test_without_the_core_a_batch_airtable_lacks_is_still_an_error(self):
-        airtable = MagicMock()
-        airtable.fetch_batch_record.return_value = None
-        args = argparse.Namespace(
-            module="preprocessing", batch="PRB0500", status="Error",
-            failures_dir=None, failures_since=None, airtable_token=None, core_token=None,
-        )
-        patches = [*_patched(AIRTABLE_ON, airtable)]
-        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
-        with pytest.raises(SystemExit):
-            _run(patches, lambda: cli.cmd_set_status(args))
-
-    def test_a_failure_report_needs_an_airtable_record_to_attach_to(self, capsys):
-        airtable = MagicMock()
-        airtable.fetch_batch_record.return_value = None
-        fake = FakeCoreClient()
-        args = argparse.Namespace(
-            module="preprocessing", batch="PRB0500", status="Error",
-            failures_dir="/tmp/logging", failures_since=None,
-            airtable_token=None, core_token=None,
-        )
-        patches = [*_patched(AIRTABLE_ON, airtable), using(fake)]
-        patches[3] = patch.object(cli, "_require_cfg", side_effect=lambda k: f"<{k}>")
-        with patch.object(cli, "_upload_failure_report") as upload:
-            assert _run(patches, lambda: cli.cmd_set_status(args)) == 0
-        upload.assert_not_called()
-        assert "needs an Airtable record" in capsys.readouterr().err
+def test_set_status_reports_a_batch_missing_from_core(capsys):
+    fake = FakeCoreClient()
+    args = argparse.Namespace(module="preprocessing", batch="PRB9999", status="Error",
+                              failures_dir=None, failures_since=None, core_token=None)
+    with _configured(fake):
+        assert cli.cmd_set_status(args) == 0
+    assert "held no batch 'PRB9999'" in capsys.readouterr().err
+    assert fake.rows("preprocessing_batches")[0]["values"] == {"status": "Error"}

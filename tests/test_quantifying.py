@@ -1,58 +1,51 @@
-"""Tests for the MAG_DMB_ENTRY records 'ehio quantifying --output' writes."""
+"""Core-only quantifying output keeps measured rates on preprocessing entries."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import argparse
+from pathlib import Path
+from unittest.mock import patch
 
-from ehio import config as cfg
-from ehio.cli import _create_airtable_mappings
-
-
-BATCH = {"id": "recBATCH"}
-
-
-def _ppr(rec_id: str, sample: str, ehi_field: str) -> dict:
-    return {"id": rec_id, "fields": {ehi_field: sample}}
+from ehio import cli
+from tests.fake_core import FakeCoreClient
+from tests.test_core_only import CONFIG, run
 
 
-def _client(existing: list[dict]) -> MagicMock:
-    client = MagicMock()
-    client._table.return_value.all.return_value = existing
-    return client
+def _args(directory: Path) -> argparse.Namespace:
+    return argparse.Namespace(
+        batch="DMB001", local_dir=str(directory), input=False, output=True,
+        skip_derep=False, rerun=False, core_token=None,
+        host=None, user=None, port=None, identity=None, remote_dir=None, verbose=False,
+    )
 
 
-def test_existing_records_without_a_rate_get_the_measured_one():
-    """A batch whose output step ran before its reads were mapped left its
-    records without a rate; running the step again fills them in."""
-    ehi_field  = "EHI_NUMBER"
-    ppr_field  = cfg.get("MAG_DMB_ENTRY_PPR")
-    rate_field = cfg.get("MAG_DMB_ENTRY_MAPPING_RATE")
-    ppr_records = [_ppr("recP1", "EHI001", ehi_field), _ppr("recP2", "EHI002", ehi_field)]
-    existing = [
-        {"id": "recD1", "fields": {ppr_field: ["recP1"]}},
-        {"id": "recD2", "fields": {ppr_field: ["recP2"], rate_field: 55.0}},
+def _core() -> FakeCoreClient:
+    return FakeCoreClient(batches={"DMB001": {
+        "row": {"code": "DMB001"},
+        "entries": [
+            {"preprocessing_code": "PR00001", "hologenome_code": "EHI001"},
+            {"preprocessing_code": "PR00002", "hologenome_code": "EHI002"},
+        ],
+    }})
+
+
+def test_measured_rates_are_written_for_each_preprocessing(tmp_path):
+    (tmp_path / "profiling_genomes.tsv").write_text(
+        "sample\tmapping_percentage\nEHI001\t71.2\nEHI002\t55.0\n")
+    fake = _core()
+    with patch.object(cli, "_get_drakkar_version", return_value="2.5.0"):
+        assert run(CONFIG, fake, lambda: cli._run_quantifying_output(_args(tmp_path))) == 0
+    assert [(row["key"]["preprocessing_id"], row["values"])
+            for row in fake.rows("dereplication_mappings")] == [
+        ("PR00001", {"mapping_rate": 71.2}),
+        ("PR00002", {"mapping_rate": 55.0}),
     ]
-    metrics = {"EHI001": {"mapping_rate": 71.2}, "EHI002": {"mapping_rate": 55.0}}
-    client = _client(existing)
-
-    _create_airtable_mappings(client, "DMB001", BATCH, ppr_records, metrics, ehi_field)
-
-    client.create_records.assert_not_called()
-    client.update_records.assert_called_once_with(
-        cfg.get("MAG_DMB_ENTRY"),
-        [{"id": "recD1", "fields": {rate_field: 71.2}}],
-    )
 
 
-def test_a_missing_rate_does_not_blank_an_existing_one():
-    ehi_field  = "EHI_NUMBER"
-    ppr_field  = cfg.get("MAG_DMB_ENTRY_PPR")
-    rate_field = cfg.get("MAG_DMB_ENTRY_MAPPING_RATE")
-    existing = [{"id": "recD1", "fields": {ppr_field: ["recP1"], rate_field: 60.0}}]
-    client = _client(existing)
-
-    _create_airtable_mappings(
-        client, "DMB001", BATCH, [_ppr("recP1", "EHI001", ehi_field)], {}, ehi_field,
-    )
-
-    client.update_records.assert_not_called()
+def test_missing_rate_does_not_write_a_mapping_value(tmp_path):
+    (tmp_path / "profiling_genomes.tsv").write_text(
+        "sample\tmapping_percentage\nEHI001\tNA\n")
+    fake = _core()
+    with patch.object(cli, "_get_drakkar_version", return_value="2.5.0"):
+        assert run(CONFIG, fake, lambda: cli._run_quantifying_output(_args(tmp_path))) == 0
+    assert all("mapping_rate" not in row["values"] for row in fake.rows("dereplication_mappings"))

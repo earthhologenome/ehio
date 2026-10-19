@@ -1,378 +1,60 @@
 # ehio configuration file
 # Edit this file with: ehio config --edit
-# All values can also be overridden with CLI flags.
+# Pipeline tokens are read from EHI_CORE_PIPELINE or EHI_CORE_TOKEN.
 
-# Airtable personal access token
-# Provide via the AIRTABLE_TOKEN environment variable or the --airtable-token flag.
-# Do NOT store the token here.
-
-# ---- Airtable database structure ------------------------------------------
-# Two bases define the full database layout.
-# Preprocessing, binning and amr read from EHI_BASE; quantifying reads from
-# MAG_BASE. Binning output also writes MAG metadata to MAG_BASE.
-
-EHI_BASE:    "appQpr6MxnaiVHsHy"   # EHI database
-MAG_BASE:    "appWbHBNLE6iAsMRV"   # MAG database
-
-EHI_PPR_BATCH:  "tbl1l5mAkF9nVtisn"  # Preprocessing batch table (EHI_BASE)
-EHI_PPR_ENTRY:  "tblJfLRU2FIVz37Y1"  # Preprocessing entry table (EHI_BASE)
-EHI_ASB_BATCH:  "tbld5JHhN4cM9P5ka"  # Assembly/binning batch table (EHI_BASE)
-EHI_ASB_ENTRY:  "tblG6ZIvkYN844I97"  # Assembly/binning entry table (EHI_BASE)
-EHI_GENOME:     "tbl7QOk2HKrZatIfG"  # Reference genome table (MAG_BASE)
-# DMB batches live in ehi-core alone: Airtable's batch table (tblvPsCiNanM7NeQp)
-# is switched off by leaving this empty.
-MAG_DMB_BATCH:  ""                   # Dereplication/mapping batch table (MAG_BASE)
-MAG_DMB_ENTRY:  "tblWDyQmM9rQ9wq57"  # Dereplication/mapping entry table (MAG_BASE)
-MAG_ENTRY:      "tblMzd3oyaJhdeQcs"  # MAG genome table (MAG_BASE)
-MAG_PPR:        "tblkmD4y0fZ6P8XRf"  # MAG preprocessing table (MAG_BASE) 
-
-# ---- Preprocessing module -------------------------------------------------
-# Input: fetch raw reads from EHI_PPR_ENTRY, write a drakkar sample file
-# Output: transfer preprocessed reads via SFTP, mark entries as processed in EHI_PPR_ENTRY
-
-EHI_PPR_BATCH_ID: "fldzSmQGNOoTv66kD"  # Field in EHI_PPR_BATCH  with the batch record ID (for logging)
-EHI_PPR_BATCH_CODE: "fldeNHpDmJDinU1Uc"  # Field in EHI_PPR_BATCH with the batch code (primary key, for logging)
-EHI_PPR_BATCH_DATE: "fldeREiHHPmtwY3Qp" # Field in EHI_PPR_BATCH with the batch date (for logging)
-EHI_PPR_BATCH_STATUS: "fldhFIPsoslCbCyfo" # Field in EHI_PPR_BATCH with the batch status (for scanning and logging)
-EHI_PPR_BATCH_REFERENCE: "fldPte4nQtlSfen8B"  # Field in EHI_PPR_BATCH with the host reference genome URL (leave empty if unused)
-EHI_PPR_BATCH_EHIO_VERSION: "fld6h9dtLWrLIdxHk" # Field in EHI_PPR_BATCH with the ehio version used for preprocessing (for logging)
-EHI_PPR_BATCH_DRAKKAR_VERSION: "fldQXFuzvLSpM9BIQ" # Field in EHI_PPR_BATCH with the drakkar version used for preprocessing (for logging)
-EHI_PPR_BATCH_BOOST_TIME: "fldwB7NVjqdyzmbSr" # Field in EHI_PPR_BATCH with the time boost value passed to drakkar (for processing)
-EHI_PPR_BATCH_BOOST_MEMORY: "fldxmytMjHeuCO0hP" # Field in EHI_PPR_BATCH with the memory boost value passed to drakkar (for processing)
-EHI_PPR_BATCH_ERROR_FILES: "fldYTr2xu1zL6LiwK" # Attachment field in EHI_PPR_BATCH where the drakkar failure report is uploaded on error (leave empty if unused)
-
-EHI_PPR_ENTRY_ID: "fld9c9LFKKxKSKJ1U"  # Field in EHI_PPR_ENTRY with the entry record ID (for logging)
-EHI_PPR_ENTRY_CODE: "fldNGN3g6Lvqo4ySR" # Field in EHI_PPR_ENTRY with the entry code (primary key, for logging)
-EHI_PPR_ENTRY_BATCH: "fld2lF4Tj0MQ82HIg" # Field in EHI_PPR_ENTRY with the linked batch record ID, i.e. EHI_PPR_BATCH_ID (for processing)
-EHI_PPR_ENTRY_EHI_NUMBER: "fldng0Aq1mPUjyfvQ" # Field in EHI_PPR_ENTRY with the EHI number (for logging)
-EHI_PPR_ENTRY_RAW_FILE_FORWARD: "fldSsNtgHYgxRaYxN" # Field in EHI_PPR_ENTRY with the forward reads file URL or path
-EHI_PPR_ENTRY_RAW_FILE_REVERSE: "fldMmJiQLVVoJOAjF"  # Field in EHI_PPR_ENTRY with the reverse reads file URL or path
-EHI_PPR_ENTRY_READS_PRE_FASTP: "fldmD0Z4dNmEc0Uri" # Field in EHI_PPR_ENTRY with the number of reads in the raw reads (for logging)
-EHI_PPR_ENTRY_BASES_PRE_FASTP: "fldr638pZxmV2LsBZ" # Field in EHI_PPR_ENTRY with the number of bases in the raw reads (for logging)
-EHI_PPR_ENTRY_ADAPTER_TRIMMED_READS: "fldtiEgq84YUCgOzd" # Field in EHI_PPR_ENTRY with the number of reads with adapters trimmed (for logging)
-EHI_PPR_ENTRY_ADAPTER_TRIMMED_BASES: "fldKQwge0das5oC7a" # Field in EHI_PPR_ENTRY with the number of bases in the reads with adapters trimmed (for logging)
-EHI_PPR_ENTRY_READS_POST_FASTP: "fld3g3ZNUyoN8tY36" # Field in EHI_PPR_ENTRY with the number of reads in the preprocessed reads (for logging)
-EHI_PPR_ENTRY_BASES_POST_FASTP: "fldqOODWP4U8cP2z4" # Field in EHI_PPR_ENTRY with the number of bases in the preprocessed reads (for logging)
-EHI_PPR_ENTRY_HOST_READS: "fldn94xR5b0UQA82E" # Field in EHI_PPR_ENTRY with the number of host reads (fill in Airtable field ID to enable)
-EHI_PPR_ENTRY_HOST_BASES: "fldJdI34Lp7rB4vN7" # Field in EHI_PPR_ENTRY with the number of host bases (fill in Airtable field ID to enable)
-EHI_PPR_ENTRY_METAGENOMIC_READS: "fldzI8PYD9asJYIkN" # Field in EHI_PPR_ENTRY with the number of reads in the preprocessed reads that are metagenomic (for logging)
-EHI_PPR_ENTRY_METAGENOMIC_BASES: "fldtB7Y7PSzpdSKUa" # Field in EHI_PPR_ENTRY with the number of reads in the preprocessed reads that are metagenomic (for logging)
-EHI_PPR_ENTRY_SINGLEM_FRACTION: "fldm3dHUMQ8X9fWoj" # Field in EHI_PPR_ENTRY with the fraction of reads in the preprocessed reads that are singletons (for logging)
-EHI_PPR_ENTRY_NONPAREIL_C: "fldZOMGo3dzkdAqFB" # Field in EHI_PPR_ENTRY with the Nonpareil coverage of the preprocessed reads (for logging)
-EHI_PPR_ENTRY_NONPAREIL_LR: "fldxG0DncPx0pbbqk" # Field in EHI_PPR_ENTRY with the Nonpareil redundancy (LR) of the preprocessed reads (for logging)
-EHI_PPR_ENTRY_NONPAREIL_MODELR: "fldL68iMkAgg37klM" # Field in EHI_PPR_ENTRY with the Nonpareil model redundancy (modelR) of the preprocessed reads (for logging)
-EHI_PPR_ENTRY_NONPAREIL_LRSTAR: "fldD7bxg9zjsytjnO" # Field in EHI_PPR_ENTRY with the Nonpareil LR* of the preprocessed reads (for logging)
-EHI_PPR_ENTRY_NONPAREIL_DIVERSITY: "fldkf6rvVabQI0bcK" # Field in EHI_PPR_ENTRY with the Nonpareil diversity of the preprocessed reads (for logging)
-
-EHI_GENOME_ID: "fldcZWcu2ybJobGO4" # Field in EHI_GENOME with the reference genome record ID (for logging)
-EHI_GENOME_CODE: "fldNRG6HScrWuDn5i" # Field in EHI_GENOME with the reference genome code (primary key, for processing and logging)
-EHI_GENOME_INDEX_STATUS: "fldZRnO9nA3DfJ4iL" # Field in EHI_GENOME with the reference genome indexing status (read-only; ehio writes EHI_GENOME_INDEXED instead)
-EHI_GENOME_URL_INDEXED: "fldWXsYf6OlpWxUUQ" # Field in EHI_GENOME with the URL or path to the indexed genome, tar.gz (for processing and logging)
-EHI_GENOME_URL_RAW: "fldZ6V4yVA4dPtsIJ" # Field in  EHI_GENOME with the URL or path to the raw genome assembly, fna.gz (for logging)
-
-# Reference genome indexing.
-# A batch whose genome has no EHI_GENOME_URL_INDEXED runs with drakkar -r, which
-# rebuilds the Bowtie2 index from the raw FASTA. 'ehio preprocessing --output'
-# archives that index, uploads it to {SFTP_REMOTE_BASE}/{SFTP_REMOTE_REFERENCE_DIR}/{code}.tar.gz
-# and flags the genome as indexed, so every later batch on the same host uses -x.
-# The flag lives in the master reference genome table, which is in its own base.
-SFTP_REMOTE_REFERENCE_DIR: "GEN"  # Subfolder of SFTP_REMOTE_BASE holding the indexed genomes
-EHI_GENOME_INDEX_BASE: "app6ADWyLxBkDcqYX"   # Base holding the master reference genome table
-EHI_GENOME_INDEX_TABLE: "tbl1t5vnst50DjT9A"  # Master reference genome table (writable)
-EHI_GENOME_INDEX_CODE: "Code"                # Field (id or name) in that table with the genome code, used to find the record
-EHI_GENOME_INDEXED: "fldLbMhCwARPB131W"      # Field in that table set once the index is on ERDA
-EHI_GENOME_INDEXED_VALUE: "YES"              # Value written to EHI_GENOME_INDEXED
-
-# ---- Binning module -------------------------------------------------------
-# Input: fetch preprocessed reads from EHI_ASB_ENTRY, write a drakkar sample file
-# Output: transfer bins (MAGs) via SFTP, mark entries as processed in EHI_ASB_ENTRY,
-#         and write MAG metadata to MAG_BASE
-
-EHI_ASB_BATCH_ID: "fldqKiqvlAMXcS2l6" # Field in EHI_ASB_BATCH  with the batch record ID (for processing and logging)
-EHI_ASB_BATCH_CODE: "fldBV65e7paYvGCwQ"  # Field in EHI_ASB_BATCH with the batch code (primary key, for processing and logging)
-EHI_ASB_BATCH_DATE: "fldjrdzUdYVoPOQid" # Field in EHI_ASB_BATCH with the batch date (for logging)
-EHI_ASB_BATCH_STATUS: "fldqtozTLIRTzKiac" # Field in EHI_ASB_BATCH with the batch status (for scanning, processing and logging)
-# Assembly type of the batch: Individual, Coassembly or Multicoverage.
-# The grouping itself comes from the assembly codes of the entries — entries
-# sharing a code are co-assembled by drakkar — and this field declares what that
-# grouping is meant to be. Multicoverage adds -c to 'drakkar cataloging', which
-# maps every sample of the batch to every individual assembly before binning;
-# it requires one assembly code per entry, and 'ehio binning --input' refuses
-# the batch otherwise.
-EHI_ASB_BATCH_TYPE: "fldNQm1mdTIKkGaVC" # Field in EHI_ASB_BATCH with the batch type (for processing)
-EHI_ASB_BATCH_EHIO_VERSION: "fldehAA7O6ndnOqMQ" # Field in EHI_ASB_BATCH with the ehio version used for cataloging (for logging)
-EHI_ASB_BATCH_DRAKKAR_VERSION: "fldWvZyrMKf3DRKgD" # Field in EHI_ASB_BATCH with the drakkar version used for cataloging (for logging)
-EHI_ASB_BATCH_BOOST_TIME: "fldAWH3ThmXdLmXNO" # Field in EHI_ASB_BATCH with the time boost value passed to drakkar (for processing)
-EHI_ASB_BATCH_BOOST_MEMORY: "fld097CY62eALUWBp" # Field in EHI_ASB_BATCH with the memory boost value passed to drakkar (for processing)
-EHI_ASB_BATCH_ERROR_FILES: "" # Attachment field in EHI_ASB_BATCH where the drakkar failure report is uploaded on error (leave empty if unused)
-
-EHI_ASB_ENTRY_ID: "fld7Nj5uaCBktk00s"  # Field in EHI_ASB_ENTRY with the entry record ID (for processing and logging)
-EHI_ASB_ENTRY_CODE: "fldr9ObDHV3TWAu8n" # Field in EHI_ASB_ENTRY with the entry code (primary key, for processing and logging)
-EHI_ASB_ENTRY_BATCH: "fldG157uPStteBDSL" # Field in EHI_ASB_ENTRY with the linked batch record ID, i.e. EHI_ASB_BATCH_ID (for processing)
-EHI_ASB_ENTRY_EHI_NUMBER: "fldxt8zSwSPioQMAI" # Field in EHI_ASB_ENTRY with the EHI number (for logging)
-EHI_ASB_ENTRY_ASSEMBLY_CODE: "fldr9ObDHV3TWAu8n" # Field in EHI_ASB_ENTRY with the assembly code (primary key, for processing and logging; same as entry code since one entry = one assembly)
-EHI_ASB_ENTRY_ASSEMBLY_LENGTH: "fldEbvAMXXpBHbsMD" # Field in EHI_ASB_ENTRY with the total length of the assembly (for logging)
-EHI_ASB_ENTRY_ASSEMBLY_N50: "fldJGlKPtALADiZH1" # Field in EHI_ASB_ENTRY with the N50 of the assembly (for logging)
-EHI_ASB_ENTRY_ASSEMBLY_L50: "fldEGMn73XVjKMoAt" # Field in EHI_ASB_ENTRY with the L50 of the assembly (for logging)
-EHI_ASB_ENTRY_ASSEMBLY_CONTIGS_NUMBER: "fldqJQKYdYc2PRav2" # Field in EHI_ASB_ENTRY with the number of contigs in the assembly (for logging)
-EHI_ASB_ENTRY_ASSEMBLY_CONTIGS_LARGEST: "fldRDp4DD2d1IMkje" # Field in EHI_ASB_ENTRY with the length of the largest contig in the assembly (for logging)
-EHI_ASB_ENTRY_ASSEMBLY_MAPPING_RATE: "fldr34M6ht8m8D3Xb" # Field in EHI_ASB_ENTRY with the mapping rate of the assembly (for logging)
-EHI_ASB_ENTRY_BINS_NUMBER: "fldCW35Oas5s0Df7G"
-EHI_ASB_ENTRY_READS1: "fldhOqe2A5bbawp54"  # Field in EHI_ASB_ENTRY with the preprocessed forward reads URL
-EHI_ASB_ENTRY_READS2: "fldkxbagzLysSeuyv"  # Field in EHI_ASB_ENTRY with the preprocessed reverse reads URL
-
-MAG_ENTRY_ID: "fldNGbdZaGfDBKB7k" # Field in MAG_ENTRY with the entry record ID (auto-computed, do not write)
-MAG_ENTRY_CODE: "fldkc0amZdshQUwkg" # Field in MAG_ENTRY with the MAG code (auto-computed primary key, do not write)
-MAG_ENTRY_NAME: "fldmvf2UgaZm5AFul" # Field in MAG_ENTRY with the MAG name (for logging)
-MAG_ENTRY_ASSEMBLY: "fldYdvMyK6BYhHyI2" # Field in MAG_ENTRY with the linked assembly record ID, i.e. EHI_ASB_ENTRY_ID (for processing and logging)
-MAG_ENTRY_DOMAIN: "fldkKwS0hxbv3dcKH" # Field in MAG_ENTRY with the MAG domain (for logging)
-MAG_ENTRY_PHYLUM: "fldU99Co1sMcQ0zgR" # Field in MAG_ENTRY with the MAG phylum (for logging)
-MAG_ENTRY_CLASS: "fldrvXVQzX5UTtNYe" # Field in MAG_ENTRY with the MAG class (for logging)
-MAG_ENTRY_ORDER: "fldWJUh1CXvr0F7lx" # Field in MAG_ENTRY with the MAG order (for logging)
-MAG_ENTRY_FAMILY: "flddmoxrsZru1210Z" # Field in MAG_ENTRY with the MAG family (for logging)
-MAG_ENTRY_GENUS: "fld9bUUHxMqbGFc2O" # Field in MAG_ENTRY with the MAG genus (for logging)
-MAG_ENTRY_SPECIES: "fldhUv48Jd0AWlC8d" # Field in MAG_ENTRY with the MAG species (for logging)
-MAG_ENTRY_SIZE: "fld80pFbaVrtbymYm" # Field in MAG_ENTRY with the MAG size (for logging)
-MAG_ENTRY_CONTIGS_NUMBER: "fldxvJOei8D05PmIP" # Field in MAG_ENTRY with the number of contigs in the MAG (for logging)
-MAG_ENTRY_GC: "fldqJ8f45RRaMQLRb" # Field in MAG_ENTRY with the GC content of the MAG (for logging)
-MAG_ENTRY_N50: "fldpWRs7qsXQcHlBo" # Field in MAG_ENTRY with the N50 of the MAG (for logging)
-MAG_ENTRY_CODING_DENSITY: "fldQumcptdDXB1uyt" # Field in MAG_ENTRY with the coding density of the MAG (for logging)
-MAG_ENTRY_GENES_NUMBER: "fldm0bgA0ZTEtimAw" # Field in MAG_ENTRY with the number of genes in the MAG (for logging)
-MAG_ENTRY_GENES_NUMBER_UNANNOTATED: "fldOlbF7xA0dL8Wmf" # Field in MAG_ENTRY with the number of unannotated genes in the MAG (for logging)
-MAG_ENTRY_GENES_KEGG_NUMBER: "fld3edAJAAqbJwkyd" # Field in MAG_ENTRY with the number of genes annotated with KEGG in the MAG (for logging)
-MAG_ENTRY_GTDBTK_VERSION: "fldIP3LZEFMAyqfJt" # Field in MAG_ENTRY with the GTDB-Tk version used for classification (for logging)
-MAG_ENTRY_GTDB_RELEASE: "fldtuf61IraPFgQY4" # Field in MAG_ENTRY with the GTDB release used for classification (for logging)
-MAG_ENTRY_GTDB_FASTANI: "fldj9nwVuS0DGNndi" # Field in MAG_ENTRY with the FastANI result of the closest GTDB reference genome (for logging)
-MAG_ENTRY_GTDB_CLOSEST_ANI: "fldsTSy8J1B73iLsa" # Field in MAG_ENTRY with the ANI of the closest GTDB reference genome (for logging)
-MAG_ENTRY_GTDB_CLOSEST_AF: "fldDT4VsnW4kN5Utk" # Field in MAG_ENTRY with the alignment fraction (AF) of the closest GTDB reference genome (for logging)
-MAG_ENTRY_CHECKM_COMPLETENESS: "fldcFmtnC7wvC05iZ" # Field in MAG_ENTRY with the CheckM completeness of the MAG (for logging)
-MAG_ENTRY_CHECKM_CONTAMINATION: "fldDwHfLHtjaCL12Q" # Field in MAG_ENTRY with the CheckM contamination of the MAG (for logging)
-MAG_ENTRY_URL_FASTA: "fldN9Dh6FXWjV8cOZ" # Field in MAG_ENTRY with the URL or path to the MAG fasta file (for processing and logging)
-MAG_ENTRY_ANNOTATED: "fldlUPEBUKd0PYBHy" # Field in MAG_ENTRY with the annotation status of the MAG (for processing and logging)
-
-# ---- Quantifying module ---------------------------------------------------
-# Input: fetch bin paths and reads from MAG_DMB_ENTRY, write a bins file and a reads sample file
-# Output: transfer coverage/count tables via SFTP, mark entries as processed in MAG_DMB_ENTRY
-
-MAG_DMB_BATCH_ID: "fld1YZGIAqQB19sw8" # Field in MAG_DMB_BATCH  with the batch record ID (for processing and logging)
-MAG_DMB_BATCH_CODE: "fldr36ymPFWzln8dr" # Field in MAG_DMB_BATCH with the batch code (primary key, for processing and logging)
-MAG_DMB_BATCH_DATE: "fld6vUZLQCVHEV98d" # Field in MAG_DMB_BATCH with the batch date (for logging)
-MAG_DMB_BATCH_ANI: "fldZhjmUfIJdDoDw5" # Field in MAG_DMB_BATCH with the ANI threshold used for clustering the MAGs (for logging)
-MAG_DMB_BATCH_TYPE: "fld8RrzDLPGBknh9D" # Field in MAG_DMB_BATCH with the batch type (e.g. "genome, pangenome", for processing)
-MAG_DMB_BATCH_STATUS: "fldryNfc7YGJot4t6" # Field in MAG_DMB_BATCH with the batch status (for scanning, processing and logging)
-MAG_DMB_BATCH_DREP_TRHESHOLD: "fldZhjmUfIJdDoDw5" # Field in MAG_DMB_BATCH with the dRep threshold used for dereplication (for logging)
-MAG_DMB_BATCH_EHIO_VERSION: "fldQlMBHcZxEPA3Qo" # Field in MAG_DMB_BATCH with the ehio version used for profiling (for logging)
-MAG_DMB_BATCH_DRAKKAR_VERSION: "fldc3hlc2e21Ypsyl" # Field in MAG_DMB_BATCH with the drakkar version used for profiling (for logging)
-MAG_DMB_BATCH_LIST_MAGS: "fldR7UBwTItriazqA" # Field in MAG_DMB_BATCH with the linked MAG records of the batch, i.e. a list of MAG_ENTRY_ID (for processing and logging)
-MAG_DMB_BATCH_ANNOTATION_TYPE: "fldfjIvIcr9km5aXg" # Field in MAG_DMB_BATCH with the annotation type to run (kegg, genes, all)
-MAG_DMB_BATCH_TASKS: "" # Field in MAG_DMB_BATCH with what the batch does (dereplicate, profile, taxonomy, function); ehi-core's Tasks, which Airtable does not have. Empty does all four
-MAG_DMB_BATCH_LIST_PPR: "fldz9tQw209jKUDuW" # Field in MAG_DMB_BATCH with the linked MAG_PPR records of the batch, i.e. a list of MAG_PPR_ID (for processing and logging)
-MAG_DMB_BATCH_BOOST_TIME: "fldoDeP1xpEKl144d" # Field in MAG_DMB_BATCH with the time boost value passed to drakkar (for processing)
-MAG_DMB_BATCH_BOOST_MEMORY: "fldAMqZtYYTHQG15r" # Field in MAG_DMB_BATCH with the memory boost value passed to drakkar (for processing)
-MAG_DMB_BATCH_ERROR_FILES: "" # Attachment field in MAG_DMB_BATCH where the drakkar failure report is uploaded on error (leave empty if unused)
-MAG_DMB_BATCH_DEREP_MAGS: "fldzP0UvbMGPnPlYg" # Field in MAG_DMB_BATCH with the number of dereplicated MAG records in the batch, i.e. a list of MAG_ENTRY_ID (for processing and logging; leave empty if unused)
-
-MAG_DMB_ENTRY_ID: "fldGIAejYpkpaws1a" # Field in  MAG_DMB_ENTRY with the entry record ID (for processing and logging)
-MAG_DMB_ENTRY_CODE: "fldbfDFaVIO7OHzN4" # Field in  MAG_DMB_ENTRY with the entry code (primary key, for processing and logging)
-MAG_DMB_ENTRY_BATCH: "fld10ns3lKacZUB5C"  # Field in  MAG_DMB_ENTRY with the linked batch record ID, i.e. MAG_DMB_BATCH_ID (for processing)
-MAG_DMB_ENTRY_PPR: "fldUFSnaBL95qI4LR"  # Field in  MAG_DMB_ENTRY with the linked MAG_PPR record ID, i.e. MAG_PPR_ID (for processing)
-MAG_DMB_ENTRY_MAPPING_RATE: "fldn1if8rjOPiSwmZ" # Field in  MAG_DMB_ENTRY with the mapping rate of the reads to the bins (for logging)
-
-MAG_PPR_ID: "fldKEkQ56TyeDU4mS" # Field in MAG_PPR with the entry record ID (for processing and logging)
-MAG_PPR_CODE: "fldzHlOx3WUE1cFie" # Field in MAG_PPR with the entry code (primary key, for processing and logging)
-MAG_PPR_EHI: "flds92MuRBX7ecKUK" # Field in MAG_PPR with the linked EHI record ID, i.e. EHI_PPR_ENTRY_ID (for processing and logging)
-MAG_PPR_READS1: "fld92nfITR1mMKXjc" # Field in MAG_PPR with the preprocessed forward reads URL (for input)
-MAG_PPR_READS2: "fldPwaMMW43G7J6vO" # Field in MAG_PPR with the preprocessed reverse reads URL (for input)
-
-# ---- AMR module -----------------------------------------------------------
-# Input:  fetch the assemblies linked to an AMR batch, download their FASTAs,
-#         and write a drakkar amr assembly manifest
-# Output: parse amr/amr_qc.tsv, write the per-assembly AMR stats back to
-#         EHI_ASB_ENTRY, transfer the aggregate tables to AMR/{batch} and
-#         attach them to the AMR batch record, and transfer the prodigal gene
-#         calls (.faa, .ffn, gzipped) to AMR/{batch}/genes
-#
-# The AMR batch table lives in EHI_BASE and links to the assembly entries of
-# EHI_ASB_ENTRY, so an assembly can be run through the AMR workflow long after
-# the binning batch that produced it is done.
-
-EHI_AMR_BATCH: "tbllEdFcMpHQ9djBg"  # AMR batch table (EHI_BASE)
-EHI_AMR_BATCH_ID: "flddCuWndpJCfeH9q"  # Field in EHI_AMR_BATCH with the batch record ID (for logging)
-EHI_AMR_BATCH_CODE: "fldX41ymPf4EwhsUR"  # Field in EHI_AMR_BATCH with the batch code (primary key, for processing and logging)
-EHI_AMR_BATCH_DATE: "fldI1EGvr6q4rM8cw"  # Field in EHI_AMR_BATCH with the batch date (for logging)
-EHI_AMR_BATCH_STATUS: "fld8oKt3drlQKJS5R"  # Field in EHI_AMR_BATCH with the batch status (for scanning, processing and logging)
-EHI_AMR_BATCH_LIST_ASSEMBLIES: "fldQ7fIUgGwv84loo"  # Field in EHI_AMR_BATCH with the linked assembly records, i.e. a list of EHI_ASB_ENTRY_ID (for processing)
-EHI_AMR_BATCH_EHIO_VERSION: "fld5ECVssaaQU8DLG"  # Field in EHI_AMR_BATCH with the ehio version used for the AMR run (for logging)
-EHI_AMR_BATCH_DRAKKAR_VERSION: "fldp44z0r0FKuUB6a"  # Field in EHI_AMR_BATCH with the drakkar version used for the AMR run (for logging)
-EHI_AMR_BATCH_BOOST_TIME: "fldGHb5egqxj5MPU7"  # Field in EHI_AMR_BATCH with the time boost value passed to drakkar (for processing)
-EHI_AMR_BATCH_BOOST_MEMORY: "fldDMcB7E8Lq59qct"  # Field in EHI_AMR_BATCH with the memory boost value passed to drakkar (for processing)
-EHI_AMR_BATCH_ERROR_FILES: "fldHwt1O4FNe12t2w"  # Attachment field in EHI_AMR_BATCH where the drakkar failure report is uploaded on error (leave empty if unused)
-
-# Attachment fields in EHI_AMR_BATCH holding the aggregate AMR tables drakkar
-# writes to {output_dir}/amr/. Every file is also transferred to
-# {SFTP_REMOTE_BASE}/AMR/{batch}; a file too large for an Airtable attachment
-# (the API caps the upload at 5 MB of base64) is reported and left on ERDA only.
-# Leave a key empty to skip attaching that file.
-EHI_AMR_BATCH_FILE_DRUG_CLASSES: "fldx0RHT4twLjf8CN"  # amr_drug_classes.tsv.xz
-EHI_AMR_BATCH_FILE_HITS: "fldl6XmzqF8AZ3v9V"  # amr_hits.tsv.xz
-EHI_AMR_BATCH_FILE_LOCI: "fldIqRh0MP4RutGJB"  # amr_loci.tsv.xz
-EHI_AMR_BATCH_FILE_MOBILITY: "fldZpNiGEgoNyZ3A5"  # amr_mobility.tsv.xz
-EHI_AMR_BATCH_FILE_MOBILITY_REGIONS: "fldiCcBztduuIRy8k"  # mobility_regions.tsv.xz
-EHI_AMR_BATCH_FILE_MANIFEST: "fldceAnFVrAZuGyPa"  # {batch}_amr_manifest.yaml (drakkar run provenance)
-
-# Assembly FASTA URL in EHI_ASB_ENTRY. 'drakkar amr' inspects and hashes every
-# assembly before the run and has no downloader of its own, so 'ehio amr --input'
-# downloads each URL into the batch staging directory and writes the local path
-# into the manifest. A cell already holding a local path is used as it is.
-EHI_ASB_ENTRY_ASSEMBLY_URL: "fld8qFX8HYgpzQOM6"
-
-# Per-assembly AMR stats, read from one row of amr/amr_qc.tsv and written back
-# to the assembly record in EHI_ASB_ENTRY.
-EHI_ASB_ENTRY_AMR_AMRFINDER_HITS: "fldGkYD9VSOQ8t0Tc"  # amrfinder_hits
-EHI_ASB_ENTRY_AMR_RGI_HITS: "fld67zhglkouNmpCf"  # rgi_hits
-EHI_ASB_ENTRY_AMR_MOBILITY_REGIONS: "fldMGrcx0q9RnhV0m"  # mobility_regions
-EHI_ASB_ENTRY_AMR_LOCI: "fldWd2K65r7HzqoP7"  # amr_loci
-EHI_ASB_ENTRY_AMR_MULTI_TOOL_LOCI: "fldg26JVzTd21SCnJ"  # multi_tool_loci
-EHI_ASB_ENTRY_AMR_MOBILITY_LINKS: "fld9aNIZXTAyc5dMW"  # mobility_links
-EHI_ASB_ENTRY_AMR_MOBILE_LOCI: "fld5jq9mMekfLevpc"  # mobile_loci
-
-# ---- ENA module -----------------------------------------------------------
-# Deposits the raw reads of the hologenomes of an ENA submission (EHS…) in the
-# European Nucleotide Archive, through ena-upload-cli: a sample, an experiment
-# and a run each, under the ENA study named on the submission. Submissions
-# live in ehi-core alone, and the accessions are written to the hologenomes
-# and their samples there; nothing is read from or written to Airtable. A lab
-# sample is registered once; its later hologenomes are added to the ENA sample
-# it already has.
-#
-# The Webin account is never stored here: export ENA_USERNAME and ENA_PASSWORD,
-# or point ENA_SECRET_FILE at a YAML file holding 'username:' and 'password:'.
-ENA_SECRET_FILE: "/projects/ehi/data/.secret.yml"
-ENA_CENTER: "Earth Hologenome Initiative"  # Center name ENA records the objects under
-ENA_CHECKLIST: "ERC000013"                 # ENA sample checklist (GSC MIxS host associated)
-ENA_PARALLEL_UPLOADS: "2"                  # Lab samples deposited side by side (each one's hologenomes go in turn)
-ENA_KEEP_READS: "false"                    # Keep each hologenome's downloaded reads once ENA holds them
-
-# What ENA is told about each library that ehi-core does not hold: the same
-# for every EHI hologenome so far.
-ENA_LIBRARY_STRATEGY: "WGS"
-ENA_LIBRARY_SELECTION: "RANDOM"
-ENA_LIBRARY_LAYOUT: "PAIRED"
-ENA_INSERT_SIZE: "400"
-
-# What ENA is told about each lab sample comes from the sample the hologenome
-# links to in ehi-core, the core's copy of the laboratory's Samples table
-# (refreshed from Airtable by ehi-core's 'python -m airtable_import sync'):
-# checklist column (as ena-upload-cli's ERC000013 template names it) → column of
-# the sample in ehi-core. Add a line to send another attribute. 'project name'
-# is always the submission's ENA study, and no scientific name is sent: ENA's
-# taxonomy gives it from taxon_id.
-ENA_SAMPLE_FIELDS:
-  sample_description: "description"
-  host subject id: "specimen_code"
-  host common name: "host_common_name"
-  host taxid: "host_taxid"
-  host life stage: "host_life_stage"
-  taxon_id: "taxon_id"
-  collection date: "collection_date"
-  geographic location (country and/or sea): "country"
-  geographic location (latitude): "latitude"
-  geographic location (longitude): "longitude"
-  broad-scale environmental context: "broad_scale_environment"
-  local environmental context: "local_environment"
-  environmental medium: "environmental_medium"
-
-# ---- ehi-core -------------------------------------------------------------
-# ehi-core is the EHI's own database for the bioinformatic pipeline, taking over
-# from the Airtable tables as they run out of room. Batches are still created in
-# Airtable, and everything ehio writes there is written to the core as well:
-# statuses, versions, QC, assembly, AMR and annotation metrics, and the DMB
-# mappings. A batch or entry the core does not hold yet is added from its
-# Airtable record the first time ehio touches it.
-#
-# MAGs live in the core alone: Airtable's MAG table is full, and two databases
-# numbering new MAGs would give one EHM code to two genomes. So 'ehio binning
-# --output' creates new MAGs in the core only, and quantifying and annotating
-# read a DMB batch's MAGs from the core (after copying in the ones linked to the
-# batch in Airtable).
-#
-# The pipeline token is never stored here: Codeome supplies EHI_CORE_PIPELINE,
-# or pass --core-token. EHI_CORE_TOKEN remains a fallback. Until a token is set,
-# ehio runs on Airtable alone and says so. Leave EHI_CORE_URL empty to switch
-# the core off altogether.
-EHI_CORE_URL: "https://ehi-core-backend-874005116816.europe-west1.run.app"
-# While Airtable is still the record, a failed write to the core is reported and
-# the batch carries on. Set to "true" to fail the batch instead (and to require
-# the token). Commands working on MAGs always stop when the core fails.
-EHI_CORE_REQUIRED: "false"
-# ehio jobs write to the core one at a time, so a job finishing while another
-# is writing (a batch of thousands of MAGs takes minutes) waits for its turn.
-# This is how long it waits at the most before giving up on the write.
-EHI_CORE_WAIT_MINUTES: "120"
-# Public address of SFTP_REMOTE_BASE on ERDA. Airtable builds file URLs with
-# formulas; the core stores them, so ehio writes them from this.
-ERDA_SHARE_BASE: "https://sid.erda.dk/share_redirect/BaMZodj9sA"
-# Link field in EHI_ASB_ENTRY pointing at the preprocessed sample
-# (PreprocessedSample). Lets ehio tell the core which preprocessed samples each
-# assembly is built from, and put each sample's mapping rate on it; leave empty
-# to skip both (the rates then stay in Airtable only).
-EHI_ASB_ENTRY_PREPROCESSING: ""
-
-# ---- SFTP settings --------------------------------------------------------
-SFTP_HOST: "io.erda.dk"
-SFTP_USER: "antton.alberdi@snm.ku.dk"
+EHI_CORE_URL: https://ehi-core-backend-874005116816.europe-west1.run.app
+EHI_CORE_WAIT_MINUTES: '120'
+ERDA_SHARE_BASE: https://sid.erda.dk/share_redirect/BaMZodj9sA
+SFTP_HOST: io.erda.dk
+SFTP_USER: antton.alberdi@snm.ku.dk
 SFTP_PORT: 22
-SFTP_IDENTITY: ""                    # Path to SSH private key (leave empty to use SSH agent)
-
-# Remote paths are built at runtime as {SFTP_REMOTE_BASE}/{PREFIX}/{batch_code}:
-#   preprocessing  →  {SFTP_REMOTE_BASE}/PPR/{EHI_PPR_BATCH_CODE}
-#   binning        →  {SFTP_REMOTE_BASE}/ASB/{EHI_ASB_BATCH_CODE}   (assemblies, gzipped, plus the batch summary tables)
-#                     {SFTP_REMOTE_BASE}/MAG/{EHI_ASB_BATCH_CODE}   (bin FASTAs, gzipped)
-#   quantifying    →  {SFTP_REMOTE_BASE}/DMB/{MAG_DMB_BATCH_CODE}
-#   amr            →  {SFTP_REMOTE_BASE}/AMR/{EHI_AMR_BATCH_CODE}         (result tables, batch-prefixed)
-#                     {SFTP_REMOTE_BASE}/AMR/{EHI_AMR_BATCH_CODE}/genes   (prodigal .faa/.ffn gene calls, gzipped)
-SFTP_REMOTE_BASE: "/EarthHologenomeInitiative/Data"
-
-# ---- Local HPC directories (used by scanning) ----------------------------
-# Data output dirs — where drakkar writes its results (-o flag):
-#   preprocessing  →  {EHI_PPR_OUTPUT_BASE}/{EHI_PPR_BATCH_CODE}
-#   binning        →  {EHI_ASB_OUTPUT_BASE}/{EHI_ASB_BATCH_CODE}
-#   quantifying    →  {MAG_DMB_OUTPUT_BASE}/{MAG_DMB_BATCH_CODE}
-#   amr            →  {EHI_AMR_OUTPUT_BASE}/{EHI_AMR_BATCH_CODE}
-#   ena            →  {ENA_OUTPUT_BASE}/{submission code}  (reads while they upload, tables, ENA receipts)
-EHI_PPR_OUTPUT_BASE: "/projects/ehi/data/PPR"
-EHI_ASB_OUTPUT_BASE: "/projects/ehi/data/ASB"
-MAG_DMB_OUTPUT_BASE: "/projects/ehi/data/DMB"
-EHI_AMR_OUTPUT_BASE: "/projects/ehi/data/AMR"
-ENA_OUTPUT_BASE: "/projects/ehi/data/ENA"
-
-# Run dir — where each screen session is launched from:
-#   {RUN_BASE}/{batch_code}  (contains samples.tsv, .snakemake, logs)
-RUN_BASE: "/projects/ehi/data/RUN"
-
-# ---- Scanning module ------------------------------------------------------
-SCANNING_TRIGGER_STATUS: "Ready"     # Batch status value that triggers a launch
-SCANNING_RESUME_STATUS: "Resume"     # Same as Ready — signals an error was fixed and the job should continue from the Snakemake checkpoint
-SCANNING_RERUN_STATUS: "Rerun"       # Deletes the run and output directories and starts from scratch
-# DMB batches only: re-run the annotation half of a finished batch under the
-# current drakkar, without dereplicating or profiling it again.  The genomes
-# are staged back onto the cluster from the batch's counts table on ERDA and
-# their MAG records, then taxonomy, function and cluster annotation run over
-# them.  The counts, the mapping rates and the dereplicated MAG count already
-# in Airtable are left untouched.
-SCANNING_REANNOTATE_STATUS: "Reannotate"
-SCANNING_LAUNCHED_STATUS: "Running"          # Status written back to the batch record after launching
-SCANNING_STOPPED_STATUS: "Stopped"          # Status written when a running batch is killed via ehio stop
-PROCESSING_DONE_STATUS: "Done"              # Status written back to the batch record after output processing completes
-PROCESSING_ERROR_STATUS: "Error"            # Status written back to the batch record if drakkar fails
-DEREPLICATING_RUNNING_STATUS: "Dereplicating"  # Status set at the start of a DMB batch that dereplicates without profiling
-QUANTIFYING_RUNNING_STATUS: "Quantifying"  # Status set at the start of the quantifying script (overrides Running)
-ANNOTATING_TAXONOMY_STATUS: "Annotating taxonomy"  # Status set after quantifying output, before taxonomy annotation
-ANNOTATING_FUNCTION_STATUS: "Annotating function"  # Status set after taxonomy annotation, before functional annotation
-CLEANUP_OUTPUT_DIR: "false"           # Delete the output directory (PPR/ASB/DMB batch folder) after successful transfer (true/false)
-
-DRAKKAR_PROFILE: "slurm"             # Drakkar workflow profile passed to every drakkar command
-DRAKKAR_PPR_FRACTION: "true"         # Pass --fraction to drakkar preprocessing (run SingleM microbial fraction)
-DRAKKAR_PPR_NONPAREIL: "true"        # Pass --nonpareil to drakkar preprocessing (run Nonpareil coverage estimation)
-EHIO_CONDA_ENV: "/projects/alberdilab/data/environments/conda/ehio"              # Conda environment that provides the ehio command (leave empty to skip activation)
-DRAKKAR_CONDA_ENV: "/projects/alberdilab/data/environments/conda/drakkar"        # Conda environment that provides the drakkar command (leave empty to skip activation)
+SFTP_IDENTITY: ''
+SFTP_REMOTE_BASE: /EarthHologenomeInitiative/Data
+SFTP_REMOTE_REFERENCE_DIR: GEN
+EHI_PPR_OUTPUT_BASE: /projects/ehi/data/PPR
+EHI_ASB_OUTPUT_BASE: /projects/ehi/data/ASB
+MAG_DMB_OUTPUT_BASE: /projects/ehi/data/DMB
+EHI_AMR_OUTPUT_BASE: /projects/ehi/data/AMR
+ENA_OUTPUT_BASE: /projects/ehi/data/ENA
+RUN_BASE: /projects/ehi/data/RUN
+SCANNING_TRIGGER_STATUS: Ready
+SCANNING_RESUME_STATUS: Resume
+SCANNING_RERUN_STATUS: Rerun
+SCANNING_REANNOTATE_STATUS: Reannotate
+SCANNING_LAUNCHED_STATUS: Running
+SCANNING_STOPPED_STATUS: Stopped
+PROCESSING_DONE_STATUS: Done
+PROCESSING_ERROR_STATUS: Error
+DEREPLICATING_RUNNING_STATUS: Dereplicating
+QUANTIFYING_RUNNING_STATUS: Quantifying
+ANNOTATING_TAXONOMY_STATUS: Annotating taxonomy
+ANNOTATING_FUNCTION_STATUS: Annotating function
+CLEANUP_OUTPUT_DIR: 'false'
+DRAKKAR_PROFILE: slurm
+DRAKKAR_PPR_FRACTION: 'true'
+DRAKKAR_PPR_NONPAREIL: 'true'
+EHIO_CONDA_ENV: /projects/alberdilab/data/environments/conda/ehio
+DRAKKAR_CONDA_ENV: /projects/alberdilab/data/environments/conda/drakkar
+ENA_SECRET_FILE: /projects/ehi/data/.secret.yml
+ENA_CENTER: Earth Hologenome Initiative
+ENA_CHECKLIST: ERC000013
+ENA_PARALLEL_UPLOADS: '2'
+ENA_KEEP_READS: 'false'
+ENA_LIBRARY_STRATEGY: WGS
+ENA_LIBRARY_SELECTION: RANDOM
+ENA_LIBRARY_LAYOUT: PAIRED
+ENA_INSERT_SIZE: '400'
+ENA_SAMPLE_FIELDS:
+  sample_description: description
+  host subject id: specimen_code
+  host common name: host_common_name
+  host taxid: host_taxid
+  host life stage: host_life_stage
+  taxon_id: taxon_id
+  collection date: collection_date
+  geographic location (country and/or sea): country
+  geographic location (latitude): latitude
+  geographic location (longitude): longitude
+  broad-scale environmental context: broad_scale_environment
+  local environmental context: local_environment
+  environmental medium: environmental_medium

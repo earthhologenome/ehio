@@ -1,4 +1,4 @@
-"""Tests for the drakkar annotating outputs ehio reads back into Airtable."""
+"""Tests for drakkar annotation results written to ehi-core."""
 
 from __future__ import annotations
 
@@ -408,16 +408,7 @@ import pytest
 from ehio import cli
 
 STAGE_CFG = {
-    "MAG_BASE": "appMAG",
-    "MAG_DMB_BATCH": "tblDMB",
-    "MAG_ENTRY": "tblMAG",
-    "MAG_DMB_BATCH_CODE": "fldBATCHCODE",
-    "MAG_DMB_BATCH_LIST_MAGS": "fldMAGS",
-    "MAG_ENTRY_NAME": "fldNAME",
-    "MAG_ENTRY_URL_FASTA": "fldFASTA",
-    "SFTP_HOST": "erda",
-    "SFTP_USER": "user",
-    "SFTP_PORT": "22",
+    "SFTP_HOST": "erda", "SFTP_USER": "user", "SFTP_PORT": "22",
     "SFTP_REMOTE_BASE": "/Data",
 }
 
@@ -429,38 +420,30 @@ COUNTS_TABLE = (
 )
 
 
-@pytest.fixture
-def stage_airtable():
-    client = MagicMock()
-    client.fetch_batch_record.return_value = {
-        "id": "recBATCH",
-        "fields": {"fldBATCHCODE": "DMB0157", "fldMAGS": ["recM1", "recM2", "recM3"]},
-    }
-    mags = {
-        "recM1": {"id": "recM1", "fields": {
-            "fldNAME": "EHA00123_bin_1.fa",
-            "fldFASTA": "https://erda/Data/MAG/ABB0659/EHA00123_bin_1.fa.gz"}},
-        "recM2": {"id": "recM2", "fields": {
-            "fldNAME": "EHA00124_bin_3.fa",
-            "fldFASTA": "https://erda/Data/MAG/ABB0659/EHA00124_bin_3.fa.gz"}},
-        # Linked to the batch but dereplicated away — never staged.
-        "recM3": {"id": "recM3", "fields": {
-            "fldNAME": "EHA00125_bin_2.fa",
-            "fldFASTA": "https://erda/Data/MAG/ABB0659/EHA00125_bin_2.fa.gz"}},
-    }
-    client.fetch_record_by_id.side_effect = lambda table, rec_id: mags.get(rec_id)
+from tests.fake_core import FakeCoreClient, using
 
-    with patch("ehio.airtable.AirtableClient", return_value=client), \
-         patch.object(cli, "_resolve_token", return_value="tok"), \
-         patch.object(cli.cfg, "get", side_effect=lambda k, d=None: STAGE_CFG.get(k, d)), \
-         patch.object(cli, "_require_cfg", side_effect=lambda k: STAGE_CFG[k]):
-        yield client
+STAGE_MAGS = [
+    {"code": "EHM000001", "name": "EHA00123_bin_1.fa",
+     "fasta_url": "https://erda/Data/MAG/ABB0659/EHA00123_bin_1.fa.gz"},
+    {"code": "EHM000002", "name": "EHA00124_bin_3.fa",
+     "fasta_url": "https://erda/Data/MAG/ABB0659/EHA00124_bin_3.fa.gz"},
+    {"code": "EHM000003", "name": "EHA00125_bin_2.fa",
+     "fasta_url": "https://erda/Data/MAG/ABB0659/EHA00125_bin_2.fa.gz"},
+]
+
+
+@pytest.fixture
+def stage_core():
+    fake = FakeCoreClient(STAGE_MAGS, batches={"DMB0157": {"row": {"code": "DMB0157"}}})
+    with patch.object(cli.cfg, "get", side_effect=lambda k, d=None: STAGE_CFG.get(k, d)), \
+         patch.object(cli, "_require_cfg", side_effect=lambda k: STAGE_CFG[k]), using(fake):
+        yield fake
 
 
 def _stage_args(tmp_path: Path, **overrides) -> argparse.Namespace:
     defaults = dict(
         stage=True, input=False, output=False, batch="DMB0157",
-        airtable_token=None, verbose=False,
+        verbose=False,
         annotation_dir=str(tmp_path / "dereplicated_genomes"),
         annotation_file="annotation.tsv", genomes_file=None,
         redownload=False, download_timeout=600.0, connect_timeout=300.0,
@@ -496,7 +479,7 @@ def _fake_download(url, dest, timeout=None, overwrite=False):
 
 
 class TestAnnotatingStage:
-    def test_stages_only_the_dereplicated_genomes(self, tmp_path, stage_airtable):
+    def test_stages_only_the_dereplicated_genomes(self, tmp_path, stage_core):
         ctx, _ = _fake_sftp()
         args = _stage_args(tmp_path)
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
@@ -507,7 +490,7 @@ class TestAnnotatingStage:
         # The third linked MAG is not in the counts table, so it is not staged.
         assert staged == ["EHA00123_bin_1.fa", "EHA00124_bin_3.fa"]
 
-    def test_all_mags_stages_every_mag_without_the_counts_table(self, tmp_path, stage_airtable):
+    def test_all_mags_stages_every_mag_without_the_counts_table(self, tmp_path, stage_core):
         sftp = MagicMock()
         args = _stage_args(tmp_path, all_mags=True)
         with patch("ehio.transfer.SFTPTransfer", sftp), \
@@ -518,7 +501,7 @@ class TestAnnotatingStage:
         assert staged == ["EHA00123_bin_1.fa", "EHA00124_bin_3.fa", "EHA00125_bin_2.fa"]
         sftp.assert_not_called()
 
-    def test_staged_genomes_are_decompressed(self, tmp_path, stage_airtable):
+    def test_staged_genomes_are_decompressed(self, tmp_path, stage_core):
         ctx, _ = _fake_sftp()
         args = _stage_args(tmp_path)
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
@@ -527,7 +510,7 @@ class TestAnnotatingStage:
         text = (Path(args.annotation_dir) / "EHA00123_bin_1.fa").read_text()
         assert text.startswith(">contig_1")
 
-    def test_the_counts_table_of_the_batch_is_read(self, tmp_path, stage_airtable):
+    def test_the_counts_table_of_the_batch_is_read(self, tmp_path, stage_core):
         ctx, xfer = _fake_sftp()
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
              patch("ehio.urls.download_url", side_effect=_fake_download):
@@ -535,7 +518,7 @@ class TestAnnotatingStage:
         remote = xfer.download.call_args[0][0]
         assert remote == "/Data/DMB/DMB0157/DMB0157_counts.tsv.gz"
 
-    def test_a_genome_already_staged_is_not_downloaded_again(self, tmp_path, stage_airtable):
+    def test_a_genome_already_staged_is_not_downloaded_again(self, tmp_path, stage_core):
         args = _stage_args(tmp_path)
         derep = Path(args.annotation_dir)
         derep.mkdir(parents=True)
@@ -554,7 +537,7 @@ class TestAnnotatingStage:
         assert fetched == ["https://erda/Data/MAG/ABB0659/EHA00124_bin_3.fa.gz"]
         assert (derep / "EHA00123_bin_1.fa").read_text() == ">already\nACGT\n"
 
-    def test_redownload_fetches_everything_again(self, tmp_path, stage_airtable):
+    def test_redownload_fetches_everything_again(self, tmp_path, stage_core):
         args = _stage_args(tmp_path, redownload=True)
         derep = Path(args.annotation_dir)
         derep.mkdir(parents=True)
@@ -566,7 +549,7 @@ class TestAnnotatingStage:
             assert cli.cmd_annotating(args) == 0
         assert (derep / "EHA00123_bin_1.fa").read_text().startswith(">contig_1")
 
-    def test_genomes_file_replaces_the_counts_table(self, tmp_path, stage_airtable):
+    def test_genomes_file_replaces_the_counts_table(self, tmp_path, stage_core):
         listing = tmp_path / "genomes.txt"
         listing.write_text("EHA00124_bin_3.fa\n\nEHA00125_bin_2\n")
         args = _stage_args(tmp_path, genomes_file=str(listing))
@@ -576,7 +559,7 @@ class TestAnnotatingStage:
         staged = sorted(p.name for p in Path(args.annotation_dir).glob("*"))
         assert staged == ["EHA00124_bin_3.fa", "EHA00125_bin_2.fa"]
 
-    def test_a_missing_counts_table_is_reported(self, tmp_path, stage_airtable, capsys):
+    def test_a_missing_counts_table_is_reported(self, tmp_path, stage_core, capsys):
         ctx, _ = _fake_sftp(counts_body=None)
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx):
             with pytest.raises(SystemExit):
@@ -585,14 +568,14 @@ class TestAnnotatingStage:
         assert "DMB0157_counts.tsv.gz" in err
         assert "--genomes-file" in err
 
-    def test_an_empty_counts_table_is_reported(self, tmp_path, stage_airtable, capsys):
+    def test_an_empty_counts_table_is_reported(self, tmp_path, stage_core, capsys):
         ctx, _ = _fake_sftp(counts_body="genome\tEHI001\n")
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx):
             with pytest.raises(SystemExit):
                 cli.cmd_annotating(_stage_args(tmp_path))
         assert "no genome names" in capsys.readouterr().err
 
-    def test_a_genome_with_no_mag_record_is_reported(self, tmp_path, stage_airtable, capsys):
+    def test_a_genome_with_no_mag_record_is_reported(self, tmp_path, stage_core, capsys):
         ctx, _ = _fake_sftp(counts_body="genome\tEHI001\nEHA00999_bin_9\t1\n")
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
              patch("ehio.urls.download_url", side_effect=_fake_download):
@@ -600,7 +583,7 @@ class TestAnnotatingStage:
                 cli.cmd_annotating(_stage_args(tmp_path))
         assert "EHA00999_bin_9" in capsys.readouterr().err
 
-    def test_every_failure_is_reported_at_once(self, tmp_path, stage_airtable, capsys):
+    def test_every_failure_is_reported_at_once(self, tmp_path, stage_core, capsys):
         from ehio.urls import DownloadError
         ctx, _ = _fake_sftp()
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
@@ -611,13 +594,10 @@ class TestAnnotatingStage:
         assert "EHA00123_bin_1" in err and "EHA00124_bin_3" in err
         assert "HTTP 404 Not Found" in err
 
-    def test_a_local_fasta_path_is_copied(self, tmp_path, stage_airtable):
+    def test_a_local_fasta_path_is_copied(self, tmp_path, stage_core):
         local = tmp_path / "EHA00123_bin_1.fa"
         local.write_text(">local\nACGT\n")
-        stage_airtable.fetch_record_by_id.side_effect = lambda t, rid: {
-            "id": rid, "fields": {"fldNAME": "EHA00123_bin_1.fa", "fldFASTA": str(local)},
-        } if rid == "recM1" else None
-        stage_airtable.fetch_batch_record.return_value["fields"]["fldMAGS"] = ["recM1"]
+        stage_core.mags = [{"code": "EHM000001", "name": "EHA00123_bin_1.fa", "fasta_url": str(local)}]
 
         ctx, _ = _fake_sftp(counts_body="genome\tEHI001\nEHA00123_bin_1\t1\n")
         args = _stage_args(tmp_path)
@@ -626,7 +606,7 @@ class TestAnnotatingStage:
             assert cli.cmd_annotating(args) == 0
         assert (Path(args.annotation_dir) / "EHA00123_bin_1.fa").read_text() == ">local\nACGT\n"
 
-    def test_no_partial_files_are_left_behind(self, tmp_path, stage_airtable):
+    def test_no_partial_files_are_left_behind(self, tmp_path, stage_core):
         ctx, _ = _fake_sftp()
         args = _stage_args(tmp_path)
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
@@ -641,19 +621,8 @@ class TestAnnotatingStage:
 # ehio annotating --output --reannotate — the functional half only
 # ---------------------------------------------------------------------------
 
-OUTPUT_CFG = {
-    **STAGE_CFG,
-    "MAG_DMB_BATCH_ANNOTATION_TYPE": "fldANNTYPE",
-    "MAG_DMB_BATCH_STATUS": "fldSTATUS",
-    "MAG_DMB_BATCH_DRAKKAR_VERSION": "fldDRAKKAR",
-    "MAG_ENTRY_DOMAIN": "fldDOMAIN",
-    "MAG_ENTRY_PHYLUM": "fldPHYLUM",
-    "MAG_ENTRY_GTDBTK_VERSION": "fldGTDBTK",
-    "MAG_ENTRY_GTDB_RELEASE": "fldGTDBRELEASE",
-    "MAG_ENTRY_GENES_NUMBER": "fldGENES",
-    "MAG_ENTRY_ANNOTATED": "fldANNOTATED",
-    "PROCESSING_DONE_STATUS": "Done",
-}
+OUTPUT_CFG = {**STAGE_CFG, "PROCESSING_DONE_STATUS": "Done",
+              "MAG_DMB_BATCH_DRAKKAR_VERSION": "enabled"}
 
 TAXONOMY_TABLE = (
     "user_genome\tclassification\tclosest_genome_ani\tclosest_placement_ani\tclosest_genome_af\n"
@@ -662,26 +631,16 @@ TAXONOMY_TABLE = (
 
 
 @pytest.fixture
-def output_airtable():
-    client = MagicMock()
-    client.fetch_batch_record.return_value = {
-        "id": "recBATCH",
-        "fields": {
-            "fldBATCHCODE": "DMB0157",
-            "fldMAGS": ["recM1"],
-            "fldANNTYPE": "all",
-            "fldDRAKKAR": "2.4.4",
-        },
-    }
-    client.fetch_record_by_id.side_effect = lambda t, rid: {
-        "id": "recM1", "fields": {"fldNAME": "EHA00123_bin_1.fa"},
-    } if rid == "recM1" else None
-
-    with patch("ehio.airtable.AirtableClient", return_value=client), \
-         patch.object(cli, "_resolve_token", return_value="tok"), \
-         patch.object(cli.cfg, "get", side_effect=lambda k, d=None: OUTPUT_CFG.get(k, d)), \
+def output_core():
+    fake = FakeCoreClient(
+        [{"code": "EHM000001", "name": "EHA00123_bin_1.fa"}],
+        batches={"DMB0157": {"row": {"code": "DMB0157", "annotation_type": "all",
+                                     "drakkar_version": "2.4.4"}}},
+    )
+    with patch.object(cli.cfg, "get", side_effect=lambda k, d=None: OUTPUT_CFG.get(k, d)), \
          patch.object(cli, "_require_cfg", side_effect=lambda k: OUTPUT_CFG[k]):
-        yield client
+        with using(fake):
+            yield fake
 
 
 def _output_dir(tmp_path: Path, with_taxonomy: bool = True) -> Path:
@@ -700,7 +659,7 @@ def _output_dir(tmp_path: Path, with_taxonomy: bool = True) -> Path:
 def _out_args(local_dir: Path, **overrides) -> argparse.Namespace:
     defaults = dict(
         stage=False, input=False, output=True, batch="DMB0157",
-        airtable_token=None, verbose=False, local_dir=str(local_dir),
+        verbose=False, local_dir=str(local_dir),
         annotation_dir=".", annotation_file="annotation.tsv", genomes_file=None,
         redownload=False, download_timeout=600.0, connect_timeout=300.0,
         host=None, user=None, port=None, identity=None, remote_dir=None,
@@ -726,67 +685,67 @@ class TestAnnotatingOutputReannotate:
             assert cli.cmd_annotating(_out_args(local, **(args_overrides or {}))) == 0
         return xfer
 
-    def test_taxonomy_is_not_written_back(self, tmp_path, output_airtable):
-        # A genome_taxonomy.tsv left in the output directory by some earlier
-        # run must not be parsed over the taxonomy already on the records.
-        self._run(tmp_path)
-        written = output_airtable.update_records.call_args_list[0][0][1]
-        fields = written[0]["fields"]
-        assert "fldDOMAIN" not in fields
-        assert "fldPHYLUM" not in fields
+    def _mag(self, core):
+        return core.rows("mags")[-1]["values"]
 
-    def test_gene_metrics_are_written(self, tmp_path, output_airtable):
-        self._run(tmp_path)
-        fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
-        assert fields["fldGENES"] == 1
-        assert fields["fldANNOTATED"] == "all"
+    def _batch(self, core):
+        return core.rows("dereplication_batches")[-1]["values"]
 
-    def test_the_taxonomy_table_and_trees_are_not_re_uploaded(self, tmp_path, output_airtable):
+    def test_taxonomy_is_not_written_back(self, tmp_path, output_core):
+        self._run(tmp_path)
+        values = self._mag(output_core)
+        assert "tax_domain" not in values
+        assert "tax_phylum" not in values
+
+    def test_gene_metrics_are_written(self, tmp_path, output_core):
+        self._run(tmp_path)
+        values = self._mag(output_core)
+        assert values["genes"] == 1
+        assert values["annotation_level"] == "all"
+
+    def test_the_taxonomy_table_and_trees_are_not_re_uploaded(self, tmp_path, output_core):
         xfer = self._run(tmp_path)
         uploaded = [p.name for call in xfer.upload_flat.call_args_list for p in call[0][0]]
-        assert not any("genome_taxonomy" in n for n in uploaded)
+        assert not any("genome_taxonomy" in name for name in uploaded)
         assert "bacteria.tree" not in uploaded
 
-    def test_without_reannotate_taxonomy_is_written(self, tmp_path, output_airtable):
+    def test_without_reannotate_taxonomy_is_written(self, tmp_path, output_core):
         self._run(tmp_path, {"reannotate": False})
-        fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
-        assert fields["fldDOMAIN"] == "Bacteria"
-        assert fields["fldPHYLUM"] == "Firmicutes"
+        values = self._mag(output_core)
+        assert values["tax_domain"] == "Bacteria"
+        assert values["tax_phylum"] == "Firmicutes"
 
-    def test_without_reannotate_the_taxonomy_table_is_uploaded(self, tmp_path, output_airtable):
+    def test_without_reannotate_the_taxonomy_table_is_uploaded(self, tmp_path, output_core):
         xfer = self._run(tmp_path, {"reannotate": False})
         uploaded = [p.name for call in xfer.upload_flat.call_args_list for p in call[0][0]]
-        assert any("genome_taxonomy" in n for n in uploaded)
+        assert any("genome_taxonomy" in name for name in uploaded)
         assert "bacteria.tree" in uploaded
 
-    def test_the_recorded_drakkar_version_is_kept(self, tmp_path, output_airtable):
+    def test_the_recorded_drakkar_version_is_kept(self, tmp_path, output_core):
         with patch.object(cli, "_get_drakkar_version", return_value="2.5.0"):
             self._run(tmp_path)
-        batch_update = output_airtable.update_records.call_args_list[-1][0][1][0]
-        assert batch_update["fields"]["fldDRAKKAR"] == "2.4.4/2.5.0"
+        assert self._batch(output_core)["drakkar_version"] == "2.4.4/2.5.0"
 
-    def test_without_reannotate_the_version_is_replaced(self, tmp_path, output_airtable):
+    def test_without_reannotate_the_version_is_replaced(self, tmp_path, output_core):
         with patch.object(cli, "_get_drakkar_version", return_value="2.5.0"):
             self._run(tmp_path, {"reannotate": False})
-        batch_update = output_airtable.update_records.call_args_list[-1][0][1][0]
-        assert batch_update["fields"]["fldDRAKKAR"] == "2.5.0"
+        assert self._batch(output_core)["drakkar_version"] == "2.5.0"
 
-    def test_a_taxonomy_task_writes_the_taxonomy_and_leaves_the_genes(self, tmp_path, output_airtable):
+    def test_a_taxonomy_task_writes_the_taxonomy_and_leaves_the_genes(self, tmp_path, output_core):
         xfer = self._run(tmp_path, {"reannotate": False, "tasks": "taxonomy"})
-        fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
-        assert fields["fldDOMAIN"] == "Bacteria"
-        assert "fldGENES" not in fields
-        assert "fldANNOTATED" not in fields
+        values = self._mag(output_core)
+        assert values["tax_domain"] == "Bacteria"
+        assert "genes" not in values
+        assert "annotated" not in values
         uploaded = [call.args[1] for call in xfer.upload_flat.call_args_list]
         assert not any(remote.endswith("/ANN/DMB0157") for remote in uploaded)
 
-    def test_without_profiling_the_recorded_version_is_kept(self, tmp_path, output_airtable):
+    def test_without_profiling_the_recorded_version_is_kept(self, tmp_path, output_core):
         with patch.object(cli, "_get_drakkar_version", return_value="2.6.1"):
             self._run(tmp_path, {"reannotate": False, "tasks": "taxonomy"})
-        batch = output_airtable.update_records.call_args_list[-1][0][1][0]["fields"]
-        assert batch["fldDRAKKAR"] == "2.4.4/2.6.1"
+        assert self._batch(output_core)["drakkar_version"] == "2.4.4/2.6.1"
 
-    def test_the_gtdbtk_version_and_gtdb_release_are_written(self, tmp_path, output_airtable):
+    def test_the_gtdbtk_version_and_gtdb_release_are_written(self, tmp_path, output_core):
         local = _output_dir(tmp_path)
         gtdbtk = local / "annotating" / "gtdbtk"
         gtdbtk.mkdir()
@@ -794,11 +753,11 @@ class TestAnnotatingOutputReannotate:
         ctx, _ = _uploading_sftp()
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx):
             assert cli.cmd_annotating(_out_args(local, reannotate=False, tasks="taxonomy")) == 0
-        fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
-        assert fields["fldGTDBTK"] == "2.7.2"
-        assert fields["fldGTDBRELEASE"] == "R232"
+        values = self._mag(output_core)
+        assert values["gtdbtk_version"] == "2.7.2"
+        assert values["gtdb_release"] == "R232"
 
-    def test_a_function_task_leaves_the_gtdbtk_version(self, tmp_path, output_airtable):
+    def test_a_function_task_leaves_the_gtdbtk_version(self, tmp_path, output_core):
         local = _output_dir(tmp_path)
         (local / "annotating" / "gtdbtk").mkdir()
         (local / "annotating" / "gtdbtk" / "gtdbtk.json").write_text(
@@ -806,193 +765,71 @@ class TestAnnotatingOutputReannotate:
         ctx, _ = _uploading_sftp()
         with patch("ehio.transfer.SFTPTransfer", return_value=ctx):
             assert cli.cmd_annotating(_out_args(local, tasks="function")) == 0
-        fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
-        assert "fldGTDBTK" not in fields
-        assert "fldGTDBRELEASE" not in fields
+        values = self._mag(output_core)
+        assert "gtdbtk_version" not in values
+        assert "gtdb_release" not in values
 
-    def test_the_batch_is_marked_done(self, tmp_path, output_airtable):
+    def test_the_batch_is_marked_done(self, tmp_path, output_core):
         self._run(tmp_path)
-        batch_update = output_airtable.update_records.call_args_list[-1][0][1][0]
-        assert batch_update["fields"]["fldSTATUS"] == "Done"
+        assert self._batch(output_core)["status"] == "Done"
 
-    def test_an_output_without_taxonomy_still_finishes(self, tmp_path, output_airtable):
-        # The normal shape of a re-annotation output directory: GTDB-Tk never
-        # ran, so there is no taxonomy table to leave alone in the first place.
+    def test_an_output_without_taxonomy_still_finishes(self, tmp_path, output_core):
         self._run(tmp_path, with_taxonomy=False)
-        fields = output_airtable.update_records.call_args_list[0][0][1][0]["fields"]
-        assert fields["fldGENES"] == 1
+        assert self._mag(output_core)["genes"] == 1
 
 
-# ---------------------------------------------------------------------------
-# With ehi-core: a DMB batch's MAGs are read from the core, which also holds
-# the MAGs Airtable has no room for
-# ---------------------------------------------------------------------------
-
-from tests.fake_core import FakeCoreClient, using  # noqa: E402
-
-CORE_MAGS = [
-    {"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": "recM1",
-     "fasta_url": "https://erda/Data/MAG/ABB0659/EHA00123_bin_1.fa.gz", "annotation_level": "genes"},
-    # A MAG only the core holds: binned after Airtable's MAG table filled up.
-    {"code": "EHM100001", "name": "EHA00124_bin_3.fa", "airtable_record_id": None,
-     "fasta_url": "https://erda/Data/MAG/ABB0700/EHA00124_bin_3.fa.gz", "annotation_level": None},
-]
-
-
-class TestWithTheCore:
-    def test_staging_reads_the_mags_from_the_core(self, tmp_path, stage_airtable):
-        fake = FakeCoreClient(CORE_MAGS)
-        fetched: list[str] = []
-
-        def _download(url, dest, timeout=None, overwrite=False):
-            fetched.append(url)
-            return _fake_download(url, dest, timeout, overwrite)
-
-        ctx, _ = _fake_sftp()
-        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
-             patch("ehio.urls.download_url", side_effect=_download):
-            assert cli.cmd_annotating(_stage_args(tmp_path)) == 0
-        assert "https://erda/Data/MAG/ABB0700/EHA00124_bin_3.fa.gz" in fetched
-
-    def test_a_core_batch_with_no_samples_stages_all_its_mags(self, tmp_path):
-        """A batch that only classifies maps nothing, so it may hold no
-        samples at all: staging reads its MAGs and nothing else."""
-        config = {**STAGE_CFG, "MAG_DMB_BATCH": ""}
-        fake = FakeCoreClient(CORE_MAGS, batches={"DMB0157": {"row": {"code": "DMB0157"}, "entries": []}})
+class TestCoreOnlyBatches:
+    def test_a_batch_with_no_samples_stages_all_its_mags(self, tmp_path, stage_core):
         sftp = MagicMock()
         args = _stage_args(tmp_path, all_mags=True)
-        with patch.object(cli, "_resolve_token", return_value="tok"), \
-             patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)), \
-             patch.object(cli, "_require_cfg", side_effect=lambda k: config[k]), \
-             using(fake), patch("ehio.transfer.SFTPTransfer", sftp), \
+        with patch("ehio.transfer.SFTPTransfer", sftp), \
              patch("ehio.urls.download_url", side_effect=_fake_download):
             assert cli.cmd_annotating(args) == 0
-        staged = sorted(p.name for p in Path(args.annotation_dir).glob("*"))
-        assert staged == ["EHA00123_bin_1.fa", "EHA00124_bin_3.fa"]
+        assert sorted(p.name for p in Path(args.annotation_dir).glob("*")) == [
+            "EHA00123_bin_1.fa", "EHA00124_bin_3.fa", "EHA00125_bin_2.fa",
+        ]
         sftp.assert_not_called()
 
-    def test_without_a_counts_table_the_kept_mags_are_staged(self, tmp_path, stage_airtable):
-        """A batch that dereplicated without profiling has no counts table;
-        the core's record of what dereplication kept stands in for it."""
-        mags = [{**CORE_MAGS[0], "is_representative": True}, {**CORE_MAGS[1], "is_representative": False}]
-        fake = FakeCoreClient(mags)
+    def test_without_a_counts_table_the_kept_mags_are_staged(self, tmp_path, stage_core):
+        stage_core.mags = [{**STAGE_MAGS[0], "is_representative": True},
+                           {**STAGE_MAGS[1], "is_representative": False}]
         ctx, _ = _fake_sftp(counts_body=None)
         args = _stage_args(tmp_path)
-        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
+        with patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
              patch("ehio.urls.download_url", side_effect=_fake_download):
             assert cli.cmd_annotating(args) == 0
         assert sorted(p.name for p in Path(args.annotation_dir).glob("*")) == ["EHA00123_bin_1.fa"]
 
-    def test_the_gtdbtk_version_reaches_the_core(self, tmp_path):
-        config = {**OUTPUT_CFG, "MAG_DMB_BATCH": ""}
-        fake = FakeCoreClient(
-            [{"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": None}],
-            batches={"DMB0157": {"row": {"code": "DMB0157", "drakkar_version": "2.4.4"}}},
-        )
-        local = _output_dir(tmp_path)
-        (local / "annotating" / "gtdbtk").mkdir()
-        (local / "annotating" / "gtdbtk" / "gtdbtk.log").write_text(TestGtdbtkVersions.LOG)
-        ctx, _ = _uploading_sftp()
-        with patch.object(cli, "_resolve_token", return_value="tok"), \
-             patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)), \
-             patch.object(cli, "_require_cfg", side_effect=lambda k: config[k]), \
-             using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx):
-            assert cli.cmd_annotating(_out_args(local, reannotate=False, tasks="taxonomy")) == 0
-        [classified] = [row["values"] for row in fake.rows("mags") if row["values"].get("tax_domain")]
-        assert classified["gtdbtk_version"] == "2.7.2"
-        assert classified["gtdb_release"] == "R232"
-        assert classified["tax_phylum"] == "Firmicutes"
-
-    def test_the_mags_linked_in_airtable_are_copied_into_the_core_first(self, tmp_path, stage_airtable):
-        fake = FakeCoreClient(CORE_MAGS)
-        ctx, _ = _fake_sftp()
-        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx), \
-             patch("ehio.urls.download_url", side_effect=_fake_download):
-            cli.cmd_annotating(_stage_args(tmp_path))
-        copied = fake.rows("mags")
-        assert [row["key"]["name"] for row in copied] == ["EHA00123_bin_1.fa", "EHA00124_bin_3.fa", "EHA00125_bin_2.fa"]
-        assert copied[0]["airtable_record_id"] == "recM1"
-        assert fake.links == [("DMB0157", ["recM1", "recM2", "recM3"], None)]
-
-    def test_input_skips_the_mags_the_core_has_annotated_far_enough(self, tmp_path, stage_airtable):
-        fake = FakeCoreClient(CORE_MAGS)
+    def test_input_skips_mags_already_annotated_far_enough(self, tmp_path, stage_core):
+        stage_core.mags = [{**STAGE_MAGS[0], "annotation_level": "genes"}, STAGE_MAGS[1]]
+        stage_core.batches["DMB0157"]["row"]["annotation_type"] = "genes"
         genomes = tmp_path / "genomes"
         genomes.mkdir()
-        for mag in CORE_MAGS:
+        for mag in stage_core.mags:
             (genomes / mag["name"]).write_text(">c\nACGT\n")
-        stage_airtable.fetch_batch_record.return_value["fields"]["fldANNTYPE"] = "genes"
         out = tmp_path / "annotation.tsv"
         args = _stage_args(tmp_path, stage=False, input=True, annotation_dir=str(genomes),
                            annotation_file=str(out))
-        config = {**STAGE_CFG, "MAG_DMB_BATCH_ANNOTATION_TYPE": "fldANNTYPE"}
-        with using(fake), patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)):
-            assert cli.cmd_annotating(args) == 0
+        assert cli.cmd_annotating(args) == 0
         assert out.read_text().splitlines() == [str(genomes / "EHA00124_bin_3.fa")]
 
-    def test_output_annotates_every_mag_in_the_core_and_airtables_in_airtable(self, tmp_path, output_airtable):
-        fake = FakeCoreClient([
-            {"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": "recM1"},
-            {"code": "EHM100001", "name": "EHA00200_bin_1.fa", "airtable_record_id": None},
-        ])
+    def test_output_annotates_every_mag(self, tmp_path, output_core):
+        output_core.mags.append({"code": "EHM100001", "name": "EHA00200_bin_1.fa"})
         local = _output_dir(tmp_path)
         write_gene_table(local / "annotating" / "final" / "EHA00200_bin_1_genes.tsv", [
             gene_row("g1", "c1", 1, 30, "prodigal"),
         ])
         ctx, _ = _uploading_sftp()
-        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx):
+        with patch("ehio.transfer.SFTPTransfer", return_value=ctx):
             assert cli.cmd_annotating(_out_args(local, reannotate=False)) == 0
-
-        airtable_mags = output_airtable.update_records.call_args_list[0][0][1]
-        assert [update["id"] for update in airtable_mags] == ["recM1"]
-
-        annotated = {row["key"]["name"]: row["values"] for row in fake.rows("mags") if row["values"].get("annotated")}
+        annotated = {row["key"]["name"]: row["values"] for row in output_core.rows("mags")}
         assert set(annotated) == {"EHA00123_bin_1.fa", "EHA00200_bin_1.fa"}
         assert annotated["EHA00200_bin_1.fa"]["annotation_level"] == "all"
         assert annotated["EHA00123_bin_1.fa"]["tax_phylum"] == "Firmicutes"
-        assert fake.rows("dereplication_batches")[-1]["values"]["status"] == "Done"
 
-    def test_a_core_failure_on_the_mags_fails_the_output(self, tmp_path, output_airtable):
+    def test_a_core_failure_on_the_mags_fails_the_output(self, tmp_path, output_core):
         from ehio.core import CoreError
-
-        fake = FakeCoreClient([{"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": "recM1"}])
-        calls = {"n": 0}
-        real_upsert = fake.upsert
-
-        def upsert(changes):
-            calls["n"] += 1
-            if calls["n"] > 1:  # the copy of the Airtable MAGs goes through; the annotation does not
-                raise CoreError("ehi-core is down")
-            return real_upsert(changes)
-
-        fake.upsert = upsert
+        output_core.upsert = MagicMock(side_effect=CoreError("ehi-core is down"))
         ctx, _ = _uploading_sftp()
-        with using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx):
-            with pytest.raises(CoreError):
-                cli.cmd_annotating(_out_args(_output_dir(tmp_path)))
-
-    def test_a_batch_the_core_alone_holds_writes_nothing_to_airtable(self, tmp_path):
-        """With MAG_DMB_BATCH emptied the batch and its MAGs come from the core,
-        and a MAG copied in from Airtable keeps its record id there: the
-        output must still not reach for an Airtable client it never opened."""
-        config = {**OUTPUT_CFG, "MAG_DMB_BATCH": ""}
-        airtable = MagicMock()
-        fake = FakeCoreClient(
-            [{"code": "EHM000001", "name": "EHA00123_bin_1.fa", "airtable_record_id": "recM1"}],
-            batches={"DMB0157": {"row": {"code": "DMB0157", "annotation_type": None,
-                                         "drakkar_version": "2.4.4"}}},
-        )
-        ctx, _ = _uploading_sftp()
-        with patch("ehio.airtable.AirtableClient", return_value=airtable), \
-             patch.object(cli, "_resolve_token", return_value="tok"), \
-             patch.object(cli.cfg, "get", side_effect=lambda k, d=None: config.get(k, d)), \
-             patch.object(cli, "_require_cfg", side_effect=lambda k: config[k]), \
-             patch.object(cli, "_get_drakkar_version", return_value="2.6.1"), \
-             using(fake), patch("ehio.transfer.SFTPTransfer", return_value=ctx):
-            assert cli.cmd_annotating(_out_args(_output_dir(tmp_path))) == 0
-
-        airtable.update_records.assert_not_called()
-        [annotated] = [row for row in fake.rows("mags") if row["values"].get("annotated")]
-        assert annotated["values"]["genes"] == 1
-        assert annotated["values"]["annotation_level"] == "all"
-        batch = fake.rows("dereplication_batches")[-1]["values"]
-        assert batch == {"status": "Done", "drakkar_version": "2.4.4/2.6.1"}
+        with patch("ehio.transfer.SFTPTransfer", return_value=ctx), pytest.raises(CoreError):
+            cli.cmd_annotating(_out_args(_output_dir(tmp_path)))
