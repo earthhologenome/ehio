@@ -99,7 +99,8 @@ def _flag_cfg(key: str) -> bool:
 
 def _core_token(args: argparse.Namespace) -> str:
     token = (getattr(args, "core_token", None) or "").strip()
-    return token or os.environ.get("EHI_CORE_TOKEN", "").strip()
+    return (token or os.environ.get("EHI_CORE_PIPELINE", "").strip()
+            or os.environ.get("EHI_CORE_TOKEN", "").strip())
 
 
 def _core(args: argparse.Namespace, *, holds: bool = False):
@@ -2817,7 +2818,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     def _add_core_token(p: argparse.ArgumentParser) -> None:
         p.add_argument("--core-token", metavar="TOKEN",
-            help="ehi-core pipeline token. Overrides $EHI_CORE_TOKEN.")
+            help="ehi-core pipeline token. Overrides $EHI_CORE_PIPELINE and $EHI_CORE_TOKEN.")
 
     def _add_token(p: argparse.ArgumentParser, core: bool = True) -> None:
         p.add_argument("--airtable-token", metavar="TOKEN",
@@ -3311,7 +3312,7 @@ def _core_only(args: argparse.Namespace):
     submissions): without it there is nowhere to find or report the batch."""
     core = _core(args, holds=True)
     if not core:
-        _die(f"{args.module} batches live in ehi-core alone: set EHI_CORE_URL and export EHI_CORE_TOKEN.")
+        _die(f"{args.module} batches live in ehi-core alone: set EHI_CORE_URL and export EHI_CORE_PIPELINE.")
     return core
 
 
@@ -3466,7 +3467,7 @@ def cmd_scanning(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         verbose=args.verbose,
         core=core,
-        core_token=_core_token(args) if core else "",
+        core_token=_core_token(args) if str(cfg.get("EHI_CORE_URL") or "").strip() else "",
     )
     if total == 0:
         print("No new batches launched.")

@@ -9,7 +9,9 @@ core alone.
 ehio reaches the core's pipeline routes (/api/pipeline/*) at EHI_CORE_URL with
 the pipeline token, which is never stored in the config:
 
-    export EHI_CORE_TOKEN="..."   # the value of the core-pipeline-token secret
+    export EHI_CORE_PIPELINE="..."   # supplied by Codeome
+
+Existing environments can still use EHI_CORE_TOKEN as a fallback.
 
 What is written, and when, is built in ehio.mirror; this module only sends it.
 
@@ -36,7 +38,10 @@ except ImportError:  # requests ships with pyairtable
     requests = None  # type: ignore[assignment]
 
 
-TOKEN_HINT = "Export EHI_CORE_TOKEN (the core-pipeline-token secret) or pass --core-token."
+TOKEN_HINT = (
+    "Export EHI_CORE_PIPELINE (Codeome's ehi-core pipeline secret) or pass "
+    "--core-token. EHI_CORE_TOKEN remains a fallback."
+)
 
 # Cloud Run starts the core on demand, so the first request after a quiet spell
 # can meet a gateway error while an instance boots.  A 409 is two batches

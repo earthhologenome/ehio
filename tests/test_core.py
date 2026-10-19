@@ -123,7 +123,7 @@ class TestCoreClient:
         with pytest.raises(CoreError) as excinfo:
             client.ping()
         assert "core-pipeline-token" in str(excinfo.value)
-        assert "EHI_CORE_TOKEN" in str(excinfo.value)
+        assert "EHI_CORE_PIPELINE" in str(excinfo.value)
 
     def test_a_core_without_a_token_configured_is_not_retried(self):
         client, session = _client(_response(503, {"detail": "Pipeline access is not configured on this server"}))
@@ -337,14 +337,14 @@ class TestCoreForACommand:
     def test_no_token_yet_means_airtable_alone_with_a_warning(self, capsys):
         with _cfg(EHI_CORE_URL="https://core.test"):
             assert not cli._core(_args())
-        assert "EHI_CORE_TOKEN" in capsys.readouterr().err
+        assert "EHI_CORE_PIPELINE" in capsys.readouterr().err
 
     def test_no_token_stops_the_command_when_the_core_is_required(self):
         with _cfg(EHI_CORE_URL="https://core.test", EHI_CORE_REQUIRED="true"):
             with pytest.raises(SystemExit):
                 cli._core(_args())
 
-    def test_a_token_is_taken_from_the_environment(self, monkeypatch):
+    def test_the_legacy_environment_token_is_used_as_a_fallback(self, monkeypatch):
         monkeypatch.setenv("EHI_CORE_TOKEN", "from-env")
         with _cfg(EHI_CORE_URL="https://core.test"), patch("ehio.core.verify") as verify:
             core = cli._core(_args())
@@ -352,11 +352,48 @@ class TestCoreForACommand:
         assert verify.call_args.args[1] == "from-env"
         assert not core.required
 
+    def test_the_codeome_token_wins_over_the_legacy_environment_token(self, monkeypatch):
+        monkeypatch.setenv("EHI_CORE_PIPELINE", "from-codeome")
+        monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
+        with _cfg(EHI_CORE_URL="https://core.test"), patch("ehio.core.verify") as verify:
+            cli._core(_args())
+        assert verify.call_args.args[1] == "from-codeome"
+
     def test_the_flag_wins_over_the_environment(self, monkeypatch):
+        monkeypatch.setenv("EHI_CORE_PIPELINE", "from-codeome")
         monkeypatch.setenv("EHI_CORE_TOKEN", "from-env")
         with _cfg(EHI_CORE_URL="https://core.test"), patch("ehio.core.verify") as verify:
             cli._core(_args(core_token="from-flag"))
         assert verify.call_args.args[1] == "from-flag"
+
+    def test_scanning_passes_the_selected_token_to_the_launcher(self, monkeypatch):
+        monkeypatch.setenv("EHI_CORE_PIPELINE", "from-codeome")
+        monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
+        args = _args(module=None, dry_run=False, verbose=False)
+        with _cfg(EHI_CORE_URL="https://core.test"), \
+             patch.object(cli, "_resolve_token", return_value="airtable"), \
+             patch.object(cli, "_core", return_value=CoreSession(MagicMock())), \
+             patch("ehio.scanning.run_scan", return_value=0) as run_scan:
+            cli.cmd_scanning(args)
+        assert run_scan.call_args.kwargs["core_token"] == "from-codeome"
+
+    def test_scanning_keeps_the_explicit_token_after_core_verification_fails(self):
+        args = _args(core_token="from-flag", module=None, dry_run=False, verbose=False)
+        with _cfg(EHI_CORE_URL="https://core.test"), \
+             patch.object(cli, "_resolve_token", return_value="airtable"), \
+             patch("ehio.core.verify", side_effect=CoreError("ehi-core is down")), \
+             patch("ehio.scanning.run_scan", return_value=0) as run_scan:
+            cli.cmd_scanning(args)
+        assert not run_scan.call_args.kwargs["core"]
+        assert run_scan.call_args.kwargs["core_token"] == "from-flag"
+
+    def test_scanning_does_not_pass_an_explicit_token_without_a_core_url(self):
+        args = _args(core_token="from-flag", module=None, dry_run=False, verbose=False)
+        with _cfg(EHI_CORE_URL=""), \
+             patch.object(cli, "_resolve_token", return_value="airtable"), \
+             patch("ehio.scanning.run_scan", return_value=0) as run_scan:
+            cli.cmd_scanning(args)
+        assert run_scan.call_args.kwargs["core_token"] == ""
 
     def test_an_unreachable_core_is_left_out_of_a_mirroring_command(self, capsys):
         with _cfg(EHI_CORE_URL="https://core.test"), \

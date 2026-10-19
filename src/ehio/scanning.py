@@ -106,7 +106,8 @@ def launch_screen(session_name: str, script_path: str, token: str = "", core_tok
     if token:
         env["AIRTABLE_TOKEN"] = token
     if core_token:
-        env["EHI_CORE_TOKEN"] = core_token
+        env["EHI_CORE_PIPELINE"] = core_token
+        env.pop("EHI_CORE_TOKEN", None)
     subprocess.run(
         ["screen", "-dmS", session_name, "bash", script_path],
         env=env,
@@ -265,7 +266,7 @@ def build_script_content(
         "#!/usr/bin/env bash\n"
         f"# ehio-generated script — batch {batch_name} ({module})\n"
         "# Do not edit manually; re-run ehio scanning to regenerate.\n"
-        "# AIRTABLE_TOKEN, and EHI_CORE_TOKEN when ehi-core is in use, must be exported\n"
+        "# AIRTABLE_TOKEN, and EHI_CORE_PIPELINE when ehi-core is in use, must be exported\n"
         "# in the environment before launching.\n"
         "\n"
         "set -euo pipefail\n"
@@ -719,7 +720,8 @@ def _generate_input_files(
     tsv_path = str(Path(run_dir) / f"{batch_name}.tsv")
     env      = {**os.environ, "AIRTABLE_TOKEN": token}
     if core_token:
-        env["EHI_CORE_TOKEN"] = core_token
+        env["EHI_CORE_PIPELINE"] = core_token
+        env.pop("EHI_CORE_TOKEN", None)
 
     if module == "preprocessing":
         cmd = [sys.executable, "-m", "ehio", "preprocessing", "--input",

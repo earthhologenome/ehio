@@ -15,6 +15,8 @@ from ehio.scanning import (
     _verify_reference,
     MODULES,
     DRAKKAR_CMD,
+    launch_screen,
+    _generate_input_files,
 )
 
 
@@ -569,6 +571,54 @@ class TestSessionExists:
     def test_empty_output(self):
         with patch("ehio.scanning.subprocess.run", return_value=self._mock_screen("")):
             assert session_exists("PPR001") is False
+
+
+# ---------------------------------------------------------------------------
+# Token handoff to scanning subprocesses
+# ---------------------------------------------------------------------------
+
+class TestTokenHandoff:
+    def test_screen_receives_the_selected_core_token(self, monkeypatch):
+        monkeypatch.setenv("EHI_CORE_PIPELINE", "from-codeome")
+        monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
+        with patch("ehio.scanning.subprocess.run") as run:
+            launch_screen("PPR001", "/run/PPR001.sh", token="airtable", core_token="selected")
+        env = run.call_args.kwargs["env"]
+        assert env["AIRTABLE_TOKEN"] == "airtable"
+        assert env["EHI_CORE_PIPELINE"] == "selected"
+        assert "EHI_CORE_TOKEN" not in set(env)
+
+    def test_screen_carries_a_legacy_token_only_under_the_pipeline_name(self, monkeypatch):
+        monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
+        with patch("ehio.scanning.subprocess.run") as run:
+            launch_screen("PPR001", "/run/PPR001.sh", core_token="from-legacy-env")
+        env = run.call_args.kwargs["env"]
+        assert env["EHI_CORE_PIPELINE"] == "from-legacy-env"
+        assert "EHI_CORE_TOKEN" not in set(env)
+
+    def test_dry_run_input_receives_the_selected_core_token(self, monkeypatch):
+        monkeypatch.setenv("EHI_CORE_PIPELINE", "from-codeome")
+        monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
+        with patch("ehio.scanning.subprocess.run") as run:
+            _generate_input_files("preprocessing", "PPR001", "/run", "airtable", "selected")
+        env = run.call_args.kwargs["env"]
+        assert env["AIRTABLE_TOKEN"] == "airtable"
+        assert env["EHI_CORE_PIPELINE"] == "selected"
+        assert "EHI_CORE_TOKEN" not in set(env)
+
+    def test_dry_run_input_carries_a_legacy_token_only_under_the_pipeline_name(self, monkeypatch):
+        monkeypatch.setenv("EHI_CORE_TOKEN", "from-legacy-env")
+        with patch("ehio.scanning.subprocess.run") as run:
+            _generate_input_files("preprocessing", "PPR001", "/run", "airtable", "from-legacy-env")
+        env = run.call_args.kwargs["env"]
+        assert env["EHI_CORE_PIPELINE"] == "from-legacy-env"
+        assert "EHI_CORE_TOKEN" not in set(env)
+
+    def test_generated_script_names_the_environment_variable_without_a_token(self, monkeypatch):
+        monkeypatch.setenv("EHI_CORE_PIPELINE", "synthetic-token")
+        script = build_script_content("preprocessing", "PPR001", RUN_DIR, OUT_DIR, "slurm")
+        assert "EHI_CORE_PIPELINE" in script
+        assert "synthetic-token" not in script
 
 
 # ---------------------------------------------------------------------------

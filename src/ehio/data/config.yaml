@@ -296,8 +296,8 @@ ENA_SAMPLE_FIELDS:
 # read a DMB batch's MAGs from the core (after copying in the ones linked to the
 # batch in Airtable).
 #
-# The pipeline token is never stored here: export EHI_CORE_TOKEN (the value of
-# the core-pipeline-token secret) or pass --core-token. Until a token is set,
+# The pipeline token is never stored here: Codeome supplies EHI_CORE_PIPELINE,
+# or pass --core-token. EHI_CORE_TOKEN remains a fallback. Until a token is set,
 # ehio runs on Airtable alone and says so. Leave EHI_CORE_URL empty to switch
 # the core off altogether.
 EHI_CORE_URL: "https://ehi-core-backend-874005116816.europe-west1.run.app"

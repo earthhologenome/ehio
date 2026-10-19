@@ -129,5 +129,6 @@ def _no_core_token(monkeypatch):
     EHI_CORE_URL runs on Airtable alone."""
     from ehio import core
 
+    monkeypatch.delenv("EHI_CORE_PIPELINE", raising=False)
     monkeypatch.delenv("EHI_CORE_TOKEN", raising=False)
     core._VERIFIED.clear()

@@ -111,17 +111,18 @@ The token needs the `data.records:read` and `data.records:write` scopes, and bot
 
 ### ehi-core token
 
-ehio reaches ehi-core at `EHI_CORE_URL` with the pipeline token, the value of
-the `core-pipeline-token` secret. Like the Airtable token, it is never stored
-in the config:
+ehio reaches ehi-core at `EHI_CORE_URL` with the pipeline token. Codeome
+supplies it as `EHI_CORE_PIPELINE`. Like the Airtable token, it is never stored
+in the config. Outside Codeome, export it in the environment:
 
 ```bash
-export EHI_CORE_TOKEN="..."   # gcloud secrets versions access latest --secret=core-pipeline-token
+export EHI_CORE_PIPELINE="..."
 ```
 
-or pass it per command with `--core-token`. `ehio scanning` hands it on to
-the batches it launches. Until a token is set, ehio runs on Airtable alone and
-says so on every command.
+The explicit `--core-token` flag takes priority. Existing environments can
+continue using `EHI_CORE_TOKEN` as a fallback. `ehio scanning` hands the
+selected token on to the batches it launches. Until a token is set, ehio runs
+on Airtable alone and says so on every command.
 
 ---
 
