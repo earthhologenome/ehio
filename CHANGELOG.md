@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - No unreleased changes yet.
 
+## [0.12.0] - 2026-10-19
+
+### Changed
+
+- **ehio uses Codeome's `EHI_CORE_PIPELINE` secret to connect to ehi-core.** An explicit `--core-token` still takes priority, and `EHI_CORE_TOKEN` remains a fallback for existing environments. Scanning passes the selected token to launched batches under `EHI_CORE_PIPELINE` without putting it in generated scripts or passing an unused legacy token to child processes.
+
 ## [0.11.0] - 2026-10-04
 
 ### Added
